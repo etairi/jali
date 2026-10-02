@@ -1,0 +1,32 @@
+{
+  "id": "tag-preimage-crt-d64-test-only",
+  "prime_factors": [
+    116316797544421
+  ],
+  "degree": 64,
+  "m1": 160,
+  "l": 20,
+  "alpha_squared": 10240,
+  "n_bin": 128,
+  "l2_rows": [
+    32
+  ],
+  "l2_bounds_squared": [
+    2048
+  ],
+  "n_prime": 20,
+  "linf_bound": 3574883,
+  "m2": 75,
+  "n_msis": 17,
+  "log_sigma": [
+    17,
+    13,
+    12,
+    33
+  ],
+  "gamma": 2002438,
+  "d_bits": 12,
+  "mlwe_rank": 26,
+  "mlwe_delta": 1.0044,
+  "estimator": "test-only synthetic MLWE metadata; not an estimate"
+}

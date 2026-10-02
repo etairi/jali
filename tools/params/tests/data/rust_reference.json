@@ -1,0 +1,4724 @@
+{
+  "provenance": {
+    "generated_by": "python3 tools/params/rust_reference.py",
+    "date_utc": "2026-10-02T03:46Z",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "platform": "Darwin arm64",
+    "build": "cargo build --locked --release --features serde --example verify_sets",
+    "crate_sources_sha256": {
+      "src/params/mod.rs": "711b553b5a98fc9e8ca8476e83f2eecef3bb40addb9d27eb7787d48fde834edb",
+      "src/statement.rs": "ccb45e44c57b65a93eba788618621443cc4cd4564b8bba4bee43df2862fc2dfc",
+      "src/lin.rs": "10feb78a97a0b1bc08f179d4e6a7730f9d74bcacee80ffb0dc2be536edee1451",
+      "src/lnp.rs": "f2a2f18c15cd601ba189362ab3409298233d9825049fc8e8a14d88d4a9ac6c7a",
+      "src/abdlop.rs": "b15d5873b4d217334b1d790f615b5487bc9d51c3be521ea9d0d6ab94ebc5c58c",
+      "src/json.rs": "09d48678e206aacccc7315f98d9ca468f7dee2e4f956c4819dfafdf4ffa46e26",
+      "src/dcompress.rs": "e99f2c83ccf7d26fb99de8b4c651ca88d6cf9d596b1dcf9f2cddb371aa55b94c",
+      "src/math/int.rs": "a3d25fea3db37537984d04812381dedb7438f14462101f98b0d339a7fb9436d2",
+      "src/math/ring.rs": "6e7365a4b2f90723f1ebd057c2aaae9b229a35da0079f93cfbcf4358e71eb1d9",
+      "src/params/moduli.rs": "7b8029423a41367e890eb2e0884cf24bfeadf80ac5c7639d8e1d4eb7bb64e18f",
+      "src/rand/mod.rs": "da4fbcaa979cbab4bd3a6b02d8b2ed82dac25ca991be386d237f3101a548f94e"
+    },
+    "what": "for each set: TboxParams::check, Statement::requirements and compile of the worst-case lin statement (every public coefficient floor(p/2)), the same for the previous prime of the set's gamma class, and one proof of a seeded random instance with a ternary witness; for each statement kind of the verifier, its requirements and blocks, the tool's set, its compilation and one seeded proof, and compile of every statement case"
+  },
+  "toy-d64": {
+    "b_squared": 3487433255883,
+    "z3_bound_squared": 1734566565,
+    "z4_bound": 50790,
+    "estimated_proof_bytes": 17896,
+    "source": "tests/arithmetic.rs, the pinned CheckedParams of toy_d64"
+  },
+  "sets": {
+    "kyber1024-d64": {
+      "params_sha256": "4235c04f020e69ead8527aad46df12765b966f269c7a6211ed784ec76d45d904",
+      "statement_modulus": 3329,
+      "bound_squared": 2950,
+      "checked": {
+        "q": 2423991946973,
+        "lambda": 4,
+        "omega": 8,
+        "eta": 140,
+        "n_ex": 33,
+        "l_ext": 12,
+        "b_squared": 36460193441136,
+        "z1_bound_squared": 43586015314575,
+        "z3_bound_squared": 27753065054,
+        "z4_bound": 208037478,
+        "exact_alpha_squared": 3014,
+        "approx_alpha_squared": 12372557824,
+        "approx_extraction_bound": 416074956,
+        "estimated_proof_bytes": 21058
+      },
+      "checked_f64": {
+        "arp_bound": "65342.959192803086",
+        "msis_delta": "1.0042820583042291"
+      },
+      "requirements": {
+        "m1": 32,
+        "l": 0,
+        "alpha_squared": 2950,
+        "n_bin": 0,
+        "l2_rows": [
+          32
+        ],
+        "l2_bounds_squared": [
+          2950
+        ],
+        "n_prime": 16,
+        "linf_bound": 3476,
+        "max_integer_coefficient": 11570096
+      },
+      "worst_case_compile": "ok",
+      "worst_case_lin_compile": "ok",
+      "previous_prime_same_gamma_class": {
+        "q": 2423973072749,
+        "checked": {
+          "q": 2423973072749,
+          "lambda": 4,
+          "omega": 8,
+          "eta": 140,
+          "n_ex": 33,
+          "l_ext": 12,
+          "b_squared": 36460193441136,
+          "z1_bound_squared": 43586015314575,
+          "z3_bound_squared": 27753065054,
+          "z4_bound": 208037478,
+          "exact_alpha_squared": 3014,
+          "approx_alpha_squared": 12372557824,
+          "approx_extraction_bound": 416074956,
+          "estimated_proof_bytes": 21058
+        },
+        "worst_case_compile": "Parameter(\"modulus lifting bound\")",
+        "worst_case_lin_compile": "Parameter(\"modulus lifting bound\")"
+      },
+      "random_instance": {
+        "proof_bytes": 20334,
+        "verified": true,
+        "tampered_rejected": true,
+        "other_context_rejected": true
+      }
+    },
+    "kyber1024-d128": {
+      "params_sha256": "dd7dc928fb92c5bd7e55002d3d14b68436917969248de8c853de824a57b53053",
+      "statement_modulus": 3329,
+      "bound_squared": 2950,
+      "checked": {
+        "q": 2423989135261,
+        "lambda": 4,
+        "omega": 2,
+        "eta": 59,
+        "n_ex": 17,
+        "l_ext": 8,
+        "b_squared": 112262557837350,
+        "z1_bound_squared": 11226700914360,
+        "z3_bound_squared": 27753065054,
+        "z4_bound": 208037478,
+        "exact_alpha_squared": 3078,
+        "approx_alpha_squared": 12372557824,
+        "approx_extraction_bound": 416074956,
+        "estimated_proof_bytes": 22608
+      },
+      "checked_f64": {
+        "arp_bound": "65342.959192803086",
+        "msis_delta": "1.0042975258252549"
+      },
+      "requirements": {
+        "m1": 16,
+        "l": 0,
+        "alpha_squared": 2950,
+        "n_bin": 0,
+        "l2_rows": [
+          16
+        ],
+        "l2_bounds_squared": [
+          2950
+        ],
+        "n_prime": 8,
+        "linf_bound": 3476,
+        "max_integer_coefficient": 11570096
+      },
+      "worst_case_compile": "ok",
+      "worst_case_lin_compile": "ok",
+      "previous_prime_same_gamma_class": {
+        "q": 2423890569493,
+        "checked": {
+          "q": 2423890569493,
+          "lambda": 4,
+          "omega": 2,
+          "eta": 59,
+          "n_ex": 17,
+          "l_ext": 8,
+          "b_squared": 112262557837350,
+          "z1_bound_squared": 11226700914360,
+          "z3_bound_squared": 27753065054,
+          "z4_bound": 208037478,
+          "exact_alpha_squared": 3078,
+          "approx_alpha_squared": 12372557824,
+          "approx_extraction_bound": 416074956,
+          "estimated_proof_bytes": 22608
+        },
+        "worst_case_compile": "Parameter(\"modulus lifting bound\")",
+        "worst_case_lin_compile": "Parameter(\"modulus lifting bound\")"
+      },
+      "random_instance": {
+        "proof_bytes": 21824,
+        "verified": true,
+        "tampered_rejected": true,
+        "other_context_rejected": true
+      }
+    },
+    "demo": {
+      "params_sha256": "6c5b5b347c2c255188f69fcfcf4dd003425215a12fcf6a4728d8fd5f14c25dbb",
+      "statement_modulus": 4294962689,
+      "bound_squared": 2048,
+      "checked": {
+        "q": 1563674726761101613,
+        "lambda": 4,
+        "omega": 8,
+        "eta": 140,
+        "n_ex": 33,
+        "l_ext": 12,
+        "b_squared": 2782693479152,
+        "z1_bound_squared": 43586015314575,
+        "z3_bound_squared": 6938266263,
+        "z4_bound": 104018739,
+        "exact_alpha_squared": 2112,
+        "approx_alpha_squared": 8594031616,
+        "approx_extraction_bound": 208037478,
+        "estimated_proof_bytes": 24814
+      },
+      "checked_f64": {
+        "arp_bound": "32671.479596401543",
+        "msis_delta": "1.0043986916719279"
+      },
+      "requirements": {
+        "m1": 32,
+        "l": 0,
+        "alpha_squared": 2048,
+        "n_bin": 0,
+        "l2_rows": [
+          32
+        ],
+        "l2_bounds_squared": [
+          2048
+        ],
+        "n_prime": 16,
+        "linf_bound": 2897,
+        "max_integer_coefficient": 12441688183056
+      },
+      "worst_case_compile": "ok",
+      "worst_case_lin_compile": "ok",
+      "previous_prime_same_gamma_class": {
+        "q": 1563674726743538501,
+        "checked": {
+          "q": 1563674726743538501,
+          "lambda": 4,
+          "omega": 8,
+          "eta": 140,
+          "n_ex": 33,
+          "l_ext": 12,
+          "b_squared": 2782693479152,
+          "z1_bound_squared": 43586015314575,
+          "z3_bound_squared": 6938266263,
+          "z4_bound": 104018739,
+          "exact_alpha_squared": 2112,
+          "approx_alpha_squared": 8594031616,
+          "approx_extraction_bound": 208037478,
+          "estimated_proof_bytes": 24814
+        },
+        "worst_case_compile": "Parameter(\"modulus lifting bound\")",
+        "worst_case_lin_compile": "Parameter(\"modulus lifting bound\")"
+      },
+      "random_instance": {
+        "proof_bytes": 23975,
+        "verified": true,
+        "tampered_rejected": true,
+        "other_context_rejected": true
+      }
+    }
+  },
+  "statements": {
+    "two-moduli": {
+      "statement_modulus": 156,
+      "requirements": {
+        "m1": 10,
+        "l": 1,
+        "alpha_squared": 192,
+        "n_bin": 2,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 5,
+        "linf_bound": 10,
+        "max_integer_coefficient": 116,
+        "approx_alpha_squared": 6500,
+        "lifted_moduli": [
+          {
+            "modulus": 12,
+            "max_integer_coefficient": 116
+          },
+          {
+            "modulus": 13,
+            "max_integer_coefficient": 86
+          },
+          {
+            "modulus": 156,
+            "max_integer_coefficient": 9
+          }
+        ]
+      },
+      "blocks": [
+        {
+          "name": "s",
+          "rows": 8,
+          "norm": {
+            "l2_squared": 64
+          },
+          "placement": "ajtai"
+        },
+        {
+          "name": "x",
+          "rows": 2,
+          "norm": "binary",
+          "placement": "ajtai"
+        }
+      ],
+      "request": {
+        "schema": "jali-params-request/2",
+        "id": "rust-reference-two-moduli",
+        "degree": 64,
+        "modulus": {
+          "search": {
+            "factors": 1,
+            "window_bits": 4
+          }
+        },
+        "hardness": {
+          "policy": "delta"
+        },
+        "statement": {
+          "source": "requirements",
+          "requirements": {
+            "m1": 10,
+            "l": 1,
+            "alpha_squared": 192,
+            "n_bin": 2,
+            "l2_rows": [
+              8
+            ],
+            "l2_bounds_squared": [
+              64
+            ],
+            "n_prime": 5,
+            "linf_bound": 10,
+            "max_integer_coefficient": 116,
+            "approx_alpha_squared": 6500,
+            "lifted_moduli": [
+              {
+                "modulus": 12,
+                "max_integer_coefficient": 116
+              },
+              {
+                "modulus": 13,
+                "max_integer_coefficient": 86
+              },
+              {
+                "modulus": 156,
+                "max_integer_coefficient": 9
+              }
+            ]
+          },
+          "statement_modulus": 156,
+          "blocks": [
+            {
+              "name": "s",
+              "rows": 8,
+              "norm": {
+                "l2_squared": 64
+              },
+              "placement": "ajtai"
+            },
+            {
+              "name": "x",
+              "rows": 2,
+              "norm": "binary",
+              "placement": "ajtai"
+            }
+          ]
+        }
+      },
+      "params": {
+        "id": "rust-reference-two-moduli",
+        "prime_factors": [
+          4295982917
+        ],
+        "degree": 64,
+        "m1": 10,
+        "l": 1,
+        "alpha_squared": 192,
+        "n_bin": 2,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 5,
+        "linf_bound": 10,
+        "m2": 52,
+        "n_msis": 18,
+        "log_sigma": [
+          14,
+          12,
+          10,
+          12
+        ],
+        "gamma": 16382,
+        "d_bits": 5,
+        "mlwe_rank": 21,
+        "mlwe_delta": 1.004257542272892,
+        "estimator": "jali-params 3; request sha256 349bbdd7334eb232; policy delta; MLWE uSVP (ADPS16) beta 363 delta 1.004257542272892; MSIS closed form beta 351 delta 1.00436225"
+      },
+      "params_sha256": "aaa66aca8c1bcfe303fe1208c2715eee6f150f136097c8db557d5a7d361dc62f",
+      "compiled_kind": "two-moduli",
+      "compile": "ok",
+      "random_instance": {
+        "proof_bytes": 14753,
+        "verified": true,
+        "tampered_rejected": true,
+        "other_context_rejected": true
+      }
+    },
+    "linf": {
+      "statement_modulus": 156,
+      "requirements": {
+        "m1": 10,
+        "l": 1,
+        "alpha_squared": 576,
+        "n_bin": 0,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 5,
+        "linf_bound": 43,
+        "max_integer_coefficient": 551,
+        "approx_alpha_squared": 2873,
+        "lifted_moduli": [
+          {
+            "modulus": 12,
+            "max_integer_coefficient": 23
+          },
+          {
+            "modulus": 13,
+            "max_integer_coefficient": 551
+          }
+        ],
+        "linf": {
+          "lifting": [
+            {
+              "modulus": 13,
+              "exact": 5,
+              "linear": 273,
+              "quadratic": 0
+            },
+            {
+              "modulus": 12,
+              "exact": 13,
+              "linear": 5,
+              "quadratic": 0
+            }
+          ],
+          "extraction_limit": null
+        }
+      },
+      "blocks": [
+        {
+          "name": "s",
+          "rows": 8,
+          "norm": {
+            "l2_squared": 64
+          },
+          "placement": "ajtai"
+        },
+        {
+          "name": "y",
+          "rows": 2,
+          "norm": {
+            "linf": 2
+          },
+          "placement": "ajtai"
+        }
+      ],
+      "request": {
+        "schema": "jali-params-request/2",
+        "id": "rust-reference-linf",
+        "degree": 64,
+        "modulus": {
+          "search": {
+            "factors": 1,
+            "window_bits": 4
+          }
+        },
+        "hardness": {
+          "policy": "delta"
+        },
+        "statement": {
+          "source": "requirements",
+          "requirements": {
+            "m1": 10,
+            "l": 1,
+            "alpha_squared": 576,
+            "n_bin": 0,
+            "l2_rows": [
+              8
+            ],
+            "l2_bounds_squared": [
+              64
+            ],
+            "n_prime": 5,
+            "linf_bound": 43,
+            "max_integer_coefficient": 551,
+            "approx_alpha_squared": 2873,
+            "lifted_moduli": [
+              {
+                "modulus": 12,
+                "max_integer_coefficient": 23
+              },
+              {
+                "modulus": 13,
+                "max_integer_coefficient": 551
+              }
+            ],
+            "linf": {
+              "lifting": [
+                {
+                  "modulus": 13,
+                  "exact": 5,
+                  "linear": 273,
+                  "quadratic": 0
+                },
+                {
+                  "modulus": 12,
+                  "exact": 13,
+                  "linear": 5,
+                  "quadratic": 0
+                }
+              ],
+              "extraction_limit": null
+            }
+          },
+          "statement_modulus": 156,
+          "blocks": [
+            {
+              "name": "s",
+              "rows": 8,
+              "norm": {
+                "l2_squared": 64
+              },
+              "placement": "ajtai"
+            },
+            {
+              "name": "y",
+              "rows": 2,
+              "norm": {
+                "linf": 2
+              },
+              "placement": "ajtai"
+            }
+          ]
+        }
+      },
+      "params": {
+        "id": "rust-reference-linf",
+        "prime_factors": [
+          4298309413
+        ],
+        "degree": 64,
+        "m1": 10,
+        "l": 1,
+        "alpha_squared": 576,
+        "n_bin": 0,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 5,
+        "linf_bound": 43,
+        "m2": 53,
+        "n_msis": 19,
+        "log_sigma": [
+          15,
+          12,
+          9,
+          13
+        ],
+        "gamma": 32766,
+        "d_bits": 6,
+        "mlwe_rank": 21,
+        "mlwe_delta": 1.004257542272892,
+        "estimator": "jali-params 3; request sha256 dc4639c660adb90d; policy delta; MLWE uSVP (ADPS16) beta 363 delta 1.004257542272892; MSIS closed form beta 351 delta 1.004358108"
+      },
+      "params_sha256": "adcbe700614b5dcc94929d16a99927e82f283de5b886975a517c8bea4e418466",
+      "compiled_kind": "linf",
+      "compile": "ok",
+      "random_instance": {
+        "proof_bytes": 14926,
+        "verified": true,
+        "tampered_rejected": true,
+        "other_context_rejected": true
+      }
+    },
+    "placed": {
+      "statement_modulus": 12289,
+      "requirements": {
+        "m1": 20,
+        "l": 2,
+        "alpha_squared": 1000,
+        "n_bin": 0,
+        "l2_rows": [
+          2,
+          20
+        ],
+        "l2_bounds_squared": [
+          16777216,
+          1000
+        ],
+        "n_prime": 2,
+        "linf_bound": 2,
+        "max_integer_coefficient": 17662
+      },
+      "blocks": [
+        {
+          "name": "w",
+          "rows": 2,
+          "norm": {
+            "l2_squared": 16777216
+          },
+          "placement": "bdlop"
+        },
+        {
+          "name": "s",
+          "rows": 20,
+          "norm": {
+            "l2_squared": 1000
+          },
+          "placement": "ajtai"
+        }
+      ],
+      "request": {
+        "schema": "jali-params-request/2",
+        "id": "rust-reference-placed",
+        "degree": 64,
+        "modulus": {
+          "search": {
+            "factors": 1,
+            "window_bits": 4
+          }
+        },
+        "hardness": {
+          "policy": "delta"
+        },
+        "statement": {
+          "source": "requirements",
+          "requirements": {
+            "m1": 20,
+            "l": 2,
+            "alpha_squared": 1000,
+            "n_bin": 0,
+            "l2_rows": [
+              2,
+              20
+            ],
+            "l2_bounds_squared": [
+              16777216,
+              1000
+            ],
+            "n_prime": 2,
+            "linf_bound": 2,
+            "max_integer_coefficient": 17662
+          },
+          "statement_modulus": 12289,
+          "blocks": [
+            {
+              "name": "w",
+              "rows": 2,
+              "norm": {
+                "l2_squared": 16777216
+              },
+              "placement": "bdlop"
+            },
+            {
+              "name": "s",
+              "rows": 20,
+              "norm": {
+                "l2_squared": 1000
+              },
+              "placement": "ajtai"
+            }
+          ],
+          "movable": [
+            "w"
+          ]
+        }
+      },
+      "params": {
+        "id": "rust-reference-placed",
+        "prime_factors": [
+          17488752422629
+        ],
+        "degree": 64,
+        "m1": 20,
+        "l": 2,
+        "alpha_squared": 1000,
+        "n_bin": 0,
+        "l2_rows": [
+          2,
+          20
+        ],
+        "l2_bounds_squared": [
+          16777216,
+          1000
+        ],
+        "n_prime": 2,
+        "linf_bound": 2,
+        "m2": 56,
+        "n_msis": 14,
+        "log_sigma": [
+          15,
+          12,
+          18,
+          10
+        ],
+        "gamma": 16382,
+        "d_bits": 5,
+        "mlwe_rank": 28,
+        "mlwe_delta": 1.0043479781750226,
+        "estimator": "jali-params 3; request sha256 ab144b2409894f26; policy delta; MLWE uSVP (ADPS16) beta 352 delta 1.0043479781750226; MSIS closed form beta 348 delta 1.004388374"
+      },
+      "params_sha256": "28df8ebc383d9c9244f3b4008f65c471ac42df775ef52c9664f291ada2c0aafd",
+      "compiled_kind": "placed",
+      "compile": "ok",
+      "random_instance": {
+        "proof_bytes": 19487,
+        "verified": true,
+        "tampered_rejected": true,
+        "other_context_rejected": true
+      },
+      "placement": {
+        "ajtai": [
+          "s"
+        ],
+        "bdlop": [
+          "w"
+        ]
+      }
+    },
+    "packed": {
+      "statement_modulus": 156,
+      "requirements": {
+        "m1": 10,
+        "l": 2,
+        "alpha_squared": 192,
+        "n_bin": 2,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 2,
+        "linf_bound": 28,
+        "max_integer_coefficient": 358,
+        "approx_alpha_squared": 50685,
+        "lifted_moduli": [
+          {
+            "modulus": 12,
+            "max_integer_coefficient": 333
+          },
+          {
+            "modulus": 13,
+            "max_integer_coefficient": 358
+          }
+        ]
+      },
+      "blocks": [
+        {
+          "name": "s",
+          "rows": 8,
+          "norm": {
+            "l2_squared": 64
+          },
+          "placement": "ajtai"
+        },
+        {
+          "name": "x",
+          "rows": 2,
+          "norm": "binary",
+          "placement": "ajtai"
+        }
+      ],
+      "request": {
+        "schema": "jali-params-request/2",
+        "id": "rust-reference-packed",
+        "degree": 64,
+        "modulus": {
+          "search": {
+            "factors": 1,
+            "window_bits": 4
+          }
+        },
+        "hardness": {
+          "policy": "delta"
+        },
+        "statement": {
+          "source": "requirements",
+          "requirements": {
+            "m1": 10,
+            "l": 2,
+            "alpha_squared": 192,
+            "n_bin": 2,
+            "l2_rows": [
+              8
+            ],
+            "l2_bounds_squared": [
+              64
+            ],
+            "n_prime": 2,
+            "linf_bound": 28,
+            "max_integer_coefficient": 358,
+            "approx_alpha_squared": 50685,
+            "lifted_moduli": [
+              {
+                "modulus": 12,
+                "max_integer_coefficient": 333
+              },
+              {
+                "modulus": 13,
+                "max_integer_coefficient": 358
+              }
+            ]
+          },
+          "statement_modulus": 156,
+          "blocks": [
+            {
+              "name": "s",
+              "rows": 8,
+              "norm": {
+                "l2_squared": 64
+              },
+              "placement": "ajtai"
+            },
+            {
+              "name": "x",
+              "rows": 2,
+              "norm": "binary",
+              "placement": "ajtai"
+            }
+          ]
+        }
+      },
+      "params": {
+        "id": "rust-reference-packed",
+        "prime_factors": [
+          4295982917
+        ],
+        "degree": 64,
+        "m1": 10,
+        "l": 2,
+        "alpha_squared": 192,
+        "n_bin": 2,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 2,
+        "linf_bound": 28,
+        "m2": 53,
+        "n_msis": 18,
+        "log_sigma": [
+          14,
+          12,
+          10,
+          14
+        ],
+        "gamma": 16382,
+        "d_bits": 5,
+        "mlwe_rank": 21,
+        "mlwe_delta": 1.004257542272892,
+        "estimator": "jali-params 3; request sha256 6ffe2f3cde42896e; policy delta; MLWE uSVP (ADPS16) beta 363 delta 1.004257542272892; MSIS closed form beta 351 delta 1.004363325"
+      },
+      "params_sha256": "2b688106595aa378c16d6e7f3512d1b18f5d4d9d560ec9e2a461cc8100efef04",
+      "compiled_kind": "packed",
+      "compile": "ok",
+      "random_instance": {
+        "proof_bytes": 15189,
+        "verified": true,
+        "tampered_rejected": true,
+        "other_context_rejected": true
+      }
+    },
+    "subring": {
+      "statement_modulus": 156,
+      "requirements": {
+        "m1": 10,
+        "l": 3,
+        "alpha_squared": 384,
+        "n_bin": 1,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 4,
+        "linf_bound": 40,
+        "max_integer_coefficient": 517,
+        "approx_alpha_squared": 205070,
+        "lifted_moduli": [
+          {
+            "modulus": 12,
+            "max_integer_coefficient": 29
+          },
+          {
+            "modulus": 13,
+            "max_integer_coefficient": 517
+          }
+        ],
+        "linf": {
+          "lifting": [
+            {
+              "modulus": 13,
+              "exact": 133,
+              "linear": 192,
+              "quadratic": 0
+            },
+            {
+              "modulus": 12,
+              "exact": 10,
+              "linear": 1,
+              "quadratic": 0
+            },
+            {
+              "modulus": 12,
+              "exact": 19,
+              "linear": 1,
+              "quadratic": 0
+            },
+            {
+              "modulus": 12,
+              "exact": 27,
+              "linear": 1,
+              "quadratic": 0
+            }
+          ],
+          "extraction_limit": null
+        }
+      },
+      "blocks": [
+        {
+          "name": "s",
+          "rows": 8,
+          "norm": {
+            "l2_squared": 64
+          },
+          "placement": "ajtai"
+        },
+        {
+          "name": "x",
+          "rows": 1,
+          "norm": "binary",
+          "placement": "ajtai"
+        },
+        {
+          "name": "y",
+          "rows": 1,
+          "norm": {
+            "linf": 2
+          },
+          "placement": "ajtai"
+        }
+      ],
+      "request": {
+        "schema": "jali-params-request/2",
+        "id": "rust-reference-subring",
+        "degree": 64,
+        "modulus": {
+          "search": {
+            "factors": 1,
+            "window_bits": 4
+          }
+        },
+        "hardness": {
+          "policy": "delta"
+        },
+        "statement": {
+          "source": "requirements",
+          "requirements": {
+            "m1": 10,
+            "l": 3,
+            "alpha_squared": 384,
+            "n_bin": 1,
+            "l2_rows": [
+              8
+            ],
+            "l2_bounds_squared": [
+              64
+            ],
+            "n_prime": 4,
+            "linf_bound": 40,
+            "max_integer_coefficient": 517,
+            "approx_alpha_squared": 205070,
+            "lifted_moduli": [
+              {
+                "modulus": 12,
+                "max_integer_coefficient": 29
+              },
+              {
+                "modulus": 13,
+                "max_integer_coefficient": 517
+              }
+            ],
+            "linf": {
+              "lifting": [
+                {
+                  "modulus": 13,
+                  "exact": 133,
+                  "linear": 192,
+                  "quadratic": 0
+                },
+                {
+                  "modulus": 12,
+                  "exact": 10,
+                  "linear": 1,
+                  "quadratic": 0
+                },
+                {
+                  "modulus": 12,
+                  "exact": 19,
+                  "linear": 1,
+                  "quadratic": 0
+                },
+                {
+                  "modulus": 12,
+                  "exact": 27,
+                  "linear": 1,
+                  "quadratic": 0
+                }
+              ],
+              "extraction_limit": null
+            }
+          },
+          "statement_modulus": 156,
+          "blocks": [
+            {
+              "name": "s",
+              "rows": 8,
+              "norm": {
+                "l2_squared": 64
+              },
+              "placement": "ajtai"
+            },
+            {
+              "name": "x",
+              "rows": 1,
+              "norm": "binary",
+              "placement": "ajtai"
+            },
+            {
+              "name": "y",
+              "rows": 1,
+              "norm": {
+                "linf": 2
+              },
+              "placement": "ajtai"
+            }
+          ]
+        }
+      },
+      "params": {
+        "id": "rust-reference-subring",
+        "prime_factors": [
+          4298309413
+        ],
+        "degree": 64,
+        "m1": 10,
+        "l": 3,
+        "alpha_squared": 384,
+        "n_bin": 1,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 4,
+        "linf_bound": 40,
+        "m2": 55,
+        "n_msis": 19,
+        "log_sigma": [
+          15,
+          12,
+          10,
+          15
+        ],
+        "gamma": 32766,
+        "d_bits": 6,
+        "mlwe_rank": 21,
+        "mlwe_delta": 1.004257542272892,
+        "estimator": "jali-params 3; request sha256 3d600586ee974b8d; policy delta; MLWE uSVP (ADPS16) beta 363 delta 1.004257542272892; MSIS closed form beta 351 delta 1.004359058"
+      },
+      "params_sha256": "3fa0a92076e4128a944a6048dc5da86d6cd2f51bc048a6a5d120e017d109de0b",
+      "compiled_kind": "subring",
+      "compile": "ok",
+      "random_instance": {
+        "proof_bytes": 15792,
+        "verified": true,
+        "tampered_rejected": true,
+        "other_context_rejected": true
+      }
+    },
+    "linf-exact": {
+      "statement_modulus": 156,
+      "requirements": {
+        "m1": 12,
+        "l": 7,
+        "alpha_squared": 320,
+        "n_bin": 8,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 5,
+        "linf_bound": 16,
+        "max_integer_coefficient": 203,
+        "approx_alpha_squared": 32900,
+        "lifted_moduli": [
+          {
+            "modulus": 12,
+            "max_integer_coefficient": 13
+          },
+          {
+            "modulus": 13,
+            "max_integer_coefficient": 203
+          }
+        ]
+      },
+      "blocks": [
+        {
+          "name": "s",
+          "rows": 8,
+          "norm": {
+            "l2_squared": 64
+          },
+          "placement": "ajtai"
+        },
+        {
+          "name": "u",
+          "rows": 4,
+          "norm": {
+            "linf_exact": 1
+          },
+          "placement": "ajtai"
+        },
+        {
+          "name": "v",
+          "rows": 4,
+          "norm": {
+            "linf_exact": 5
+          },
+          "placement": "bdlop"
+        }
+      ],
+      "request": {
+        "schema": "jali-params-request/2",
+        "id": "rust-reference-linf-exact",
+        "degree": 64,
+        "modulus": {
+          "search": {
+            "factors": 1,
+            "window_bits": 4
+          }
+        },
+        "hardness": {
+          "policy": "delta"
+        },
+        "statement": {
+          "source": "requirements",
+          "requirements": {
+            "m1": 12,
+            "l": 7,
+            "alpha_squared": 320,
+            "n_bin": 8,
+            "l2_rows": [
+              8
+            ],
+            "l2_bounds_squared": [
+              64
+            ],
+            "n_prime": 5,
+            "linf_bound": 16,
+            "max_integer_coefficient": 203,
+            "approx_alpha_squared": 32900,
+            "lifted_moduli": [
+              {
+                "modulus": 12,
+                "max_integer_coefficient": 13
+              },
+              {
+                "modulus": 13,
+                "max_integer_coefficient": 203
+              }
+            ]
+          },
+          "statement_modulus": 156,
+          "blocks": [
+            {
+              "name": "s",
+              "rows": 8,
+              "norm": {
+                "l2_squared": 64
+              },
+              "placement": "ajtai"
+            },
+            {
+              "name": "u",
+              "rows": 4,
+              "norm": {
+                "linf_exact": 1
+              },
+              "placement": "ajtai"
+            },
+            {
+              "name": "v",
+              "rows": 4,
+              "norm": {
+                "linf_exact": 5
+              },
+              "placement": "bdlop"
+            }
+          ]
+        }
+      },
+      "params": {
+        "id": "rust-reference-linf-exact",
+        "prime_factors": [
+          4298309413
+        ],
+        "degree": 64,
+        "m1": 12,
+        "l": 7,
+        "alpha_squared": 320,
+        "n_bin": 8,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 5,
+        "linf_bound": 16,
+        "m2": 59,
+        "n_msis": 19,
+        "log_sigma": [
+          15,
+          12,
+          10,
+          13
+        ],
+        "gamma": 32766,
+        "d_bits": 6,
+        "mlwe_rank": 21,
+        "mlwe_delta": 1.004257542272892,
+        "estimator": "jali-params 3; request sha256 34904e7bed47a8b6; policy delta; MLWE uSVP (ADPS16) beta 363 delta 1.004257542272892; MSIS closed form beta 348 delta 1.004384769"
+      },
+      "params_sha256": "500373cf93bd725a7481213048f2eb006de3e1b368eb7d3fb1431a8a308f058c",
+      "compiled_kind": "linf-exact",
+      "compile": "ok",
+      "random_instance": {
+        "proof_bytes": 17547,
+        "verified": true,
+        "tampered_rejected": true,
+        "other_context_rejected": true
+      }
+    },
+    "linf-limit": {
+      "statement_modulus": 1009,
+      "requirements": {
+        "m1": 10,
+        "l": 1,
+        "alpha_squared": 576,
+        "n_bin": 0,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 5,
+        "linf_bound": 43,
+        "max_integer_coefficient": 551,
+        "approx_alpha_squared": 2873,
+        "lifted_moduli": [
+          {
+            "modulus": 12,
+            "max_integer_coefficient": 23
+          },
+          {
+            "modulus": 13,
+            "max_integer_coefficient": 551
+          }
+        ],
+        "linf": {
+          "lifting": [
+            {
+              "modulus": 13,
+              "exact": 5,
+              "linear": 273,
+              "quadratic": 0
+            },
+            {
+              "modulus": 12,
+              "exact": 13,
+              "linear": 5,
+              "quadratic": 0
+            }
+          ],
+          "extraction_limit": 504
+        }
+      },
+      "blocks": [
+        {
+          "name": "s",
+          "rows": 8,
+          "norm": {
+            "l2_squared": 64
+          },
+          "placement": "ajtai"
+        },
+        {
+          "name": "y",
+          "rows": 2,
+          "norm": {
+            "linf": 2
+          },
+          "placement": "ajtai"
+        }
+      ],
+      "request": {
+        "schema": "jali-params-request/2",
+        "id": "rust-reference-linf-limit",
+        "degree": 64,
+        "modulus": {
+          "search": {
+            "factors": 1,
+            "window_bits": 4
+          }
+        },
+        "hardness": {
+          "policy": "delta"
+        },
+        "statement": {
+          "source": "requirements",
+          "requirements": {
+            "m1": 10,
+            "l": 1,
+            "alpha_squared": 576,
+            "n_bin": 0,
+            "l2_rows": [
+              8
+            ],
+            "l2_bounds_squared": [
+              64
+            ],
+            "n_prime": 5,
+            "linf_bound": 43,
+            "max_integer_coefficient": 551,
+            "approx_alpha_squared": 2873,
+            "lifted_moduli": [
+              {
+                "modulus": 12,
+                "max_integer_coefficient": 23
+              },
+              {
+                "modulus": 13,
+                "max_integer_coefficient": 551
+              }
+            ],
+            "linf": {
+              "lifting": [
+                {
+                  "modulus": 13,
+                  "exact": 5,
+                  "linear": 273,
+                  "quadratic": 0
+                },
+                {
+                  "modulus": 12,
+                  "exact": 13,
+                  "linear": 5,
+                  "quadratic": 0
+                }
+              ],
+              "extraction_limit": 504
+            }
+          },
+          "statement_modulus": 1009,
+          "blocks": [
+            {
+              "name": "s",
+              "rows": 8,
+              "norm": {
+                "l2_squared": 64
+              },
+              "placement": "ajtai"
+            },
+            {
+              "name": "y",
+              "rows": 2,
+              "norm": {
+                "linf": 2
+              },
+              "placement": "ajtai"
+            }
+          ]
+        }
+      },
+      "base": "linf",
+      "tool": "variable range above statement modulus: the extraction bound 406322 of log_sigma[3] = 13 exceeds the range limit 504"
+    },
+    "placed-ajtai": {
+      "statement_modulus": 12289,
+      "requirements": {
+        "m1": 22,
+        "l": 0,
+        "alpha_squared": 16778216,
+        "n_bin": 0,
+        "l2_rows": [
+          2,
+          20
+        ],
+        "l2_bounds_squared": [
+          16777216,
+          1000
+        ],
+        "n_prime": 2,
+        "linf_bound": 2,
+        "max_integer_coefficient": 17662
+      },
+      "blocks": [
+        {
+          "name": "w",
+          "rows": 2,
+          "norm": {
+            "l2_squared": 16777216
+          },
+          "placement": "ajtai"
+        },
+        {
+          "name": "s",
+          "rows": 20,
+          "norm": {
+            "l2_squared": 1000
+          },
+          "placement": "ajtai"
+        }
+      ],
+      "request": {
+        "schema": "jali-params-request/2",
+        "id": "rust-reference-placed-ajtai",
+        "degree": 64,
+        "modulus": {
+          "search": {
+            "factors": 1,
+            "window_bits": 4
+          }
+        },
+        "hardness": {
+          "policy": "delta"
+        },
+        "statement": {
+          "source": "requirements",
+          "requirements": {
+            "m1": 22,
+            "l": 0,
+            "alpha_squared": 16778216,
+            "n_bin": 0,
+            "l2_rows": [
+              2,
+              20
+            ],
+            "l2_bounds_squared": [
+              16777216,
+              1000
+            ],
+            "n_prime": 2,
+            "linf_bound": 2,
+            "max_integer_coefficient": 17662
+          },
+          "statement_modulus": 12289,
+          "blocks": [
+            {
+              "name": "w",
+              "rows": 2,
+              "norm": {
+                "l2_squared": 16777216
+              },
+              "placement": "ajtai"
+            },
+            {
+              "name": "s",
+              "rows": 20,
+              "norm": {
+                "l2_squared": 1000
+              },
+              "placement": "ajtai"
+            }
+          ]
+        }
+      },
+      "base": "placed"
+    },
+    "noninvertible-constraint": {
+      "statement_modulus": 156,
+      "requirements": {
+        "m1": 10,
+        "l": 1,
+        "alpha_squared": 192,
+        "n_bin": 2,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 5,
+        "linf_bound": 10,
+        "max_integer_coefficient": 116,
+        "approx_alpha_squared": 356,
+        "lifted_moduli": [
+          {
+            "modulus": 12,
+            "max_integer_coefficient": 116
+          },
+          {
+            "modulus": 156,
+            "max_integer_coefficient": 9
+          },
+          {
+            "modulus": 12887948751,
+            "max_integer_coefficient": 98
+          }
+        ]
+      },
+      "blocks": [
+        {
+          "name": "s",
+          "rows": 8,
+          "norm": {
+            "l2_squared": 64
+          },
+          "placement": "ajtai"
+        },
+        {
+          "name": "x",
+          "rows": 2,
+          "norm": "binary",
+          "placement": "ajtai"
+        }
+      ],
+      "request": {
+        "schema": "jali-params-request/2",
+        "id": "rust-reference-noninvertible-constraint",
+        "degree": 64,
+        "modulus": {
+          "search": {
+            "factors": 1,
+            "window_bits": 4
+          }
+        },
+        "hardness": {
+          "policy": "delta"
+        },
+        "statement": {
+          "source": "requirements",
+          "requirements": {
+            "m1": 10,
+            "l": 1,
+            "alpha_squared": 192,
+            "n_bin": 2,
+            "l2_rows": [
+              8
+            ],
+            "l2_bounds_squared": [
+              64
+            ],
+            "n_prime": 5,
+            "linf_bound": 10,
+            "max_integer_coefficient": 116,
+            "approx_alpha_squared": 356,
+            "lifted_moduli": [
+              {
+                "modulus": 12,
+                "max_integer_coefficient": 116
+              },
+              {
+                "modulus": 156,
+                "max_integer_coefficient": 9
+              },
+              {
+                "modulus": 12887948751,
+                "max_integer_coefficient": 98
+              }
+            ]
+          },
+          "statement_modulus": 156,
+          "blocks": [
+            {
+              "name": "s",
+              "rows": 8,
+              "norm": {
+                "l2_squared": 64
+              },
+              "placement": "ajtai"
+            },
+            {
+              "name": "x",
+              "rows": 2,
+              "norm": "binary",
+              "placement": "ajtai"
+            }
+          ]
+        }
+      },
+      "base": "two-moduli"
+    },
+    "noninvertible-statement": {
+      "statement_modulus": 8591965834,
+      "requirements": {
+        "m1": 10,
+        "l": 1,
+        "alpha_squared": 192,
+        "n_bin": 2,
+        "l2_rows": [
+          8
+        ],
+        "l2_bounds_squared": [
+          64
+        ],
+        "n_prime": 5,
+        "linf_bound": 10,
+        "max_integer_coefficient": 116,
+        "approx_alpha_squared": 6500,
+        "lifted_moduli": [
+          {
+            "modulus": 12,
+            "max_integer_coefficient": 116
+          },
+          {
+            "modulus": 13,
+            "max_integer_coefficient": 86
+          },
+          {
+            "modulus": 8591965834,
+            "max_integer_coefficient": 9
+          }
+        ]
+      },
+      "blocks": [
+        {
+          "name": "s",
+          "rows": 8,
+          "norm": {
+            "l2_squared": 64
+          },
+          "placement": "ajtai"
+        },
+        {
+          "name": "x",
+          "rows": 2,
+          "norm": "binary",
+          "placement": "ajtai"
+        }
+      ],
+      "request": {
+        "schema": "jali-params-request/2",
+        "id": "rust-reference-noninvertible-statement",
+        "degree": 64,
+        "modulus": {
+          "search": {
+            "factors": 1,
+            "window_bits": 4
+          }
+        },
+        "hardness": {
+          "policy": "delta"
+        },
+        "statement": {
+          "source": "requirements",
+          "requirements": {
+            "m1": 10,
+            "l": 1,
+            "alpha_squared": 192,
+            "n_bin": 2,
+            "l2_rows": [
+              8
+            ],
+            "l2_bounds_squared": [
+              64
+            ],
+            "n_prime": 5,
+            "linf_bound": 10,
+            "max_integer_coefficient": 116,
+            "approx_alpha_squared": 6500,
+            "lifted_moduli": [
+              {
+                "modulus": 12,
+                "max_integer_coefficient": 116
+              },
+              {
+                "modulus": 13,
+                "max_integer_coefficient": 86
+              },
+              {
+                "modulus": 8591965834,
+                "max_integer_coefficient": 9
+              }
+            ]
+          },
+          "statement_modulus": 8591965834,
+          "blocks": [
+            {
+              "name": "s",
+              "rows": 8,
+              "norm": {
+                "l2_squared": 64
+              },
+              "placement": "ajtai"
+            },
+            {
+              "name": "x",
+              "rows": 2,
+              "norm": "binary",
+              "placement": "ajtai"
+            }
+          ]
+        }
+      },
+      "base": "two-moduli"
+    }
+  },
+  "statement_cases": [
+    {
+      "name": "two-moduli/as-derived",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {},
+      "sha256": "aaa66aca8c1bcfe303fe1208c2715eee6f150f136097c8db557d5a7d361dc62f",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/previous-prime",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "prime_factors": [
+          4294606829
+        ]
+      },
+      "sha256": "d7b066fc35bcfb54d7cdd487b940792a8c55156eea20203af219aba1193b93ad",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "two-moduli/log-sigma3--1",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          11
+        ]
+      },
+      "sha256": "95f671cb99fc52f5b90f972965e7e67fade95722a2c4e1515e56e76de8290de0",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/log-sigma3-+1",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          13
+        ]
+      },
+      "sha256": "04ff945c49fd5acc1b768224925e071a37eeb53eb6dad4011c33523b0272f04e",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/log-sigma3-+2",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          14
+        ]
+      },
+      "sha256": "8ace88b1f920de12e13f1106fc6ed8e89b76a999ba8200d4e4ebb8dc3c20b080",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/log-sigma3-+5",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          17
+        ]
+      },
+      "sha256": "f9d0e82adf4af3d6025aa8eb8bb33dadbfb977075c5fb18a50c7978c55039dd2",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/log-sigma3-+9",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          21
+        ]
+      },
+      "sha256": "d1b2db8f205fc9e1e8fcb0905a2f70dcf7c10684c381343f2cbf9a0ecd41fd39",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "two-moduli/log-sigma3-+10",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          22
+        ]
+      },
+      "sha256": "4638b2a30e8936447843e1595ad6731fd717a1e60a226edc0cb84cad75de1ec7",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "two-moduli/log-sigma3-+12",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          24
+        ]
+      },
+      "sha256": "0753c607d3b245d919ee784cc471ce9b791d529d8117028e6f84a22cc33237aa",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "two-moduli/log-sigma3-+16",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          28
+        ]
+      },
+      "sha256": "16441754f1bfad6d20263439bfe8d08c9ef9edc9ab4a10babdaea256515e4d3b",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "two-moduli/linf-bound-1",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "linf_bound": 1
+      },
+      "sha256": "ff83166a48143f21fc764dd534cb20fe2dcef3a27eef9d0b2ce5df51dbea1629",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "two-moduli/linf-bound-half",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "linf_bound": 5
+      },
+      "sha256": "39fb33553c305b237d77844512aafe302c9af07a4e38fa178fa6d12ef0d17a44",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "two-moduli/linf-bound-double",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "linf_bound": 20
+      },
+      "sha256": "8ad348c9b4c902b44570c7fbe2b9767142ee7802c9cc4479ea221d377e659c10",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/alpha-minus-1",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "alpha_squared": 191
+      },
+      "sha256": "56a0e0600a6b65ae88920587ee2858918c13e7770ef207eeb29710eb933e062a",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "two-moduli/m1-plus-1",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "m1": 11
+      },
+      "sha256": "a763fe660c3a6ea6e9cff56a188da77a0cccbdc9402777cf004c5439d2c6c5ec",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "two-moduli/random-00",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "alpha_squared": 384,
+        "linf_bound": 670926
+      },
+      "sha256": "706ffc39f1d8d22c363e551a3e71e6008f73fc62296b275389c1469a812e9983",
+      "rust": "Parameter(\"range rejection M\")"
+    },
+    {
+      "name": "two-moduli/random-01",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          17
+        ],
+        "l": 2,
+        "m2": 53
+      },
+      "sha256": "71b5fa500f6cdb853f7e152a82eb48ed146f578cc74001320df53f62951f67f8",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "two-moduli/random-02",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "n_prime": 4,
+        "alpha_squared": 96
+      },
+      "sha256": "e3f0035b29cc3a1a1ad70ddded476c8c51b99f4dee5027348ecabc560018f693",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "two-moduli/random-03",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          20
+        ],
+        "linf_bound": 11
+      },
+      "sha256": "15be56c168871454d8ccbe2069131b12ef8777e73703b1a64e8d4da869b415f6",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "two-moduli/random-04",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          10
+        ],
+        "alpha_squared": 96
+      },
+      "sha256": "edc318f8a6b7c2781b84e3c24d01426673889a7fc6abbfbfe3b4fb951e04a7ae",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "two-moduli/random-05",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "n_prime": 6
+      },
+      "sha256": "84bbd2b345ad69eee49d08cb461c75599afbd84afa563d93b631118a3a5911bd",
+      "rust": "Dimension"
+    },
+    {
+      "name": "two-moduli/random-06",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "n_prime": 4,
+        "l": 2,
+        "m2": 53
+      },
+      "sha256": "b11e2f76aad557fff1364dfd65bda4e8cb4855db236d24660eb51d1ef362c7ec",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "two-moduli/random-07",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "l": 2,
+        "m2": 53
+      },
+      "sha256": "2060af9f9b86b71f41523e72cd770b965e225ee18af1a3f381d345324e65120c",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "two-moduli/random-08",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "prime_factors": [
+          1074823021
+        ]
+      },
+      "sha256": "028da8258b0c54d9d8e844f51496e37f7e2ff2db3bc731a5bf578428068483c0",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "two-moduli/random-09",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "linf_bound": 1,
+        "l": 2,
+        "m2": 53
+      },
+      "sha256": "0ae611b7e3bd480d2e1013e4efd4e96ce4c289bbcffb57da40bfe40dfb095bd5",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "two-moduli/random-10",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          17
+        ],
+        "alpha_squared": 384
+      },
+      "sha256": "69070a2bb8b0b63107f885e15b0b3e66ad258a9ac4dfd2f67b3a428a9edd2946",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/random-11",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "n_prime": 6
+      },
+      "sha256": "84bbd2b345ad69eee49d08cb461c75599afbd84afa563d93b631118a3a5911bd",
+      "rust": "Dimension"
+    },
+    {
+      "name": "two-moduli/random-12",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "prime_factors": [
+          1074823021
+        ]
+      },
+      "sha256": "028da8258b0c54d9d8e844f51496e37f7e2ff2db3bc731a5bf578428068483c0",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "two-moduli/random-13",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          13
+        ]
+      },
+      "sha256": "04ff945c49fd5acc1b768224925e071a37eeb53eb6dad4011c33523b0272f04e",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/random-14",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "n_prime": 6,
+        "prime_factors": [
+          537558949
+        ]
+      },
+      "sha256": "ab6e472923be8cebf0b0a725ef05608a210286243a80a31ff2f17b05db63ba6b",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "two-moduli/random-15",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "alpha_squared": 384,
+        "log_sigma": [
+          14,
+          12,
+          10,
+          17
+        ]
+      },
+      "sha256": "69070a2bb8b0b63107f885e15b0b3e66ad258a9ac4dfd2f67b3a428a9edd2946",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/random-16",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          18
+        ]
+      },
+      "sha256": "e56749cbff3f15e53ec1a6b25745b70fcadc17283668491b3b6bd0c6cc94349a",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/random-17",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "prime_factors": [
+          537558949
+        ]
+      },
+      "sha256": "cc09992191d2b5fbaa435cd07630bb8d734d1b50cce46194feeebe48d4aaf991",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "two-moduli/random-18",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          17
+        ]
+      },
+      "sha256": "f9d0e82adf4af3d6025aa8eb8bb33dadbfb977075c5fb18a50c7978c55039dd2",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/random-19",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "n_prime": 6
+      },
+      "sha256": "84bbd2b345ad69eee49d08cb461c75599afbd84afa563d93b631118a3a5911bd",
+      "rust": "Dimension"
+    },
+    {
+      "name": "two-moduli/random-20",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          15
+        ],
+        "l": 2,
+        "m2": 53
+      },
+      "sha256": "7a3eacd83a6c486d876185e20281878412f9cf0c97a99aca5db00e02ae872ba9",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "two-moduli/random-21",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "l": 2,
+        "m2": 53
+      },
+      "sha256": "2060af9f9b86b71f41523e72cd770b965e225ee18af1a3f381d345324e65120c",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "two-moduli/random-22",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "alpha_squared": 384
+      },
+      "sha256": "010452f99830ad895c6337739209e4d0926728a5833a705bacb64bc903b89510",
+      "rust": "ok"
+    },
+    {
+      "name": "two-moduli/random-23",
+      "kind": "two-moduli",
+      "base": "two-moduli",
+      "set": {
+        "n_prime": 4,
+        "alpha_squared": 384
+      },
+      "sha256": "3a9ee8327351153629563c9c87b15b379a941b620003d2167b2800024a33d4d6",
+      "rust": "Dimension"
+    },
+    {
+      "name": "linf/as-derived",
+      "kind": "linf",
+      "base": "linf",
+      "set": {},
+      "sha256": "adcbe700614b5dcc94929d16a99927e82f283de5b886975a517c8bea4e418466",
+      "rust": "ok"
+    },
+    {
+      "name": "linf/previous-prime",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "prime_factors": [
+          4294901749
+        ]
+      },
+      "sha256": "8372500c3d27b5cf96510f282f8c5c6c201cbdb0deeb8ea08e8044a6d1758232",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf/log-sigma3--1",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          9,
+          12
+        ]
+      },
+      "sha256": "e174a94f9a472a8de783ad31aeb9680b5eb54a3f2ad40fdaf5a6069a5c94c986",
+      "rust": "ok"
+    },
+    {
+      "name": "linf/log-sigma3-+1",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          9,
+          14
+        ]
+      },
+      "sha256": "db017fea0b8a8ed9a0708af115ceaa3ed02227ae83c7ab0460a242320093d81e",
+      "rust": "ok"
+    },
+    {
+      "name": "linf/log-sigma3-+2",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          9,
+          15
+        ]
+      },
+      "sha256": "60b32db02e48f945d6774aaa0d91cac4bde8f1b3a23dfcf08c50245d51dc7e9d",
+      "rust": "ok"
+    },
+    {
+      "name": "linf/log-sigma3-+5",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          9,
+          18
+        ]
+      },
+      "sha256": "ba2ecf0dbc0341fbbf7a78c8e83fc6a030fb033bff56bb42a96cfe3a51502313",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "linf/log-sigma3-+9",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          9,
+          22
+        ]
+      },
+      "sha256": "9bbb65b427c2970fe9a23349ca8af851354326e3f5ac2de27372926fad66ed81",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "linf/log-sigma3-+10",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          9,
+          23
+        ]
+      },
+      "sha256": "9663d37af6129c19fdf0598ab614bfe4ee9cd3223a3135e944a2eee8779ca0d7",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "linf/log-sigma3-+12",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          9,
+          25
+        ]
+      },
+      "sha256": "abcebd29b071f0ffd35ddc38bfedf8d48620a0001a85cd62e7304ccc45f9051d",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "linf/log-sigma3-+16",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          9,
+          29
+        ]
+      },
+      "sha256": "9139822ee15f2225758beb5ceaeaa028d589ca5a2f19e184cacfe9636d173351",
+      "rust": "Parameter(\"approximate extraction bound\")"
+    },
+    {
+      "name": "linf/linf-bound-1",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "linf_bound": 1
+      },
+      "sha256": "03770359e085628dab17481ae0e7028eaff013991bb432e2fdbc68b5b5116dab",
+      "rust": "Parameter(\"approximate range bound\")"
+    },
+    {
+      "name": "linf/linf-bound-half",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "linf_bound": 21
+      },
+      "sha256": "81a9395bb05c3e057938d692aeb5fb6097301ed39cedf8c798539a66e3dd18ee",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "linf/linf-bound-double",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "linf_bound": 86
+      },
+      "sha256": "91d6ef52ed66bc37eb22e8fd721550d8802885cba6e23450216b2af2d36a8e7d",
+      "rust": "ok"
+    },
+    {
+      "name": "linf/alpha-minus-1",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "alpha_squared": 575
+      },
+      "sha256": "73c7e80eb521622073b41640f230fb7915adf51596b00cf64c62db211546b9c9",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "linf/m1-plus-1",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "m1": 11
+      },
+      "sha256": "9b75f2d3ba6b5654fc7172ea2919fb9e109002bd542ba82323f123f4edcb12a7",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "linf/random-00",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "linf_bound": 42
+      },
+      "sha256": "551212a5be32f2a998c4957f2dc644acfacf4f29858c5fed7ef8b5b16ca13a06",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "linf/random-01",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          9,
+          14
+        ]
+      },
+      "sha256": "db017fea0b8a8ed9a0708af115ceaa3ed02227ae83c7ab0460a242320093d81e",
+      "rust": "ok"
+    },
+    {
+      "name": "linf/random-02",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "l": 2,
+        "m2": 54,
+        "alpha_squared": 288
+      },
+      "sha256": "ea25cd9dc3663c70c7adb09487183dfe8f9594082a1e89fb6078eadc17138f56",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "linf/random-03",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "alpha_squared": 1152
+      },
+      "sha256": "f97715ac70a5e00f966886686e7d5b011086ce8e991d505726373a62a343dd24",
+      "rust": "ok"
+    },
+    {
+      "name": "linf/random-04",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "n_prime": 4,
+        "prime_factors": [
+          4298309413
+        ]
+      },
+      "sha256": "5699b2adf351835240f992d785bd5625e7c4a1bf0225094eafade26307d8ee23",
+      "rust": "Dimension"
+    },
+    {
+      "name": "linf/random-05",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "l": 2,
+        "m2": 54
+      },
+      "sha256": "0a31111a91c6e6b0c9bc467ee93393a5bdef5f9a45787a49ca40af287ac431c9",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "linf/random-06",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "l": 2,
+        "m2": 54,
+        "linf_bound": 42
+      },
+      "sha256": "d74274b7dd97b8a682f0f3927624140170440c3c5f2858bcef6ea00621eb66a6",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "linf/random-07",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "n_prime": 4,
+        "linf_bound": 44
+      },
+      "sha256": "7280561377c1fef9bc5f35ede3953fbb98ff217bd9b1bea122ef2831e6dea367",
+      "rust": "Dimension"
+    },
+    {
+      "name": "linf/random-08",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "linf_bound": 2,
+        "alpha_squared": 1152
+      },
+      "sha256": "a06f390e563dd233349d58d99ddde493aa43b59e9070fbe89c7ad924a2565f5e",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "linf/random-09",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          9,
+          24
+        ]
+      },
+      "sha256": "fb7c1ee665f25253e4280326066003626413d649a10eb0f7a33761b9ffd5d740",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "linf/random-10",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "prime_factors": [
+          1076232037
+        ],
+        "log_sigma": [
+          15,
+          12,
+          9,
+          24
+        ]
+      },
+      "sha256": "143ccd5b027b9c0fb30380e531f4b167e8b7dce2172ac1d071c9436129f56a83",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf/random-11",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "n_prime": 4
+      },
+      "sha256": "5699b2adf351835240f992d785bd5625e7c4a1bf0225094eafade26307d8ee23",
+      "rust": "Dimension"
+    },
+    {
+      "name": "linf/random-12",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          9,
+          19
+        ]
+      },
+      "sha256": "59d3afef13545b08b19009746141f133a86854d6bcb805af00e28de827ba0228",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "linf/random-13",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "prime_factors": [
+          4299095797
+        ]
+      },
+      "sha256": "168503b8e556def40ca39a9a4a8de4f8eaa0795c479a1230baf679c3f838f522",
+      "rust": "ok"
+    },
+    {
+      "name": "linf/random-14",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "linf_bound": 42,
+        "prime_factors": [
+          538738573
+        ]
+      },
+      "sha256": "225a91fbe8b873853f761b10c323a1f1b7a29d2f4192d92078d171ed3e261722",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf/random-15",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "l": 2,
+        "m2": 54
+      },
+      "sha256": "0a31111a91c6e6b0c9bc467ee93393a5bdef5f9a45787a49ca40af287ac431c9",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "linf/random-16",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "n_prime": 4,
+        "alpha_squared": 288
+      },
+      "sha256": "2aca29f6889124454be4a50b748afaffa5e45e78718922b08c468b33c4d944a3",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "linf/random-17",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "n_prime": 4,
+        "l": 2,
+        "m2": 54
+      },
+      "sha256": "bf10de76d17be573b0fc314ebffb6cfeb17b01dfa8abec5bfa71b056896d8f74",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "linf/random-18",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "alpha_squared": 288,
+        "linf_bound": 2
+      },
+      "sha256": "f14c0cfff0348e024d1ce1c803b6a7600c0740508f1e6b720f4aa980e9834bc7",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "linf/random-19",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "alpha_squared": 1152,
+        "n_prime": 6
+      },
+      "sha256": "777d89e44c2d9a79d3fbcb1df2008d93439d321c3ccad07411276c69859286b9",
+      "rust": "Dimension"
+    },
+    {
+      "name": "linf/random-20",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "prime_factors": [
+          537952189
+        ]
+      },
+      "sha256": "dfc88b2ac15c80eb8ebe97de9ca05c1b66fde29613fa84c7501c444ba5752cd7",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf/random-21",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "linf_bound": 2,
+        "prime_factors": [
+          537952189
+        ]
+      },
+      "sha256": "cefd46498471e8564d266f5eb26fdaa3c6d625da91b950b1ab4a8a0c7fb998c3",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf/random-22",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "n_prime": 6
+      },
+      "sha256": "3213f539eabe0fa8b4572348b7affe602f50b520ea51f5f7887656a97506afba",
+      "rust": "Dimension"
+    },
+    {
+      "name": "linf/random-23",
+      "kind": "linf",
+      "base": "linf",
+      "set": {
+        "linf_bound": 1,
+        "log_sigma": [
+          15,
+          12,
+          9,
+          20
+        ]
+      },
+      "sha256": "81a339f2a3b8b5b01370276c49c937afd1e99f7d7afeb3f9d6c2d1d7d526cf51",
+      "rust": "Parameter(\"approximate range bound\")"
+    },
+    {
+      "name": "placed/as-derived",
+      "kind": "placed",
+      "base": "placed",
+      "set": {},
+      "sha256": "28df8ebc383d9c9244f3b4008f65c471ac42df775ef52c9664f291ada2c0aafd",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/previous-prime",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "prime_factors": [
+          17488750391261
+        ]
+      },
+      "sha256": "b8d5dbf9558eb490f4b0e656103cffe194dfff2851434c3d3a30f98a5af77845",
+      "rust": "Parameter(\"exact norm lifting bound\")"
+    },
+    {
+      "name": "placed/log-sigma3--1",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          18,
+          9
+        ]
+      },
+      "sha256": "4456b693bf83ff6d67e0ff1109c9e1b1d142c15dcdd2a835fa340b99109e6ce3",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/log-sigma3-+1",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          18,
+          11
+        ]
+      },
+      "sha256": "158569896a3d1c112c13bee01babea05b597fae497c7159709e51ed6db156ba0",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/log-sigma3-+2",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          18,
+          12
+        ]
+      },
+      "sha256": "b29885f7c025a3626015bfe9d1a06a4cf53a9804d7aeed777e253b15c90420f4",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/log-sigma3-+5",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          18,
+          15
+        ]
+      },
+      "sha256": "466c224364e9368fe29fbbb0dd28be03a9360bae762131672429a24e3a39e9e7",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/log-sigma3-+9",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          18,
+          19
+        ]
+      },
+      "sha256": "facce0880b3bf2ad205a0f16a76e480c1b57c1a0de04299607aa9d4eb8fbb4c1",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/log-sigma3-+10",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          18,
+          20
+        ]
+      },
+      "sha256": "39de32da96a6592acdf07716036c508d19f9cbecc17125055126076d04c47d90",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/log-sigma3-+12",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          18,
+          22
+        ]
+      },
+      "sha256": "ea99c27d5118e88ae897ff111d32c9ffc719d60c8adc5faf54f2fdd9d4ed262a",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/log-sigma3-+16",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          18,
+          26
+        ]
+      },
+      "sha256": "17095784f90db483e5862ed0c7f6608b8ac65ab7740a03327d998fa03b9807f1",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "placed/linf-bound-1",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "linf_bound": 1
+      },
+      "sha256": "7e1fb9722ff824379fe8dfe7d16eea531000aa0c4f6e3fadba89d95324d11224",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "placed/linf-bound-half",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "linf_bound": 1
+      },
+      "sha256": "7e1fb9722ff824379fe8dfe7d16eea531000aa0c4f6e3fadba89d95324d11224",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "placed/linf-bound-double",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "linf_bound": 4
+      },
+      "sha256": "09b3e76c3fa7526973fc93bdc9622749fcfd46f3f703c43a5e15f2c7b932b4f9",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/alpha-minus-1",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "alpha_squared": 999
+      },
+      "sha256": "62e14f86a80ee7a6636a704fb0d82e5b8767588509f4825d56c53bffcf3ea582",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "placed/m1-plus-1",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "m1": 21
+      },
+      "sha256": "934dd1ee0d1f9e1ea873021315598183523d4b14827cfb376f8b0426387a2995",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "placed/random-00",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "alpha_squared": 2000,
+        "log_sigma": [
+          15,
+          12,
+          18,
+          20
+        ]
+      },
+      "sha256": "a72e0223a6ba7266d7bc655faf065e0563d5f27ae6e01a71d145ce0e9b54c9e1",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/random-01",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "l": 3,
+        "m2": 57,
+        "n_prime": 3
+      },
+      "sha256": "be89429a2f2ebf36423ae5677094ef27835602102549be24f7a1e9923b9c8e06",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "placed/random-02",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "n_prime": 1
+      },
+      "sha256": "267bfe66c2766c9d3cde1110e9ea9a19cf6165923c88ed9c60fc7913d0583115",
+      "rust": "Dimension"
+    },
+    {
+      "name": "placed/random-03",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "n_prime": 3
+      },
+      "sha256": "1eb1ab369b3219d5d292bd8be1854dcf12e2e446b8edd71b9bf97cd9f0736c36",
+      "rust": "Dimension"
+    },
+    {
+      "name": "placed/random-04",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "n_prime": 1
+      },
+      "sha256": "267bfe66c2766c9d3cde1110e9ea9a19cf6165923c88ed9c60fc7913d0583115",
+      "rust": "Dimension"
+    },
+    {
+      "name": "placed/random-05",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "prime_factors": [
+          17488752750269
+        ],
+        "log_sigma": [
+          15,
+          12,
+          18,
+          8
+        ]
+      },
+      "sha256": "eab5b4ae5e8911f78e7c77cfe9f3149853e1d6319713ad7bf5a5b03d011e415f",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/random-06",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "l": 3,
+        "m2": 57
+      },
+      "sha256": "d82998eb68a65cbd39f9510b54842db83af00ce66efb84618d843cbca77335de",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "placed/random-07",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          18,
+          7
+        ]
+      },
+      "sha256": "121ad05e35d80fd067089c35776973252d000fff28c327ac8a0d05183055adb1",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/random-08",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "linf_bound": 2,
+        "l": 3,
+        "m2": 57
+      },
+      "sha256": "d82998eb68a65cbd39f9510b54842db83af00ce66efb84618d843cbca77335de",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "placed/random-09",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "linf_bound": 119816
+      },
+      "sha256": "1929ed96b08c361e47655c8fa36cf8f00b27b2ca85debe507a3eece63528ff77",
+      "rust": "Parameter(\"range rejection M\")"
+    },
+    {
+      "name": "placed/random-10",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "alpha_squared": 2000
+      },
+      "sha256": "70a7e155e2174de2a020fa03b7b0b0e7c061dae03f903df45d2a91f8a7e64c80",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/random-11",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "linf_bound": 1,
+        "log_sigma": [
+          15,
+          12,
+          18,
+          21
+        ]
+      },
+      "sha256": "1a26b336333806d1ffab78cf113d84e75b04a23ef05f4882f06c847a10fd2e51",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "placed/random-12",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "n_prime": 3,
+        "alpha_squared": 2000
+      },
+      "sha256": "78cb688c68158c6f54cf6cd656c3f853b4da4144414e83a0b5195839b6dcb064",
+      "rust": "Dimension"
+    },
+    {
+      "name": "placed/random-13",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "alpha_squared": 500,
+        "l": 3,
+        "m2": 57
+      },
+      "sha256": "09cc411b3e1da2426c79b350b4d9d77ed3ab5f6d1889607527513f40edb678a9",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "placed/random-14",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "prime_factors": [
+          2186094777733
+        ],
+        "n_prime": 1
+      },
+      "sha256": "bd19a423e327bcadd56e45f5a11e4ee1a919565a7d13fa41d9644475421220a5",
+      "rust": "Parameter(\"MSIS estimate\")"
+    },
+    {
+      "name": "placed/random-15",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "alpha_squared": 500,
+        "l": 3,
+        "m2": 57
+      },
+      "sha256": "09cc411b3e1da2426c79b350b4d9d77ed3ab5f6d1889607527513f40edb678a9",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "placed/random-16",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "l": 3,
+        "m2": 57,
+        "prime_factors": [
+          2186094319037
+        ]
+      },
+      "sha256": "3f1b188ff453df4b0809398218a1a4a865cb0fe293fd59f7f963206b667cb378",
+      "rust": "Parameter(\"MSIS estimate\")"
+    },
+    {
+      "name": "placed/random-17",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "linf_bound": 763712,
+        "log_sigma": [
+          15,
+          12,
+          18,
+          19
+        ]
+      },
+      "sha256": "7c386f34851c0ed5b41be182d3d3b1359bed30c637c9ae9f4b0b67df2b42f93b",
+      "rust": "Parameter(\"range rejection M\")"
+    },
+    {
+      "name": "placed/random-18",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "linf_bound": 1,
+        "l": 3,
+        "m2": 57
+      },
+      "sha256": "2fca0ea25de8c93ae0ccbb6e54ea0285b32db381aefcdb0e49955e4b7cc90f5b",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "placed/random-19",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "l": 3,
+        "m2": 57,
+        "alpha_squared": 500
+      },
+      "sha256": "09cc411b3e1da2426c79b350b4d9d77ed3ab5f6d1889607527513f40edb678a9",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "placed/random-20",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          18,
+          19
+        ]
+      },
+      "sha256": "facce0880b3bf2ad205a0f16a76e480c1b57c1a0de04299607aa9d4eb8fbb4c1",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/random-21",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "linf_bound": 2
+      },
+      "sha256": "28df8ebc383d9c9244f3b4008f65c471ac42df775ef52c9664f291ada2c0aafd",
+      "rust": "ok"
+    },
+    {
+      "name": "placed/random-22",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "linf_bound": 216536,
+        "log_sigma": [
+          15,
+          12,
+          18,
+          14
+        ]
+      },
+      "sha256": "63b721ab1a54f1aa9e50bc8b18a08982cab0ca85dfacb5b759d2512d8620d141",
+      "rust": "Parameter(\"range rejection M\")"
+    },
+    {
+      "name": "placed/random-23",
+      "kind": "placed",
+      "base": "placed",
+      "set": {
+        "n_prime": 3
+      },
+      "sha256": "1eb1ab369b3219d5d292bd8be1854dcf12e2e446b8edd71b9bf97cd9f0736c36",
+      "rust": "Dimension"
+    },
+    {
+      "name": "packed/as-derived",
+      "kind": "packed",
+      "base": "packed",
+      "set": {},
+      "sha256": "2b688106595aa378c16d6e7f3512d1b18f5d4d9d560ec9e2a461cc8100efef04",
+      "rust": "ok"
+    },
+    {
+      "name": "packed/previous-prime",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "prime_factors": [
+          4294606829
+        ]
+      },
+      "sha256": "42bc0ddf028f7e6330081919b5b9173a834886e27cb28761d9cdcf3d2ced192c",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "packed/log-sigma3--1",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          13
+        ]
+      },
+      "sha256": "3a5712102e7a579847860d10ddfdc64e561f4e22799535d0477ac482e8ab585f",
+      "rust": "ok"
+    },
+    {
+      "name": "packed/log-sigma3-+1",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          15
+        ]
+      },
+      "sha256": "2871079920aec2a76820d4c1f79e9f9fb5eb48327bd4ee415c65dd82d5fb206c",
+      "rust": "ok"
+    },
+    {
+      "name": "packed/log-sigma3-+2",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          16
+        ]
+      },
+      "sha256": "c6bcf247d64efa2ae10acc8603e497e066d9cc5ae5e1fd465b61bf9beef3c1d6",
+      "rust": "ok"
+    },
+    {
+      "name": "packed/log-sigma3-+5",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          19
+        ]
+      },
+      "sha256": "580ab1b70cb4843e9a1cecb3ce168994ef03c96ac7d23b2b10b393fc42beef70",
+      "rust": "ok"
+    },
+    {
+      "name": "packed/log-sigma3-+9",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          23
+        ]
+      },
+      "sha256": "900c6b30f8d428081c14ee55fec2396346120c7c22db021d0688ddf8a94edbca",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "packed/log-sigma3-+10",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          24
+        ]
+      },
+      "sha256": "7b412f85506093e989bdc8bdedffb1be270415554e044dfb6a7af6a257a72adc",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "packed/log-sigma3-+12",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          26
+        ]
+      },
+      "sha256": "6f5bfc0c3b7e321dd62fd7c6f43fc3f08393ea41ce8df3d1f95b769d241289c2",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "packed/log-sigma3-+16",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          30
+        ]
+      },
+      "sha256": "cd94a0283279900849c9a19cb59b39d7eb2558b6a738731fd08ad2dd9f57c8c5",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "packed/linf-bound-1",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "linf_bound": 1
+      },
+      "sha256": "7945915240e74cae058a3641b8f31bcf01ff9b5ebd0d9c6382e2f59c477b9c86",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "packed/linf-bound-half",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "linf_bound": 14
+      },
+      "sha256": "a87e1df55ad2bd32dc2a86880842d3ac55d81609c658d722a6f3ad01f251186a",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "packed/linf-bound-double",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "linf_bound": 56
+      },
+      "sha256": "cf453f013084849445b0df8fb085f0677811dae3038f6894865b1d6372cb0de7",
+      "rust": "ok"
+    },
+    {
+      "name": "packed/alpha-minus-1",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "alpha_squared": 191
+      },
+      "sha256": "7cb464b0f85860ef20eda4af0423ec381e945253f83eeba1f5eb87ec238d67bb",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "packed/m1-plus-1",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "m1": 11
+      },
+      "sha256": "7e2e9287e2bba7107c20831159a2900eb4aeafa889ffc085a55a4b2ef3ee9741",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "packed/random-00",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "prime_factors": [
+          1074823021
+        ]
+      },
+      "sha256": "c1e1fc5dab816882c9711a78854c4c92994a371c71ea12ab5251b19beeda39bf",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "packed/random-01",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "n_prime": 3
+      },
+      "sha256": "2aa2aa53d46e1371bcef1c46583fcb12aec21aa6d36255a8b5e8996c77db3adf",
+      "rust": "Dimension"
+    },
+    {
+      "name": "packed/random-02",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "prime_factors": [
+          2149547749
+        ]
+      },
+      "sha256": "fc68701d89a8c60c799db7cde48412eaf07ef0a00185f344db729e2a5a41421d",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "packed/random-03",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "n_prime": 3
+      },
+      "sha256": "2aa2aa53d46e1371bcef1c46583fcb12aec21aa6d36255a8b5e8996c77db3adf",
+      "rust": "Dimension"
+    },
+    {
+      "name": "packed/random-04",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "l": 3,
+        "m2": 54,
+        "log_sigma": [
+          14,
+          12,
+          10,
+          11
+        ]
+      },
+      "sha256": "3ccd5d7fadfa7afc47a6537f1a2114b8bf1d7d2670b8f6cd18b21d0357338eca",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "packed/random-05",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "l": 3,
+        "m2": 54,
+        "log_sigma": [
+          14,
+          12,
+          10,
+          23
+        ]
+      },
+      "sha256": "607422da71abdeaf86791f57e9f6ba8fcc751db0965f1ce626fcd345ab22e228",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "packed/random-06",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          15
+        ],
+        "alpha_squared": 96
+      },
+      "sha256": "249a48f76d12eacd0a67264321fde4220019c111dc9d22dfc019459a1e10c940",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "packed/random-07",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "prime_factors": [
+          2148957997
+        ]
+      },
+      "sha256": "d9d14bb84b72c5486740b0ef3750891bc50a2b00aa4b2008d5f7270eda27aa1e",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "packed/random-08",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "n_prime": 1
+      },
+      "sha256": "f7ff3174d3cd00fe1bfaf46d516a5bab3740d9474e6ead2f0d8a988dce19f911",
+      "rust": "Dimension"
+    },
+    {
+      "name": "packed/random-09",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "alpha_squared": 384,
+        "linf_bound": 27
+      },
+      "sha256": "3477195a50373b5357a6e5e62ca6f0e8d7f35f2dee20342287d3ab362d8e4011",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "packed/random-10",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "n_prime": 3,
+        "log_sigma": [
+          14,
+          12,
+          10,
+          17
+        ]
+      },
+      "sha256": "c7fac2f5b7f542abb8efd6a28937c1426d4d328128dcdde0cc98c4727f52877c",
+      "rust": "Dimension"
+    },
+    {
+      "name": "packed/random-11",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "prime_factors": [
+          1074626437
+        ],
+        "l": 3,
+        "m2": 54
+      },
+      "sha256": "db6f48506b8113e9e0c6e90787ad7ebd307df09d81b26b4bfca68a9ddf1f33de",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "packed/random-12",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "linf_bound": 957593,
+        "l": 3,
+        "m2": 54
+      },
+      "sha256": "70d1b8ed7784697f3fc4783739d1b805fbd485b806c8b7c7cab7365ed09df792",
+      "rust": "Parameter(\"range rejection M\")"
+    },
+    {
+      "name": "packed/random-13",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          21
+        ],
+        "linf_bound": 309773
+      },
+      "sha256": "fbc158bc807e2c3f18792c4c48fd5599f37af106888e9fadbab1a6258fd447d4",
+      "rust": "Parameter(\"range rejection M\")"
+    },
+    {
+      "name": "packed/random-14",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "l": 3,
+        "m2": 54,
+        "log_sigma": [
+          14,
+          12,
+          10,
+          16
+        ]
+      },
+      "sha256": "bd8b8d55c8dba4da21eded664163871698f2849835ab49bbf9427f8cb442ba64",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "packed/random-15",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "linf_bound": 2,
+        "alpha_squared": 96
+      },
+      "sha256": "edfcaefafb44e335c5b738297c4d70387f048eb37427ccb8a7e2991bf9243e78",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "packed/random-16",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "alpha_squared": 384,
+        "n_prime": 1
+      },
+      "sha256": "c92be41f6b7594e09471d36e0562858c1f5c139dd78671221d57a86d3d56d05c",
+      "rust": "Dimension"
+    },
+    {
+      "name": "packed/random-17",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "l": 3,
+        "m2": 54
+      },
+      "sha256": "17a462b519d28c4bc0c0acb114a81dcfc0ed7c0e7721acafd639f262918f4865",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "packed/random-18",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "linf_bound": 29
+      },
+      "sha256": "0b99a48513546cfdcfefd5d3c34a5243f7bfb10254f3c25629036fdda670fac5",
+      "rust": "ok"
+    },
+    {
+      "name": "packed/random-19",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "n_prime": 1
+      },
+      "sha256": "f7ff3174d3cd00fe1bfaf46d516a5bab3740d9474e6ead2f0d8a988dce19f911",
+      "rust": "Dimension"
+    },
+    {
+      "name": "packed/random-20",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          16
+        ]
+      },
+      "sha256": "c6bcf247d64efa2ae10acc8603e497e066d9cc5ae5e1fd465b61bf9beef3c1d6",
+      "rust": "ok"
+    },
+    {
+      "name": "packed/random-21",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "n_prime": 3,
+        "log_sigma": [
+          14,
+          12,
+          10,
+          18
+        ]
+      },
+      "sha256": "89b6fb7ecf55ff02e344a7206d76362ddc4594bf102db9a59b3acc4aee540071",
+      "rust": "Dimension"
+    },
+    {
+      "name": "packed/random-22",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "log_sigma": [
+          14,
+          12,
+          10,
+          11
+        ]
+      },
+      "sha256": "a1be6ffb29ab7bd12a0bd3eed27ffbc5387b6347c5187bdb8d97af40c6ef26bd",
+      "rust": "ok"
+    },
+    {
+      "name": "packed/random-23",
+      "kind": "packed",
+      "base": "packed",
+      "set": {
+        "linf_bound": 286164,
+        "alpha_squared": 96
+      },
+      "sha256": "18703e02f1bb5adf527b9f0f9546e13919cb20a1c6dc374dc7d26c09673e4cf6",
+      "rust": "Parameter(\"range rejection M\")"
+    },
+    {
+      "name": "subring/as-derived",
+      "kind": "subring",
+      "base": "subring",
+      "set": {},
+      "sha256": "3fa0a92076e4128a944a6048dc5da86d6cd2f51bc048a6a5d120e017d109de0b",
+      "rust": "ok"
+    },
+    {
+      "name": "subring/previous-prime",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "prime_factors": [
+          4294901749
+        ]
+      },
+      "sha256": "d0f5e32608e571a01dcc2e175bc859a3020986da8db0949be10ba84ba6dbe5c8",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "subring/log-sigma3--1",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          14
+        ]
+      },
+      "sha256": "c883ab6568d88450cc1257eff3dd00d24be5423c8e5de9561831eae847c7a5d4",
+      "rust": "ok"
+    },
+    {
+      "name": "subring/log-sigma3-+1",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          16
+        ]
+      },
+      "sha256": "1a419e3190c3bb42974392409016563bab8139b54215be8336a18528414c8b16",
+      "rust": "ok"
+    },
+    {
+      "name": "subring/log-sigma3-+2",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          17
+        ]
+      },
+      "sha256": "6721a586603faf28f6859b108ea1fbd49bec9de7b81af9c0c7fbdc1a89bc6228",
+      "rust": "ok"
+    },
+    {
+      "name": "subring/log-sigma3-+5",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          20
+        ]
+      },
+      "sha256": "70737690bbaffb95d401fd83e5a80b8bea52c629549aa90ef962f82709df4924",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "subring/log-sigma3-+9",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          24
+        ]
+      },
+      "sha256": "c5c6ec3877236ee9016cadfdcc5af3837aa47b126a17a05ac7f933b36719d568",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "subring/log-sigma3-+10",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          25
+        ]
+      },
+      "sha256": "3bda9e2942e902e1daee1f9848a879a2b4df34331155bd8ab08087e0935695c8",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "subring/log-sigma3-+12",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          27
+        ]
+      },
+      "sha256": "1a4c9969deab812fffae164f446aeb74c17fdfa77dd282587b0c2e7539b75b73",
+      "rust": "Parameter(\"approximate extraction bound\")"
+    },
+    {
+      "name": "subring/log-sigma3-+16",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          31
+        ]
+      },
+      "sha256": "9b3a11ebb66689de6475c9726a4619a577945735a8c505e90a701e2f9828a28b",
+      "rust": "Parameter(\"approximate extraction bound\")"
+    },
+    {
+      "name": "subring/linf-bound-1",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "linf_bound": 1
+      },
+      "sha256": "0f4ce5bbce74f75dc9b44c5eee7e3bf0ec788407c94572ef9d2e52aea07d9ed1",
+      "rust": "Parameter(\"approximate range bound\")"
+    },
+    {
+      "name": "subring/linf-bound-half",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "linf_bound": 20
+      },
+      "sha256": "e48875df8f5f6c811576c258356796713a50aea0b6890c790beb86164e7bd92c",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "subring/linf-bound-double",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "linf_bound": 80
+      },
+      "sha256": "abd6f7a161a7c2ac05eaf9f5bfa29c96233074d2f031d7843f7f109003da3441",
+      "rust": "ok"
+    },
+    {
+      "name": "subring/alpha-minus-1",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "alpha_squared": 383
+      },
+      "sha256": "5a9de7d6d38fa790e5d01b140662865752fc7c9ca9418dfd50c7db7bc21f904d",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "subring/m1-plus-1",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "m1": 11
+      },
+      "sha256": "f0070494e7140c80ec6308923ed790255c4ee6b210ffee9ab28eabd8509a7809",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "subring/random-00",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "linf_bound": 39
+      },
+      "sha256": "de0147e50bd92a9c089aac2ca3ae036a366ba0ab0c12c8fa7f3184f3beb031e3",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "subring/random-01",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "l": 4,
+        "m2": 56
+      },
+      "sha256": "4466365cfef6c363b5fb42894d217e0c639480205373131cb4f3914f1d8cbd48",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "subring/random-02",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "linf_bound": 39
+      },
+      "sha256": "de0147e50bd92a9c089aac2ca3ae036a366ba0ab0c12c8fa7f3184f3beb031e3",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "subring/random-03",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "alpha_squared": 192,
+        "log_sigma": [
+          15,
+          12,
+          10,
+          17
+        ]
+      },
+      "sha256": "b32196f793ed0808f380fed915e2191c8181002a404795ef81ceeb4b520a840d",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "subring/random-04",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          17
+        ],
+        "prime_factors": [
+          2149777261
+        ]
+      },
+      "sha256": "3f334bd72084d4027b569b02d3d5bf8cee94ade033bf1d0323a5860350f5bcfc",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "subring/random-05",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "linf_bound": 2
+      },
+      "sha256": "b5beae7c4b9ce4772bd63d0cfdea93b7c31e2415506247575d7976245b8064f5",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "subring/random-06",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "alpha_squared": 768
+      },
+      "sha256": "2ce7a5c66c327946efa03ac438b2147588c5f82c3e7cfb9582bcf43261a36d66",
+      "rust": "ok"
+    },
+    {
+      "name": "subring/random-07",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "n_prime": 5
+      },
+      "sha256": "0d74e3fc3c010112bf0cc8bfeac643ca281bed3a25fb0220cd81901977e458c3",
+      "rust": "Dimension"
+    },
+    {
+      "name": "subring/random-08",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "alpha_squared": 192
+      },
+      "sha256": "45efcb7e6f1aa42459e4a8195ef56f03381d2a2888bcbbeb90b98a74093b1a9d",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "subring/random-09",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "prime_factors": [
+          537952189
+        ]
+      },
+      "sha256": "80d952c9e699723da8925bd88ea7617e2504afc7aa7c01d3d8fdd55f607e2780",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "subring/random-10",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "l": 4,
+        "m2": 56,
+        "n_prime": 3
+      },
+      "sha256": "b1c68aa37f3a98d3a5ccebbeb1a438e8d16205dfa1e5b565829f300d07140dd9",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "subring/random-11",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          19
+        ]
+      },
+      "sha256": "8f06bbec2c1c7bfea97ba4225660b84672e5d819245502d6849a74fb75e30954",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "subring/random-12",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "prime_factors": [
+          1074790333
+        ]
+      },
+      "sha256": "c07645476958bf66905b6a6f6d4fc17473a2ec18882493e0fd90bfbd2f315a90",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "subring/random-13",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          20
+        ],
+        "alpha_squared": 768
+      },
+      "sha256": "25c8840f831cb6e38c430e32ebaedaa29135fc3a1309e1790d9dfbe86dba3334",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "subring/random-14",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "n_prime": 5
+      },
+      "sha256": "0d74e3fc3c010112bf0cc8bfeac643ca281bed3a25fb0220cd81901977e458c3",
+      "rust": "Dimension"
+    },
+    {
+      "name": "subring/random-15",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "alpha_squared": 192
+      },
+      "sha256": "45efcb7e6f1aa42459e4a8195ef56f03381d2a2888bcbbeb90b98a74093b1a9d",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "subring/random-16",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          19
+        ]
+      },
+      "sha256": "8f06bbec2c1c7bfea97ba4225660b84672e5d819245502d6849a74fb75e30954",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "subring/random-17",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "prime_factors": [
+          537952189
+        ],
+        "n_prime": 3
+      },
+      "sha256": "94d3d97172370e4d59ab69b828c79f6778148fcbf3c18b2226b0bce5e122bc88",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "subring/random-18",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "l": 4,
+        "m2": 56,
+        "log_sigma": [
+          15,
+          12,
+          10,
+          19
+        ]
+      },
+      "sha256": "dd51ce51e43f711235d6780ca89ac0c9e995c1c0c574f8bee4b18c44338e2e21",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "subring/random-19",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "alpha_squared": 768,
+        "linf_bound": 2
+      },
+      "sha256": "25f631110a2f417cf680c69a718666fba9266d519c5448b31276f17928c42cfc",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "subring/random-20",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "n_prime": 3,
+        "l": 4,
+        "m2": 56
+      },
+      "sha256": "b1c68aa37f3a98d3a5ccebbeb1a438e8d16205dfa1e5b565829f300d07140dd9",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "subring/random-21",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          13
+        ],
+        "l": 4,
+        "m2": 56
+      },
+      "sha256": "34d9ade87909f3e83a0d5ae2bdff88f019571401ce173f7cac536f3df61dba1b",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "subring/random-22",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "alpha_squared": 192
+      },
+      "sha256": "45efcb7e6f1aa42459e4a8195ef56f03381d2a2888bcbbeb90b98a74093b1a9d",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "subring/random-23",
+      "kind": "subring",
+      "base": "subring",
+      "set": {
+        "linf_bound": 39,
+        "prime_factors": [
+          537952189
+        ]
+      },
+      "sha256": "f7b303ee4cc8c76fc3c2d33c66e14e9b2afe31dc344734ef57e54898f0cdbe48",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf-exact/as-derived",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {},
+      "sha256": "500373cf93bd725a7481213048f2eb006de3e1b368eb7d3fb1431a8a308f058c",
+      "rust": "ok"
+    },
+    {
+      "name": "linf-exact/previous-prime",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "prime_factors": [
+          4294901749
+        ]
+      },
+      "sha256": "e8076e2fb18563bb4ae613583d8565851f571e5f450333d4030c9615139b096e",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf-exact/log-sigma3--1",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          12
+        ]
+      },
+      "sha256": "fb1ed8152a81a3bebeac836506c4d7474f6c2b99236091e1cc860961737fc127",
+      "rust": "ok"
+    },
+    {
+      "name": "linf-exact/log-sigma3-+1",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          14
+        ]
+      },
+      "sha256": "1f5e7f2c884fb8cc6ea406b548feba597673225776bfe1b3dbb1e3eeaa84589b",
+      "rust": "ok"
+    },
+    {
+      "name": "linf-exact/log-sigma3-+2",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          15
+        ]
+      },
+      "sha256": "3efd5d45d4b725555f7e4c3b91c5ba5a930be9336af940ec53fe6c5b0124ad4f",
+      "rust": "ok"
+    },
+    {
+      "name": "linf-exact/log-sigma3-+5",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          18
+        ]
+      },
+      "sha256": "24a38219866184094521f1ef696c2022301449a31f7e78a806728fbe94025f73",
+      "rust": "ok"
+    },
+    {
+      "name": "linf-exact/log-sigma3-+9",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          22
+        ]
+      },
+      "sha256": "da741b98ddfbe2b2cca3efec56d7ccad00f18b500316211b2f257613075cc5ab",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "linf-exact/log-sigma3-+10",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          23
+        ]
+      },
+      "sha256": "04446453ac65836cd5bb3083475e079ccf514711dc2d6c7270fd3a2892399632",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "linf-exact/log-sigma3-+12",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          25
+        ]
+      },
+      "sha256": "6f70ab297a7c099643a385dc6f9b41333e006fffcca6e8f9c2b3651d4110d28b",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "linf-exact/log-sigma3-+16",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          29
+        ]
+      },
+      "sha256": "3c24b39dcdf88087911d2570d4885fc2dd08d02ceb54f3776002446ee4f89ed3",
+      "rust": "Parameter(\"modulus lifting bound\")"
+    },
+    {
+      "name": "linf-exact/linf-bound-1",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "linf_bound": 1
+      },
+      "sha256": "8fd9df144b2c82ddd43cc35c94ae04a08052bb02760e3713f28f6b58281f7d1b",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "linf-exact/linf-bound-half",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "linf_bound": 8
+      },
+      "sha256": "fca1b4c37da53813ca665ce0ed2a73c1fb8a16a9efa25d0570b3f7e40128309d",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "linf-exact/linf-bound-double",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "linf_bound": 32
+      },
+      "sha256": "efa0f4fc588d8f7f28e60bdcd04adeabf67b41fd2ab177b5a369210e033427b4",
+      "rust": "ok"
+    },
+    {
+      "name": "linf-exact/alpha-minus-1",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "alpha_squared": 319
+      },
+      "sha256": "014958fc4086df7e250f7ae78a3c873dab9fbaecd5f229fb6df10e014410df7e",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "linf-exact/m1-plus-1",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "m1": 13
+      },
+      "sha256": "eca824e5b2853d5f8b0a1687bd1c26892285d2611e133f16e29731428def7916",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "linf-exact/random-00",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          19
+        ],
+        "linf_bound": 761529
+      },
+      "sha256": "2aeeed5a94d7e7747b7f19deba105c7a6a28a3ab5324270b796745e5ce12f884",
+      "rust": "Parameter(\"range rejection M\")"
+    },
+    {
+      "name": "linf-exact/random-01",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "l": 8,
+        "m2": 60
+      },
+      "sha256": "f1244d6498765c91287bfd8d374b4ef58892cce4189337c4c93b793091b87673",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "linf-exact/random-02",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "n_prime": 6,
+        "prime_factors": [
+          1076232037
+        ]
+      },
+      "sha256": "b8dfb44a6245d2c8dbaf113a6cbfde69f048aee7fefe30d2e0015e639a481e8c",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf-exact/random-03",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          11
+        ],
+        "l": 8,
+        "m2": 60
+      },
+      "sha256": "e085a27ac4a38826358a5c5ec20c5dba202da97b6617869f3b60850d957fdb13",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "linf-exact/random-04",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          11
+        ],
+        "n_prime": 4
+      },
+      "sha256": "8ffdc8a382414516de455c998081f666d40aafcf5759c211fa0377c55d4fca4a",
+      "rust": "Dimension"
+    },
+    {
+      "name": "linf-exact/random-05",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          20
+        ]
+      },
+      "sha256": "4ee9c8253635c3eeaf8fb2edcd42fcb424601c269f352bd0564040d09131bd27",
+      "rust": "ok"
+    },
+    {
+      "name": "linf-exact/random-06",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "l": 8,
+        "m2": 60,
+        "alpha_squared": 160
+      },
+      "sha256": "e46971fe4100dee55a90dbe736a533fccd585bd4e5ba16651db5ed0bec13adcb",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "linf-exact/random-07",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "n_prime": 4
+      },
+      "sha256": "2b21fce85bc9fb94c8fd50c9bd15b6cf1cc1ae3f956607c41f8ea9bef8d650df",
+      "rust": "Dimension"
+    },
+    {
+      "name": "linf-exact/random-08",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "prime_factors": [
+          538738573
+        ]
+      },
+      "sha256": "0bcb3fa2f93170b573de42fc894270cea28aa733a5b1bdf13409fe8ce62372fc",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf-exact/random-09",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "n_prime": 6,
+        "prime_factors": [
+          537952189
+        ]
+      },
+      "sha256": "c2a9a8d6bc1e412654ebd0b8e6c3e839aaf5878777029e52195c15123b09fa72",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf-exact/random-10",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "prime_factors": [
+          2150694709
+        ],
+        "linf_bound": 17
+      },
+      "sha256": "9e47c35d9b2f23f6e0de8df678b32f70f04e19bd2603c2073e0622c10bd36b62",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf-exact/random-11",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "l": 8,
+        "m2": 60,
+        "prime_factors": [
+          538738573
+        ]
+      },
+      "sha256": "ef757e3c52bdef7b2dc8a23a535455b47a6bb1877c867bd9615960ae51ef81f6",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf-exact/random-12",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "linf_bound": 1
+      },
+      "sha256": "8fd9df144b2c82ddd43cc35c94ae04a08052bb02760e3713f28f6b58281f7d1b",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "linf-exact/random-13",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "alpha_squared": 160
+      },
+      "sha256": "fc8096a55cd24171d7e3a79a8c2275e64771fd2a58f56d2569905c21ba14db3f",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "linf-exact/random-14",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "linf_bound": 15
+      },
+      "sha256": "b5c7dd8b38d90f7d51f959f07177ae03143cd3e7e6d2b54fbd68120cc74d0a46",
+      "rust": "Parameter(\"carry or quotient bound\")"
+    },
+    {
+      "name": "linf-exact/random-15",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "n_prime": 6
+      },
+      "sha256": "5cf5ffb9f9a5091306679d64f13103dd2130aac7ae275ad9a6f4ff9ead41bdc6",
+      "rust": "Dimension"
+    },
+    {
+      "name": "linf-exact/random-16",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "log_sigma": [
+          15,
+          12,
+          10,
+          11
+        ]
+      },
+      "sha256": "a7060c382477f3c3547fc341f177437fbf56cca1112e7ae59c99447e4402a12b",
+      "rust": "ok"
+    },
+    {
+      "name": "linf-exact/random-17",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "l": 8,
+        "m2": 60
+      },
+      "sha256": "f1244d6498765c91287bfd8d374b4ef58892cce4189337c4c93b793091b87673",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "linf-exact/random-18",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "n_prime": 4
+      },
+      "sha256": "2b21fce85bc9fb94c8fd50c9bd15b6cf1cc1ae3f956607c41f8ea9bef8d650df",
+      "rust": "Dimension"
+    },
+    {
+      "name": "linf-exact/random-19",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "alpha_squared": 160,
+        "log_sigma": [
+          15,
+          12,
+          10,
+          19
+        ]
+      },
+      "sha256": "b421ce91e0654a683a7ec2101128532b0a7d5ae2ed4e3f832b0e99a7b3a5e739",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "linf-exact/random-20",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "prime_factors": [
+          537952189
+        ],
+        "log_sigma": [
+          15,
+          12,
+          10,
+          18
+        ]
+      },
+      "sha256": "fade8f150a53f2b9df203711a1f0c37927eb6e830bcd4be1795ffedb42131c6e",
+      "rust": "Parameter(\"simulatability rank\")"
+    },
+    {
+      "name": "linf-exact/random-21",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "n_prime": 6,
+        "prime_factors": [
+          4299095797
+        ]
+      },
+      "sha256": "83b16ea73f32d075d25c9bfa19559e3c9a90a86ad8a33db0faa6e8f3496b2123",
+      "rust": "Dimension"
+    },
+    {
+      "name": "linf-exact/random-22",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "l": 8,
+        "m2": 60
+      },
+      "sha256": "f1244d6498765c91287bfd8d374b4ef58892cce4189337c4c93b793091b87673",
+      "rust": "Parameter(\"compiled witness dimensions\")"
+    },
+    {
+      "name": "linf-exact/random-23",
+      "kind": "linf-exact",
+      "base": "linf-exact",
+      "set": {
+        "prime_factors": [
+          4299095797
+        ]
+      },
+      "sha256": "0926791335e7834a18203363547bd9911f10072e8528204c426e9751300436a0",
+      "rust": "ok"
+    },
+    {
+      "name": "linf-limit/linf-set",
+      "kind": "linf-limit",
+      "base": "linf",
+      "set": {},
+      "sha256": "adcbe700614b5dcc94929d16a99927e82f283de5b886975a517c8bea4e418466",
+      "rust": "Parameter(\"variable range above statement modulus\")"
+    },
+    {
+      "name": "placed-ajtai/placed-set",
+      "kind": "placed-ajtai",
+      "base": "placed",
+      "set": {},
+      "sha256": "28df8ebc383d9c9244f3b4008f65c471ac42df775ef52c9664f291ada2c0aafd",
+      "rust": "Parameter(\"bounded witness norm budget\")"
+    },
+    {
+      "name": "noninvertible-constraint/two-moduli-set",
+      "kind": "noninvertible-constraint",
+      "base": "two-moduli",
+      "set": {},
+      "sha256": "aaa66aca8c1bcfe303fe1208c2715eee6f150f136097c8db557d5a7d361dc62f",
+      "rust": "Parameter(\"noninvertible constraint modulus\")"
+    },
+    {
+      "name": "noninvertible-statement/two-moduli-set",
+      "kind": "noninvertible-statement",
+      "base": "two-moduli",
+      "set": {},
+      "sha256": "aaa66aca8c1bcfe303fe1208c2715eee6f150f136097c8db557d5a7d361dc62f",
+      "rust": "Parameter(\"noninvertible statement modulus\")"
+    }
+  ]
+}

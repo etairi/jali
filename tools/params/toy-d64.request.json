@@ -1,0 +1,13 @@
+{
+  "id": "jali-toy-d64",
+  "prime_factors": [1099511627917],
+  "degree": 64,
+  "m1": 10,
+  "l": 2,
+  "alpha_squared": 5760,
+  "n_bin": 2,
+  "l2_rows": [2, 1],
+  "l2_bounds_squared": [128, 64],
+  "n_prime": 2,
+  "linf_bound": 4
+}

@@ -1,0 +1,3 @@
+[alias]
+# The API documentation with KaTeX formulas, as on docs.rs.
+docs = ["rustdoc", "--lib", "--features", "serde", "--", "--html-in-header", "docs/katex-header.html"]

@@ -1,0 +1,34 @@
+{
+  "id": "quadratic-possession-test-only",
+  "prime_factors": [
+    1099511627917
+  ],
+  "degree": 64,
+  "m1": 20,
+  "l": 2,
+  "alpha_squared": 192,
+  "n_bin": 0,
+  "l2_rows": [
+    16,
+    4
+  ],
+  "l2_bounds_squared": [
+    128,
+    64
+  ],
+  "n_prime": 2,
+  "linf_bound": 13,
+  "m2": 55,
+  "n_msis": 15,
+  "log_sigma": [
+    14,
+    12,
+    10,
+    13
+  ],
+  "gamma": 65202,
+  "d_bits": 6,
+  "mlwe_rank": 26,
+  "mlwe_delta": 1.0042736680871425,
+  "estimator": "jali-params 3 rank; policy delta; MLWE uSVP (ADPS16) beta 361 delta 1.0042736680871425"
+}

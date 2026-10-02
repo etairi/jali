@@ -1,0 +1,21 @@
+name: Slow tests
+# The ignored tests take minutes, so they run nightly and on demand, not on pushes or pull
+# requests: the proofs of tests/tag_preimage.rs, the dense maps of every block combination, the
+# extended NTT oracle and the Gaussian sampler against its reference on 100,000 coefficients per
+# width.
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ignored:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      RAYON_NUM_THREADS: 2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked --release --all-features -- --ignored

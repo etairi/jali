@@ -1,0 +1,4 @@
+# Pinned for the exact regeneration that CI checks. sympy 1.14.0 requires mpmath < 1.4.
+mpmath==1.3.0
+sympy==1.14.0
+pycryptodome==3.23.0

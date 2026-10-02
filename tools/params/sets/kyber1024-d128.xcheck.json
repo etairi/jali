@@ -1,0 +1,41 @@
+{
+  "id": "jali-kyber1024-d128",
+  "params_sha256": "dd7dc928fb92c5bd7e55002d3d14b68436917969248de8c853de824a57b53053",
+  "lattice_estimator": {
+    "commit": "53da5982597709ba0fdf94ea37a84d822310fd84",
+    "pinned": true,
+    "dirty": false
+  },
+  "sage": "SageMath version 10.9, Release Date: 2026-05-04",
+  "mode": "rough",
+  "mlwe_parameters": "LWEParameters(n=1664, q=2423989135261, Xs=D(\u03c3=0.82), Xe=D(\u03c3=0.82), m=2048, tag=None)",
+  "msis_parameters": "SISParameters(n=1024, q=2423989135261, length_bound=5.24513223854818e9, m=5888, norm=2, tag=None)",
+  "mlwe": {
+    "dual_hybrid": {
+      "rop": 100.6,
+      "red": 100.4,
+      "beta": 344,
+      "m": 1664,
+      "zeta": 0,
+      "t": 50
+    },
+    "usvp": {
+      "rop": 101.6,
+      "red": 101.6,
+      "beta": 348,
+      "delta": 1.004382,
+      "d": 3191
+    }
+  },
+  "msis": {
+    "lattice": {
+      "rop": 104.5,
+      "red": 104.5,
+      "beta": 358,
+      "delta": 1.004298,
+      "d": 2609
+    }
+  },
+  "mlwe_min_rop_log2": 100.6,
+  "msis_min_rop_log2": 104.5
+}

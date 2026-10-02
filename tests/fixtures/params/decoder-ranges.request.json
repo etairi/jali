@@ -1,0 +1,15 @@
+{
+  "id": "decoder-ranges-test-only",
+  "prime_factors": [
+    1099511627917
+  ],
+  "degree": 64,
+  "m1": 10,
+  "l": 1,
+  "alpha_squared": 4194304,
+  "n_bin": 0,
+  "l2_rows": [],
+  "l2_bounds_squared": [],
+  "n_prime": 1,
+  "linf_bound": 1048576
+}

@@ -1,0 +1,32 @@
+{
+  "schema": "jali-params-request/2",
+  "id": "jali-demo-d64",
+  "mode": "native",
+  "degree": 64,
+  "modulus": {
+    "search": {
+      "factors": 1,
+      "window_bits": 4,
+      "max_bits": 64
+    }
+  },
+  "hardness": {
+    "policy": "delta"
+  },
+  "statement": {
+    "source": "lin-worst-case",
+    "statement_degree": 256,
+    "statement_modulus": 4294962689,
+    "rows": 4,
+    "blocks": [
+      {
+        "name": "w",
+        "length": 8,
+        "norm": {
+          "l2_squared": 2048
+        }
+      }
+    ]
+  },
+  "note": "A s + t = 0 over Z_p[X]/(X^256+1), p = 2^32 - 4607 (the largest prime below 2^32 that is 1 mod 512), A of size 4 x 8, ||s||^2 <= 2048, compiled with jali::lin::compile; max_bits keeps q below 2^64"
+}

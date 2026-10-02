@@ -1,0 +1,21 @@
+{
+  "id": "dense-blocks-7-test-only",
+  "prime_factors": [
+    1099511627917
+  ],
+  "degree": 128,
+  "m1": 10,
+  "l": 2,
+  "alpha_squared": 1280,
+  "n_bin": 2,
+  "l2_rows": [
+    2,
+    1
+  ],
+  "l2_bounds_squared": [
+    128,
+    64
+  ],
+  "n_prime": 2,
+  "linf_bound": 4
+}

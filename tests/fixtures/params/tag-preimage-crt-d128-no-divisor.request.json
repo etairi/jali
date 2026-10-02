@@ -1,0 +1,19 @@
+{
+  "id": "tag-preimage-crt-d128-test-only",
+  "prime_factors": [
+    116316797543581
+  ],
+  "degree": 128,
+  "m1": 80,
+  "l": 12,
+  "alpha_squared": 10240,
+  "n_bin": 64,
+  "l2_rows": [
+    16
+  ],
+  "l2_bounds_squared": [
+    2048
+  ],
+  "n_prime": 12,
+  "linf_bound": 3574883
+}

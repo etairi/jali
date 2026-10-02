@@ -1,0 +1,32 @@
+{
+  "id": "jali-kyber1024-d128",
+  "prime_factors": [
+    2423989135261
+  ],
+  "degree": 128,
+  "m1": 16,
+  "l": 0,
+  "alpha_squared": 2950,
+  "n_bin": 0,
+  "l2_rows": [
+    16
+  ],
+  "l2_bounds_squared": [
+    2950
+  ],
+  "n_prime": 8,
+  "linf_bound": 3476,
+  "m2": 29,
+  "n_msis": 8,
+  "log_sigma": [
+    15,
+    11,
+    12,
+    23
+  ],
+  "gamma": 524286,
+  "d_bits": 11,
+  "mlwe_rank": 13,
+  "mlwe_delta": 1.004381952541052,
+  "estimator": "jali-params 3; request sha256 11362de993f93130; policy delta; MLWE uSVP (ADPS16) beta 348 delta 1.004381952541052; MSIS closed form beta 359 delta 1.004297526"
+}

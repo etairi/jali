@@ -1,0 +1,77 @@
+{
+  "id": "jali-demo-d64",
+  "params_sha256": "6c5b5b347c2c255188f69fcfcf4dd003425215a12fcf6a4728d8fd5f14c25dbb",
+  "lattice_estimator": {
+    "commit": "53da5982597709ba0fdf94ea37a84d822310fd84",
+    "pinned": true,
+    "dirty": false
+  },
+  "sage": "SageMath version 10.9, Release Date: 2026-05-04",
+  "mode": "full",
+  "mlwe_parameters": "LWEParameters(n=2432, q=1563674726761101613, Xs=D(\u03c3=0.82), Xe=D(\u03c3=0.82), m=1472, tag=None)",
+  "msis_parameters": "SISParameters(n=704, q=1563674726761101613, length_bound=7.62659001279487e9, m=6016, norm=2, tag=None)",
+  "mlwe": {
+    "arora-gb": {
+      "rop": "inf"
+    },
+    "bdd": {
+      "rop": 137.5,
+      "red": 137.2,
+      "beta": 373,
+      "d": 3904,
+      "eta": 407
+    },
+    "bdd_hybrid": {
+      "rop": 137.5,
+      "red": 137.2,
+      "beta": 373,
+      "d": 3904,
+      "eta": 407,
+      "zeta": 0
+    },
+    "bdd_mitm_hybrid": {
+      "rop": 197.1,
+      "red": 194.5,
+      "beta": 379,
+      "d": 3756,
+      "eta": 2,
+      "zeta": 148
+    },
+    "bkw": {
+      "rop": 444.4,
+      "m": "800005480624893509498417107648966411290327544821968920187050829983707481068340972149210772038961503839632280281192067029933228032"
+    },
+    "dual": {
+      "rop": 140.6,
+      "beta": 382,
+      "d": 3904,
+      "m": 1472
+    },
+    "dual_hybrid": {
+      "rop": 130.1,
+      "red": 130.0,
+      "beta": 342,
+      "m": 2432,
+      "zeta": 20,
+      "t": 40
+    },
+    "usvp": {
+      "rop": 138.6,
+      "red": 138.6,
+      "beta": 378,
+      "delta": 1.004141,
+      "d": 3901
+    }
+  },
+  "msis": {
+    "lattice": {
+      "rop": 129.0,
+      "red": 129.0,
+      "beta": 346,
+      "delta": 1.004399,
+      "d": 2592
+    }
+  },
+  "mlwe_min_rop_log2": 130.1,
+  "msis_min_rop_log2": 129.0
+}
