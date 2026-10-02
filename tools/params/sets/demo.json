@@ -1,0 +1,32 @@
+{
+  "id": "jali-demo-d64",
+  "prime_factors": [
+    1563674726761101613
+  ],
+  "degree": 64,
+  "m1": 32,
+  "l": 0,
+  "alpha_squared": 2048,
+  "n_bin": 0,
+  "l2_rows": [
+    32
+  ],
+  "l2_bounds_squared": [
+    2048
+  ],
+  "n_prime": 16,
+  "linf_bound": 2897,
+  "m2": 61,
+  "n_msis": 11,
+  "log_sigma": [
+    16,
+    12,
+    11,
+    22
+  ],
+  "gamma": 65534,
+  "d_bits": 7,
+  "mlwe_rank": 38,
+  "mlwe_delta": 1.004373402767646,
+  "estimator": "jali-params 3; request sha256 9c3d22b74cce1089; policy delta; MLWE uSVP (ADPS16) beta 349 delta 1.004373402767646; MSIS closed form beta 347 delta 1.004398692"
+}

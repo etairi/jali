@@ -1,0 +1,626 @@
+{
+  "schema": "jali-params-report/1",
+  "id": "jali-kyber1024-d64",
+  "request_sha256": "bb726fe1272df917a8f28abf1eb18f8aee49ff8a7962f00de3ce1b10eeaade9b",
+  "params_sha256": "4235c04f020e69ead8527aad46df12765b966f269c7a6211ed784ec76d45d904",
+  "tool": {
+    "name": "jali-params",
+    "version": "3",
+    "sha256": "17cbec4de95de0187fa0aa7f9839b13ef8f961e6fb7c4b39b53e86db0ec68dcd"
+  },
+  "environment": {
+    "python": "3.12.13",
+    "mpmath": "1.3.0",
+    "sympy": "1.14.0"
+  },
+  "deterministic": true,
+  "policy": {
+    "name": "delta",
+    "mlwe": "uSVP delta_0 <= 1.0044",
+    "msis": "delta < 1.0044"
+  },
+  "statement": {
+    "source": "lin-worst-case",
+    "requirements": {
+      "m1": 32,
+      "l": 0,
+      "alpha_squared": 2950,
+      "n_bin": 0,
+      "l2_rows": [
+        32
+      ],
+      "l2_bounds_squared": [
+        2950
+      ],
+      "n_prime": 16,
+      "linf_bound": 3476,
+      "max_integer_coefficient": 11570096
+    },
+    "statement_modulus": 3329,
+    "note": "requirements of lin::compile for the worst case over public data (every coefficient of A and t has the largest centred absolute value), which dominate every instance of the shape"
+  },
+  "summary": {
+    "q": 2423991946973,
+    "log2_q": 41.1405,
+    "mlwe_rank": 26,
+    "mlwe_beta": 348,
+    "n_msis": 17,
+    "msis_beta": 360,
+    "gamma": 262142,
+    "d_bits": 9,
+    "log_sigma": [
+      16,
+      12,
+      12,
+      23
+    ],
+    "estimated_proof_bytes": 21058
+  },
+  "modulus": {
+    "q": 2423991946973,
+    "log2_q": 41.1405,
+    "bits": 42,
+    "q_mod_8": 5,
+    "gamma": 262142,
+    "gamma_0": 524288,
+    "gamma_v2": 1,
+    "d_bits": 9,
+    "primality": "deterministic (sympy.isprime, n < 2^64)",
+    "rns_primes_required": 2,
+    "rust_capacity": {
+      "prime_bits": 256,
+      "q_bits": 256,
+      "log_sigma": 100,
+      "coefficient_bits": 256
+    },
+    "construction": "gamma first: q = 1 + gamma*t with t odd (v2(gamma) = 2) or t = 2 mod 4 (v2(gamma) = 1), the smallest prime at or above the start",
+    "lower_bounds": [
+      {
+        "name": "ARP modulus bound",
+        "q_at_least": 5658177523,
+        "log2": 32.3977
+      },
+      {
+        "name": "binary lifting bound",
+        "q_at_least": 4269702317,
+        "log2": 31.9915
+      },
+      {
+        "name": "slack lifting bound",
+        "q_at_least": 4270225060,
+        "log2": 31.9917
+      },
+      {
+        "name": "exact norm lifting bound 0",
+        "q_at_least": 4269711167,
+        "log2": 31.9915
+      },
+      {
+        "name": "modulus lifting bound",
+        "q_at_least": 2423973316489,
+        "log2": 41.1405
+      }
+    ],
+    "largest_lower_bound": "modulus lifting bound",
+    "binding_at_q": "modulus lifting bound",
+    "window_bits": 4,
+    "search": [
+      {
+        "bits": 42,
+        "start": 2423973316489,
+        "q": 2423991946973,
+        "estimated_proof_bytes": 21058,
+        "steps": [
+          {
+            "start": 2423973316489,
+            "gamma": 1048574,
+            "gamma0_at_start": 524288,
+            "event": "gamma keeps MSIS hard only above 2*start"
+          },
+          {
+            "start": 2423973316489,
+            "gamma": 524286,
+            "gamma0_at_start": 524288,
+            "q": 2423989135261,
+            "candidates_tested": 8,
+            "event": "accepted",
+            "estimated_proof_bytes": 21194
+          },
+          {
+            "start": 2423973316489,
+            "gamma": 262142,
+            "gamma0_at_start": 524288,
+            "q": 2423991946973,
+            "candidates_tested": 18,
+            "event": "accepted",
+            "estimated_proof_bytes": 21058
+          },
+          {
+            "start": 2423973316489,
+            "gamma": 131070,
+            "gamma0_at_start": 524288,
+            "q": 2423975812501,
+            "candidates_tested": 5,
+            "event": "accepted",
+            "estimated_proof_bytes": 21194
+          }
+        ]
+      },
+      {
+        "bits": 43,
+        "start": 4398046511104,
+        "q": 4398047296501,
+        "estimated_proof_bytes": 21272,
+        "steps": [
+          {
+            "start": 4398046511104,
+            "gamma": 262142,
+            "gamma0_at_start": 131072,
+            "q": 5001698195621,
+            "candidates_tested": 43,
+            "event": "accepted",
+            "estimated_proof_bytes": 22296
+          },
+          {
+            "start": 4398046511104,
+            "gamma": 131070,
+            "gamma0_at_start": 131072,
+            "q": 4398047296501,
+            "candidates_tested": 2,
+            "event": "accepted",
+            "estimated_proof_bytes": 21272
+          },
+          {
+            "start": 4398046511104,
+            "gamma": 65534,
+            "gamma0_at_start": 131072,
+            "q": 4398048997301,
+            "candidates_tested": 10,
+            "event": "accepted",
+            "estimated_proof_bytes": 21400
+          },
+          {
+            "start": 4398046511104,
+            "gamma": 32766,
+            "gamma0_at_start": 131072,
+            "q": 4398046560253,
+            "candidates_tested": 1,
+            "event": "accepted",
+            "estimated_proof_bytes": 21528
+          }
+        ]
+      },
+      {
+        "bits": 44,
+        "start": 8796093022208,
+        "q": 8796094594549,
+        "estimated_proof_bytes": 21512,
+        "steps": [
+          {
+            "start": 8796093022208,
+            "gamma": 524286,
+            "gamma0_at_start": 262144,
+            "q": 11168586786421,
+            "candidates_tested": 25,
+            "event": "accepted",
+            "estimated_proof_bytes": 22664,
+            "rejected": [
+              {
+                "q": 11168477734933,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 11168488220653,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 11168490317797,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 11168492414941,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 11168534357821,
+                "why": "within guard band: ['MSIS delta']"
+              }
+            ]
+          },
+          {
+            "start": 8796093022208,
+            "gamma": 262142,
+            "gamma0_at_start": 262144,
+            "q": 8796094594549,
+            "candidates_tested": 2,
+            "event": "accepted",
+            "estimated_proof_bytes": 21512
+          },
+          {
+            "start": 8796093022208,
+            "gamma": 131070,
+            "gamma0_at_start": 262144,
+            "q": 8796093806581,
+            "candidates_tested": 2,
+            "event": "accepted",
+            "estimated_proof_bytes": 21640
+          },
+          {
+            "start": 8796093022208,
+            "gamma": 65534,
+            "gamma0_at_start": 262144,
+            "q": 8796094193629,
+            "candidates_tested": 5,
+            "event": "accepted",
+            "estimated_proof_bytes": 21768
+          }
+        ]
+      },
+      {
+        "bits": 45,
+        "start": 17592186044416,
+        "q": 17592197578453,
+        "estimated_proof_bytes": 21624,
+        "steps": [
+          {
+            "start": 17592186044416,
+            "gamma": 1048574,
+            "gamma0_at_start": 524288,
+            "event": "gamma keeps MSIS hard only above 2*start"
+          },
+          {
+            "start": 17592186044416,
+            "gamma": 524286,
+            "gamma0_at_start": 524288,
+            "q": 17592197578453,
+            "candidates_tested": 6,
+            "event": "accepted",
+            "estimated_proof_bytes": 21624
+          },
+          {
+            "start": 17592186044416,
+            "gamma": 262142,
+            "gamma0_at_start": 524288,
+            "q": 17592200199061,
+            "candidates_tested": 14,
+            "event": "accepted",
+            "estimated_proof_bytes": 21752
+          },
+          {
+            "start": 17592186044416,
+            "gamma": 131070,
+            "gamma0_at_start": 524288,
+            "q": 17592186826741,
+            "candidates_tested": 2,
+            "event": "accepted",
+            "estimated_proof_bytes": 21880
+          }
+        ]
+      },
+      {
+        "bits": 46,
+        "start": 35184372088832,
+        "q": 35184382304101,
+        "estimated_proof_bytes": 21926,
+        "steps": [
+          {
+            "start": 35184372088832,
+            "gamma": 524286,
+            "gamma0_at_start": 262144,
+            "q": 78463427465053,
+            "candidates_tested": 4,
+            "event": "no prime of the class passed in 16 tries",
+            "rejected": [
+              {
+                "q": 78463133864893,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463135962037,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463142253469,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463184196349,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463196779213,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463198876357,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463230333517,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463272276397,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463291150693,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463293247837,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463301636413,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463310024989,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463320510709,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463335190717,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463419076477,
+                "why": "within guard band: ['MSIS delta']"
+              },
+              {
+                "q": 78463427465053,
+                "why": "within guard band: ['MSIS delta']"
+              }
+            ]
+          },
+          {
+            "start": 35184372088832,
+            "gamma": 262142,
+            "gamma0_at_start": 262144,
+            "q": 35184389388157,
+            "candidates_tested": 17,
+            "event": "accepted",
+            "estimated_proof_bytes": 22286
+          },
+          {
+            "start": 35184372088832,
+            "gamma": 131070,
+            "gamma0_at_start": 262144,
+            "q": 35184382304101,
+            "candidates_tested": 20,
+            "event": "accepted",
+            "estimated_proof_bytes": 21926
+          },
+          {
+            "start": 35184372088832,
+            "gamma": 65534,
+            "gamma0_at_start": 262144,
+            "q": 35184373759949,
+            "candidates_tested": 7,
+            "event": "accepted",
+            "estimated_proof_bytes": 22046
+          }
+        ]
+      }
+    ]
+  },
+  "hardness": {
+    "mlwe": {
+      "model": "primal uSVP, the 2016 estimate (ADPS16) with Kannan's embedding, secret and error uniform in {-1,0,1}, any number of samples",
+      "rank": 26,
+      "n": 1664,
+      "q": 2423991946973,
+      "samples_m_for_cross_checks": 1856,
+      "beta": 348,
+      "delta": 1.004381952541052,
+      "core_svp_bits": {
+        "classical": 101.6,
+        "quantum": 92.2
+      }
+    },
+    "msis": {
+      "model": "closed form delta = 2^((log2 B)^2 / (4 n d log2 q)) (LNP22 Section 6.1, after MR09 and GN08); beta = smallest block size with delta_0(beta) <= delta",
+      "rank": 17,
+      "n": 1088,
+      "m": 5632,
+      "q": 2423991946973,
+      "log2_bound": 33.222232,
+      "delta": "1.0042820583",
+      "beta": 360,
+      "core_svp_bits": {
+        "classical": 105.1,
+        "quantum": 95.4
+      }
+    },
+    "assumptions": "Hiding needs Extended-MLWE, taken as MLWE following LNP22 Section 6.1; binding needs MSIS. Core-SVP 2^(0.292 beta) classical, 2^(0.265 beta) quantum (ADPS16). All security figures are cost-model heuristics, not proofs."
+  },
+  "derived": {
+    "lambda": 4,
+    "n_ex": 33,
+    "l_ext": 12,
+    "b_squared": 36460193441136,
+    "z1_bound_squared": 43586015314575,
+    "z3_bound_squared": 27753065054,
+    "z4_bound": 208037478,
+    "exact_alpha_squared": 3014,
+    "approx_alpha_squared": 12372557824,
+    "approx_extraction_bound": 416074956,
+    "rejection_M1": 3,
+    "rejection_M2": 3,
+    "range_rejection_M3": 2,
+    "range_rejection_M4": 2,
+    "estimated_proof_bytes": 21058,
+    "rns_primes_required": 2
+  },
+  "checks": [
+    {
+      "name": "completeness (m1+Z)d",
+      "value": "2112.0",
+      "relation": ">=",
+      "limit": "640.0",
+      "margin_bits": 1.72247
+    },
+    {
+      "name": "completeness m2 d",
+      "value": "3520.0",
+      "relation": ">=",
+      "limit": "640.0",
+      "margin_bits": 2.45943
+    },
+    {
+      "name": "response bound b^2",
+      "value": "3.646019344e+13",
+      "relation": "<",
+      "limit": "3.402823669e+38",
+      "margin_bits": 82.9486
+    },
+    {
+      "name": "MSIS delta",
+      "value": "1.004282058",
+      "relation": "<",
+      "limit": "1.0044",
+      "margin_bits": 0.000169418
+    },
+    {
+      "name": "MSIS bound < q",
+      "value": "1.002047725e+10",
+      "relation": "<",
+      "limit": "2.423991947e+12",
+      "margin_bits": 7.91829
+    },
+    {
+      "name": "rounding 2^(D-1) omega d < gamma",
+      "value": "131072.0",
+      "relation": "<",
+      "limit": "262142.0",
+      "margin_bits": 0.999989
+    },
+    {
+      "name": "MLWE delta (Rust accepts <= 1.0044)",
+      "value": "1.004381953",
+      "relation": "<=",
+      "limit": "1.0044",
+      "margin_bits": 2.59232e-05
+    },
+    {
+      "name": "ARP modulus bound",
+      "value": "2.423991947e+12",
+      "relation": ">=",
+      "limit": "5658177522.0",
+      "margin_bits": 8.74283
+    },
+    {
+      "name": "binary lifting bound",
+      "value": "2.423991947e+12",
+      "relation": ">",
+      "limit": "4269702316.0",
+      "margin_bits": 9.14903
+    },
+    {
+      "name": "slack lifting bound",
+      "value": "2.423991947e+12",
+      "relation": ">",
+      "limit": "4270225060.0",
+      "margin_bits": 9.14886
+    },
+    {
+      "name": "exact norm lifting bound 0",
+      "value": "2.423991947e+12",
+      "relation": ">",
+      "limit": "4269711166.0",
+      "margin_bits": 9.14903
+    },
+    {
+      "name": "modulus lifting bound (compile)",
+      "value": "2.423991947e+12",
+      "relation": ">",
+      "limit": "2.423973316e+12",
+      "margin_bits": 1.10884e-05
+    },
+    {
+      "name": "rejection_M1 < 2^16",
+      "value": "3.0",
+      "relation": "<",
+      "limit": "65536.0",
+      "margin_bits": 14.415
+    },
+    {
+      "name": "rejection_M2 < 2^16",
+      "value": "3.0",
+      "relation": "<",
+      "limit": "65536.0",
+      "margin_bits": 14.415
+    },
+    {
+      "name": "range_rejection_M3 < 2^16",
+      "value": "2.0",
+      "relation": "<",
+      "limit": "65536.0",
+      "margin_bits": 15.0
+    },
+    {
+      "name": "range_rejection_M4 < 2^16",
+      "value": "2.0",
+      "relation": "<",
+      "limit": "65536.0",
+      "margin_bits": 15.0
+    }
+  ],
+  "repetitions": {
+    "M1": 3,
+    "M2": 3,
+    "M3": 2,
+    "M4": 2,
+    "note": "integer ceilings the Rust prover uses; expected attempts are at most their product"
+  },
+  "policy_comparison": {
+    "policy": {
+      "name": "beta",
+      "beta_min": 439,
+      "mlwe": "uSVP beta >= 439",
+      "msis": "beta >= 439 and delta < 1.0044"
+    },
+    "q": 2423974222909,
+    "log2_q": 41.1405,
+    "mlwe_rank": 31,
+    "mlwe_beta": 443,
+    "n_msis": 19,
+    "msis_beta": 439,
+    "gamma": 32766,
+    "d_bits": 6,
+    "log_sigma": [
+      16,
+      12,
+      12,
+      23
+    ],
+    "estimated_proof_bytes": 22718
+  },
+  "partition": {
+    "realizable": "what-if: the exact-norm blocks of the Ajtai part moved to BDLOP; to let derive choose, name them in the statement's movable list, and realize the result with Statement::var_placed or lin::compile_placed",
+    "method": "exhaustive",
+    "evaluated": [
+      {
+        "bdlop_blocks": [],
+        "m1": 32,
+        "l": 0,
+        "alpha_squared": 2950,
+        "q_bits": 42,
+        "estimated_proof_bytes": 21058
+      },
+      {
+        "bdlop_blocks": [
+          "w"
+        ],
+        "m1": 0,
+        "l": 32,
+        "alpha_squared": 0,
+        "failed": "empty Ajtai part (Rust: alpha_squared = 0 fails `dimensions`)"
+      }
+    ]
+  }
+}

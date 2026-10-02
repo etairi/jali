@@ -1,0 +1,7 @@
+{
+  "degree": 64,
+  "modulus": 1099511627917,
+  "rank": 26,
+  "delta": 1.0044,
+  "provenance": "test-only synthetic MLWE metadata; not an estimate"
+}

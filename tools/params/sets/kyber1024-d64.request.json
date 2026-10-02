@@ -1,0 +1,31 @@
+{
+  "schema": "jali-params-request/2",
+  "id": "jali-kyber1024-d64",
+  "mode": "native",
+  "degree": 64,
+  "modulus": {
+    "search": {
+      "factors": 1,
+      "window_bits": 4
+    }
+  },
+  "hardness": {
+    "policy": "delta"
+  },
+  "statement": {
+    "source": "lin-worst-case",
+    "statement_degree": 256,
+    "statement_modulus": 3329,
+    "rows": 4,
+    "blocks": [
+      {
+        "name": "w",
+        "length": 8,
+        "norm": {
+          "l2_squared": 2950
+        }
+      }
+    ]
+  },
+  "note": "The Kyber-1024 key relation A w + t = 0 over Z_3329[X]/(X^256+1), A of size 4 x 8, ||w||^2 <= 2950 = ceil((1.2 sqrt(2048))^2), compiled with jali::lin::compile"
+}

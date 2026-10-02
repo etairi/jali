@@ -1,0 +1,13 @@
+{
+  "id": "quadratic-possession-test-only",
+  "prime_factors": [1099511627917],
+  "degree": 64,
+  "m1": 20,
+  "l": 2,
+  "alpha_squared": 192,
+  "n_bin": 0,
+  "l2_rows": [16, 4],
+  "l2_bounds_squared": [128, 64],
+  "n_prime": 2,
+  "linf_bound": 13
+}

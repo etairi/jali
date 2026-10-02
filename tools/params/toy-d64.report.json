@@ -1,0 +1,7 @@
+{
+  "degree": 64,
+  "modulus": 1099511627917,
+  "rank": 26,
+  "delta": 1.0042736680871425,
+  "provenance": "jali-params 3 rank; policy delta; MLWE uSVP (ADPS16) beta 361 delta 1.0042736680871425"
+}

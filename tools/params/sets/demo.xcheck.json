@@ -1,0 +1,41 @@
+{
+  "id": "jali-demo-d64",
+  "params_sha256": "6c5b5b347c2c255188f69fcfcf4dd003425215a12fcf6a4728d8fd5f14c25dbb",
+  "lattice_estimator": {
+    "commit": "53da5982597709ba0fdf94ea37a84d822310fd84",
+    "pinned": true,
+    "dirty": false
+  },
+  "sage": "SageMath version 10.9, Release Date: 2026-05-04",
+  "mode": "rough",
+  "mlwe_parameters": "LWEParameters(n=2432, q=1563674726761101613, Xs=D(\u03c3=0.82), Xe=D(\u03c3=0.82), m=1472, tag=None)",
+  "msis_parameters": "SISParameters(n=704, q=1563674726761101613, length_bound=7.62659001279487e9, m=6016, norm=2, tag=None)",
+  "mlwe": {
+    "dual_hybrid": {
+      "rop": 101.1,
+      "red": 101.0,
+      "beta": 346,
+      "m": 2432,
+      "zeta": 0,
+      "t": 50
+    },
+    "usvp": {
+      "rop": 110.4,
+      "red": 110.4,
+      "beta": 378,
+      "delta": 1.004141,
+      "d": 3901
+    }
+  },
+  "msis": {
+    "lattice": {
+      "rop": 101.0,
+      "red": 101.0,
+      "beta": 346,
+      "delta": 1.004399,
+      "d": 2592
+    }
+  },
+  "mlwe_min_rop_log2": 101.1,
+  "msis_min_rop_log2": 101.0
+}
