@@ -81,3 +81,22 @@ parameter checks and four parameter sets.
   - the pinned proofs, their lengths and the measured sizes of `docs/parameters.md`;
   - the prover seeds that the tests found by search, and the Rust reference data of the
     parameter tool.
+- Equation encodings in bounded buffers. The transcripts no longer build the encoding of an
+  equation (`QuadEq::to_bytes`) in one buffer before hashing it. They write it into chunks of
+  at most 32 KiB, which never grow (the last one is shrunk to its length), and SHAKE128 absorbs
+  it piece by piece. The zero codes of a zero polynomial are held as a count once they span at
+  least 64 whole bytes. The hashed bytes are those of `QuadEq::to_bytes`, so transcripts,
+  challenges and proofs do not change, and the pinned proofs pass unchanged. Before, each
+  encoding grew by doubling in one `Vec<u8>`. In one proof of an application's degree-64
+  statement with 18 quadratic and 297 evaluation equations (measured outside this
+  repository), the prover encoded 2181 equations, 666 MiB in all, 61 % of it zero runs; 72 of
+  its buffers grew beyond 2 MiB, up to 36 MiB, and the macOS allocator was observed to keep
+  freed blocks of that size charged to the process. The encodings that the toolbox keeps across
+  its range attempts took about 39 MiB there instead of 164 MiB. The lists that hold a family's
+  encodings take 40 bytes per equation. `QuadEq::to_bytes` returns the same bytes as before and
+  no longer collects the entries first.
+- Selector matrices at their exact size. `Statement::compile` builds the 0/1 matrices that
+  select the binary and Euclidean blocks from the witness in one buffer of exactly their number
+  of entries. Collected from their flattened rows, the buffer grew by doubling: for a binary
+  block of 140 polynomials over 140 bounded ones, to room for 35,840 entries for its 19,600, or
+  1,146,880 bytes for 627,200 on 64-bit targets. The matrices, and so the proofs, do not change.

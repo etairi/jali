@@ -2,6 +2,7 @@
 use crate::{
     Error,
     abdlop::{Abdlop, Commitment, Opening},
+    codec::Segments,
     math::Poly,
     quad::{self, QuadEq, QuadProof},
     rand::{AesPrg, domain, take_seed, uniform_ring},
@@ -9,9 +10,14 @@ use crate::{
 };
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+mod tests;
+
 /// Equations encoded at once before they are absorbed: in parallel with the `parallel`
 /// feature (from 8 equations on), with the encodings of one chunk held at a time.
 const ENCODING_CHUNK: usize = 32;
+/// Absorb the number of `equations`, then each one's encoding ([`QuadEq::to_bytes`], held as
+/// segments of at most 32 KiB) under the label `equation`.
 pub(crate) fn absorb_equations(
     transcript: &mut Transcript,
     label: &[u8],
@@ -20,22 +26,23 @@ pub(crate) fn absorb_equations(
     transcript.absorb(label, &(equations.len() as u64).to_le_bytes());
     // Absorbed in order, up to the first equation that fails to encode.
     for chunk in equations.chunks(ENCODING_CHUNK) {
-        for bytes in crate::par::map_min(chunk.len(), 8, |i| chunk[i].to_bytes()) {
-            transcript.absorb(b"equation", &bytes?);
+        for encoding in crate::par::map_min(chunk.len(), 8, |i| chunk[i].to_segments()) {
+            transcript.absorb_segments(b"equation", &encoding?);
         }
     }
     Ok(())
 }
 /// The encodings of `equations`, for absorbing one list into several transcripts; computed in
-/// parallel with the `parallel` feature.
-pub(crate) fn encode_equations(equations: &[QuadEq]) -> Result<Vec<Vec<u8>>, Error> {
-    crate::par::try_map_min(equations.len(), 8, |i| equations[i].to_bytes())
+/// parallel with the `parallel` feature. Each is held as segments, in chunks of at most 32 KiB
+/// in which long runs of zero bytes, such as the codes of zero polynomials, are counts.
+pub(crate) fn encode_equations(equations: &[QuadEq]) -> Result<Vec<Segments>, Error> {
+    crate::par::try_map_min(equations.len(), 8, |i| equations[i].to_segments())
 }
 /// [`absorb_equations`] from the encodings of [`encode_equations`]: the same absorptions.
-pub(crate) fn absorb_encoded(transcript: &mut Transcript, label: &[u8], encoded: &[Vec<u8>]) {
+pub(crate) fn absorb_encoded(transcript: &mut Transcript, label: &[u8], encoded: &[Segments]) {
     transcript.absorb(label, &(encoded.len() as u64).to_le_bytes());
-    for bytes in encoded {
-        transcript.absorb(b"equation", bytes);
+    for encoding in encoded {
+        transcript.absorb_segments(b"equation", encoding);
     }
 }
 fn fold(

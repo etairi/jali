@@ -1,8 +1,11 @@
 //! The word writer against a bitwise reference writer, kept below as the oracle: random
 //! sequences of every code and of zero runs, at every alignment, give the same bytes and the
 //! same errors, and the reader decodes them back. (The word bit reads of the samplers are tested
-//! in `rand::uniform`.)
+//! in `rand::uniform`.) The segment writer against the word writer: the same bytes and errors
+//! for random codes, for zero runs at every alignment and around the end of a chunk, with its
+//! staged bytes never reallocated.
 use super::*;
+use crate::codec::segments::CHUNK;
 
 /// The reference writer: one call per bit.
 #[derive(Default)]
@@ -314,4 +317,156 @@ fn zero_runs_equal_zero_bits_at_every_alignment() {
             assert_eq!(new.finish(), bitwise.finish(), "offset {offset}, run {run}");
         }
     }
+}
+
+/// A code that equations are written with ([`CodeWriter`]): those of [`field`], with zero runs
+/// also around [`MIN_ZERO_RUN`] whole bytes, and up to past [`STAGE`] and past a chunk.
+fn code(rng: &mut Rng) -> Field {
+    loop {
+        match field(rng) {
+            f @ (Field::Unsigned(..) | Field::Uniform(..) | Field::UniformWide(..)) => return f,
+            Field::Zeros(n) => {
+                // In bits: eight per byte.
+                return Field::Zeros(match rng.below(4) {
+                    0 => n,
+                    1 => rng.below(8 * 2 * MIN_ZERO_RUN),
+                    2 => rng.below(8 * (STAGE as u64 + 500)),
+                    _ => rng.below(8 * (CHUNK as u64 + 4096)),
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Write the code with both writers: equal results, which it returns. The segment writer's
+/// staged bytes stay below `STAGE` between codes, in the buffer they were allocated with.
+fn write_code(f: &Field, bits: &mut BitWriter, segments: &mut SegmentWriter) -> Result<(), Error> {
+    let (a, b) = match f {
+        Field::Unsigned(v, b) => (
+            CodeWriter::unsigned(bits, *v, *b),
+            CodeWriter::unsigned(segments, *v, *b),
+        ),
+        Field::Uniform(v, m) => (
+            CodeWriter::uniform(bits, *v, *m),
+            CodeWriter::uniform(segments, *v, *m),
+        ),
+        Field::UniformWide(v, m) => (
+            CodeWriter::uniform_u256(bits, v, m),
+            CodeWriter::uniform_u256(segments, v, m),
+        ),
+        Field::Zeros(n) => {
+            CodeWriter::zeros(bits, *n);
+            CodeWriter::zeros(segments, *n);
+            (Ok(()), Ok(()))
+        }
+        _ => unreachable!("not a code of equations: {f:?}"),
+    };
+    assert_eq!(a, b, "{f:?}");
+    assert_eq!(segments.bits.bytes.capacity(), STAGE + STAGE_SLACK);
+    assert!(segments.bits.bytes.len() < STAGE);
+    a
+}
+
+/// Finish both writers: the same bytes, in chunks of at most `CHUNK` bytes. Returns the length
+/// of the bytes, the number of chunks and the bytes the chunks hold.
+fn finish_both(bits: BitWriter, segments: SegmentWriter, case: &str) -> (usize, usize, usize) {
+    let joined = bits.finish();
+    let segments = segments.finish();
+    assert_eq!(segments.len(), joined.len() as u64, "{case}");
+    assert_eq!(segments.to_vec(), joined, "{case}");
+    let shapes = segments.chunk_shapes();
+    assert!(shapes.iter().all(|(len, cap)| len <= cap && *cap <= CHUNK));
+    (
+        joined.len(),
+        shapes.len(),
+        shapes.iter().map(|(len, _)| len).sum(),
+    )
+}
+
+#[test]
+fn the_segment_writer_writes_the_bytes_of_the_bit_writer() {
+    let mut rng = Rng(8);
+    let (mut joined, mut held, mut crossed, mut failed) = (0, 0, 0, 0);
+    for sequence in 0..1500 {
+        let mut bits = BitWriter::new();
+        let mut segments = SegmentWriter::new();
+        let n = if rng.below(6) == 0 {
+            rng.below(4000)
+        } else {
+            rng.below(64)
+        };
+        for _ in 0..n {
+            failed += usize::from(write_code(&code(&mut rng), &mut bits, &mut segments).is_err());
+        }
+        let (len, chunks, bytes) = finish_both(bits, segments, &format!("sequence {sequence}"));
+        joined += len;
+        held += bytes;
+        crossed += usize::from(chunks > 1);
+    }
+    // Codes failed, as in the bit writer; sequences crossed chunks; the zero runs took far less
+    // room than they stand for.
+    assert!(failed > 1000 && crossed > 20, "{failed} {crossed}");
+    assert!(held < joined / 4, "{held} {joined}");
+}
+
+#[test]
+fn zero_runs_of_the_segment_writer_at_every_alignment() {
+    for offset in 0..=128u32 {
+        let ones = if offset == 0 {
+            0
+        } else {
+            u128::MAX >> (128 - offset)
+        };
+        for run in [
+            0, 1, 2, 63, 64, 65, 127, 128, 448, 511, 512, 513, 575, 576, 577, 640, 4096, 4097,
+            262_143,
+        ] {
+            let mut bits = BitWriter::new();
+            let mut segments = SegmentWriter::new();
+            for f in [
+                Field::Unsigned(ones, offset),
+                Field::Zeros(run),
+                Field::Unsigned(0b101, 3),
+                Field::Zeros(run),
+            ] {
+                write_code(&f, &mut bits, &mut segments).unwrap();
+            }
+            finish_both(bits, segments, &format!("offset {offset}, run {run}"));
+        }
+    }
+}
+
+#[test]
+fn zero_runs_across_a_chunk_boundary_equal_the_bit_writer() {
+    // Whole words of literal bytes up to around the end of the first chunk, then a few bits,
+    // then a zero run kept as bytes or as a count, then more codes.
+    let fill = (CHUNK - 8) / 8;
+    let mut chunks = [0usize; 4];
+    for words in fill - 12..=fill + 2 {
+        for offset in [0, 1, 31, 63] {
+            for run in [64 * 6, 64 * 7 + 5, 64 * 8, 64 * 9 - 1, 64 * 9, 64 * 300] {
+                let mut bits = BitWriter::new();
+                let mut segments = SegmentWriter::new();
+                for i in 0..words {
+                    let word = Field::Unsigned(i as u128 | 1 << 63, 64);
+                    write_code(&word, &mut bits, &mut segments).unwrap();
+                }
+                for f in [
+                    Field::Unsigned(u128::from(offset > 0), offset),
+                    Field::Zeros(run),
+                    Field::Unsigned(u128::MAX, 128),
+                ] {
+                    write_code(&f, &mut bits, &mut segments).unwrap();
+                }
+                let case = format!("words {words}, offset {offset}, run {run}");
+                chunks[finish_both(bits, segments, &case).1] += 1;
+            }
+        }
+    }
+    // Some strings fit one chunk and some took a second.
+    assert!(
+        chunks[1] > 0 && chunks[2] > 0 && chunks[3] == 0,
+        "{chunks:?}"
+    );
 }

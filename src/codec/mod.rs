@@ -2,7 +2,12 @@
 //! Readers bound unary runs and reject noncanonical padding and trailing data.
 mod bits;
 pub mod proof;
+mod segments;
 pub use bits::{BitReader, BitWriter};
+pub(crate) use bits::{CodeWriter, SegmentWriter};
+pub(crate) use segments::Segments;
+#[cfg(test)]
+pub(crate) use segments::{CHUNK, MIN_ZERO_RUN};
 
 use crate::Error;
 

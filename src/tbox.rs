@@ -4,6 +4,7 @@
 use crate::{
     Error,
     abdlop::{self, Abdlop, Commitment},
+    codec::Segments,
     lnp::Statement,
     math::{
         Poly, PolyNtt, PolyVec, Ring, SparsePolyVec, U256,
@@ -258,8 +259,11 @@ fn absorb_range_parameters(prefix: &mut Transcript, scheme: &Abdlop) {
     prefix.absorb(b"range-parameters", &params);
 }
 /// The encodings of the four equation families, computed once per proof: the toolbox key and
-/// the transcript of every range attempt absorb them.
-struct EncodedForms([Vec<Vec<u8>>; 4]);
+/// the transcript of every range attempt absorb them. They are held as segments, in chunks of
+/// at most 32 KiB in which the zero codes of zero polynomials are counts once they span 64
+/// whole bytes, so those runs take no memory. The lists that hold them take 40 bytes per
+/// equation of a family and 24 bytes per chunk of an encoding.
+struct EncodedForms([Vec<Segments>; 4]);
 impl EncodedForms {
     fn new(forms: &Forms) -> Result<Self, Error> {
         let [eqs, evals, exact, approx] = forms.families();

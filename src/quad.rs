@@ -2,7 +2,7 @@
 use crate::{
     Error,
     abdlop::{self, Abdlop, Caller, Commitment, Opening, OpeningProof},
-    codec::BitWriter,
+    codec::{BitWriter, CodeWriter, SegmentWriter, Segments},
     math::{Poly, PolyVec, Ring, SparsePolyMat, SparsePolyVec, U256, int, terms::Shape},
     rand::take_seed,
     transcript::Transcript,
@@ -11,7 +11,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use zeroize::Zeroizing;
 
 #[cfg(test)]
-mod encoding_tests;
+pub(crate) mod encoding_tests;
 #[cfg(test)]
 mod expansion_tests;
 #[cfg(test)]
@@ -480,28 +480,47 @@ impl QuadEq {
             .add(&self.r0)
     }
     /// Canonical, dimension-bound encoding for statement hashing.
+    ///
+    /// The transcripts absorb these bytes without building them in one buffer: they hash them
+    /// in pieces from chunks of at most 32 KiB, which hold long runs of zero bytes, such as the
+    /// codes of zero polynomials, as counts. The transcript states are those of absorbing the
+    /// bytes returned here.
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        self.check(self.r0.ring(), self.r2.dimension())?;
         let mut w = BitWriter::new();
-        w.unsigned(self.r2.dimension() as u128, 32)?;
-        let matrix: Vec<_> = self.r2.entries().collect();
-        let vector: Vec<_> = self.r1.entries().collect();
-        w.unsigned(matrix.len() as u128, 32)?;
-        for ((r, c), p) in matrix {
-            w.unsigned(r.into(), 16)?;
-            w.unsigned(c.into(), 16)?;
-            encode_poly(&mut w, p)?;
-        }
-        w.unsigned(vector.len() as u128, 32)?;
-        for (i, p) in vector {
-            w.unsigned(i.into(), 16)?;
-            encode_poly(&mut w, p)?;
-        }
-        encode_poly(&mut w, &self.r0)?;
+        self.write_codes(&mut w)?;
         Ok(w.finish())
     }
+    /// The bytes of [`QuadEq::to_bytes`] as [`Segments`], for
+    /// [`Transcript::absorb_segments`]: no buffer of them exceeds 32 KiB, apart from their list
+    /// of chunks, and a run of at least 64 whole zero bytes takes only a record header. A zero
+    /// polynomial whose codes take 576 bits or more (degree 64 and $`q>2^8`$, for example)
+    /// always leaves such a run.
+    pub(crate) fn to_segments(&self) -> Result<Segments, Error> {
+        let mut w = SegmentWriter::new();
+        self.write_codes(&mut w)?;
+        Ok(w.finish())
+    }
+    /// The codes of [`QuadEq::to_bytes`] before its end bit: the dimension, the number of
+    /// matrix entries, each entry's row, column and coefficients, the number of vector entries,
+    /// each one's index and coefficients, and the constant's coefficients.
+    fn write_codes(&self, w: &mut impl CodeWriter) -> Result<(), Error> {
+        self.check(self.r0.ring(), self.r2.dimension())?;
+        w.unsigned(self.r2.dimension() as u128, 32)?;
+        w.unsigned(self.r2.key_count() as u128, 32)?;
+        for ((r, c), p) in self.r2.entries() {
+            w.unsigned(r.into(), 16)?;
+            w.unsigned(c.into(), 16)?;
+            encode_poly(w, p)?;
+        }
+        w.unsigned(self.r1.key_count() as u128, 32)?;
+        for (i, p) in self.r1.entries() {
+            w.unsigned(i.into(), 16)?;
+            encode_poly(w, p)?;
+        }
+        encode_poly(w, &self.r0)
+    }
 }
-fn encode_poly(w: &mut BitWriter, p: &Poly) -> Result<(), Error> {
+fn encode_poly(w: &mut impl CodeWriter, p: &Poly) -> Result<(), Error> {
     // Each coefficient is a uniform code of bits(q - 1) bits; those of a zero polynomial are
     // all zero, written as one run.
     if p.is_zero() {
@@ -555,7 +574,7 @@ fn prefix(
         2 * (scheme.bounded_len() + scheme.message_len()),
     )?;
     let mut prefix = scheme.prefix(commitment, context)?;
-    prefix.absorb(b"quadratic-equation", &equation.to_bytes()?);
+    prefix.absorb_segments(b"quadratic-equation", &equation.to_segments()?);
     Ok(prefix)
 }
 fn challenge(

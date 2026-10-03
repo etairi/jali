@@ -1,7 +1,21 @@
+use super::segments::{MIN_ZERO_RUN, Segments};
 use crate::{Error, math::U256};
 
 #[cfg(test)]
 mod writer_tests;
+
+/// The codes that equation encodings are written with. [`BitWriter`] and [`SegmentWriter`]
+/// write the same bytes for the same sequence of calls.
+pub(crate) trait CodeWriter {
+    /// [`BitWriter::unsigned`].
+    fn unsigned(&mut self, value: u128, bits: u32) -> Result<(), Error>;
+    /// [`BitWriter::uniform`].
+    fn uniform(&mut self, value: u128, modulus: u128) -> Result<(), Error>;
+    /// [`BitWriter::uniform_u256`].
+    fn uniform_u256(&mut self, value: &U256, modulus: &U256) -> Result<(), Error>;
+    /// `count` zero bits, as [`BitWriter::zeros`] appends them.
+    fn zeros(&mut self, count: u64);
+}
 
 /// Append-only LSB-first bit writer.
 ///
@@ -20,6 +34,13 @@ impl BitWriter {
     /// Empty writer.
     pub fn new() -> Self {
         Self::default()
+    }
+    /// Empty writer whose bytes have room for `bytes` bytes.
+    fn with_capacity(bytes: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(bytes),
+            ..Self::default()
+        }
     }
     fn bit(&mut self, value: bool) {
         self.put(u128::from(value), 1);
@@ -46,18 +67,28 @@ impl BitWriter {
         }
     }
     /// Append `count` zero bits: a run of zero codes, such as those of a zero polynomial.
-    pub(crate) fn zeros(&mut self, mut count: u64) {
+    pub(crate) fn zeros(&mut self, count: u64) {
+        let run = self.zero_run(count);
+        self.zero_bytes(run);
+    }
+    /// [`BitWriter::zeros`] up to its whole zero words: fills the current word and appends it
+    /// if the run reaches its end, keeps the bits past the last whole word, and returns the
+    /// number of zero bytes still to be appended, in whole words, after the bytes so far.
+    fn zero_run(&mut self, mut count: u64) -> u64 {
         let free = u64::from(64 - self.used);
         if count < free {
             self.used += count as u32;
-            return;
+            return 0;
         }
         count -= free;
         self.bytes.extend_from_slice(&self.word.to_le_bytes());
         self.word = 0;
-        self.bytes
-            .resize(self.bytes.len() + 8 * (count / 64) as usize, 0);
         self.used = (count % 64) as u32;
+        8 * (count / 64)
+    }
+    /// Append `count` zero bytes, which [`BitWriter::zero_run`] returned.
+    fn zero_bytes(&mut self, count: u64) {
+        self.bytes.resize(self.bytes.len() + count as usize, 0);
     }
     /// Write exactly `bits` low bits, rejecting truncation.
     pub fn unsigned(&mut self, value: u128, bits: u32) -> Result<(), Error> {
@@ -157,6 +188,97 @@ impl BitWriter {
         self.bytes
             .extend_from_slice(&self.word.to_le_bytes()[..used]);
         self.bytes
+    }
+}
+impl CodeWriter for BitWriter {
+    fn unsigned(&mut self, value: u128, bits: u32) -> Result<(), Error> {
+        BitWriter::unsigned(self, value, bits)
+    }
+    fn uniform(&mut self, value: u128, modulus: u128) -> Result<(), Error> {
+        BitWriter::uniform(self, value, modulus)
+    }
+    fn uniform_u256(&mut self, value: &U256, modulus: &U256) -> Result<(), Error> {
+        BitWriter::uniform_u256(self, value, modulus)
+    }
+    fn zeros(&mut self, count: u64) {
+        BitWriter::zeros(self, count)
+    }
+}
+
+/// Staged bytes at which [`SegmentWriter`] moves them into its segments.
+const STAGE: usize = 4096;
+/// The most bytes one code adds to the staged bytes: two words for a code of up to 128 bits and
+/// four for a 256-bit one; for a zero run that stays staged, one word and fewer than
+/// [`MIN_ZERO_RUN`] zero bytes, in whole words; one word for [`BitWriter::finish`]. Fewer than
+/// `STAGE` bytes are staged before each code, so the staged bytes never exceed the capacity
+/// `STAGE + STAGE_SLACK` they are allocated with, and their buffer is never reallocated.
+const STAGE_SLACK: usize = 64;
+const _: () = assert!(
+    32 <= STAGE_SLACK && MIN_ZERO_RUN.is_multiple_of(8) && MIN_ZERO_RUN as usize <= STAGE_SLACK
+);
+
+/// The codes of a [`BitWriter`], written into [`Segments`] as the same bytes.
+///
+/// An inner [`BitWriter`] packs the codes. Its bytes move into the segments once [`STAGE`] of
+/// them are staged, before a zero run that is kept as a count, and at the end, so that its
+/// buffer is never reallocated (nor are the chunks of [`Segments`]). Of a zero run
+/// ([`CodeWriter::zeros`]), the bits that complete the current word and those past the last
+/// whole zero word stay with the codes; the whole zero words are kept as a count if they make
+/// at least [`MIN_ZERO_RUN`] bytes, and are appended as bytes otherwise.
+#[derive(Debug)]
+pub(crate) struct SegmentWriter {
+    bits: BitWriter,
+    out: Segments,
+}
+impl SegmentWriter {
+    /// Empty writer.
+    pub(crate) fn new() -> Self {
+        Self {
+            bits: BitWriter::with_capacity(STAGE + STAGE_SLACK),
+            out: Segments::default(),
+        }
+    }
+    /// Move the staged bytes into the segments if there are at least `threshold` of them.
+    fn spill(&mut self, threshold: usize) {
+        debug_assert!(self.bits.bytes.capacity() == STAGE + STAGE_SLACK);
+        if self.bits.bytes.len() >= threshold {
+            self.out.push_literal(&self.bits.bytes);
+            self.bits.bytes.clear();
+        }
+    }
+    /// [`BitWriter::finish`], into the segments.
+    pub(crate) fn finish(self) -> Segments {
+        let mut out = self.out;
+        out.push_literal(&self.bits.finish());
+        out.shrink_to_fit();
+        out
+    }
+}
+impl CodeWriter for SegmentWriter {
+    fn unsigned(&mut self, value: u128, bits: u32) -> Result<(), Error> {
+        let result = self.bits.unsigned(value, bits);
+        self.spill(STAGE);
+        result
+    }
+    fn uniform(&mut self, value: u128, modulus: u128) -> Result<(), Error> {
+        let result = self.bits.uniform(value, modulus);
+        self.spill(STAGE);
+        result
+    }
+    fn uniform_u256(&mut self, value: &U256, modulus: &U256) -> Result<(), Error> {
+        let result = self.bits.uniform_u256(value, modulus);
+        self.spill(STAGE);
+        result
+    }
+    fn zeros(&mut self, count: u64) {
+        let run = self.bits.zero_run(count);
+        if run >= MIN_ZERO_RUN {
+            self.spill(0);
+            self.out.push_zeros(run);
+        } else {
+            self.bits.zero_bytes(run);
+            self.spill(STAGE);
+        }
     }
 }
 
