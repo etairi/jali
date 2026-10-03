@@ -152,6 +152,11 @@ impl PolyMat {
     pub fn entries(&self) -> &[Poly] {
         &self.entries
     }
+    /// The number of entries that the entries' buffer has room for.
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.entries.capacity()
+    }
     /// Checked entry access.
     pub fn get(&self, row: usize, col: usize) -> Result<&Poly, Error> {
         if row >= self.rows || col >= self.cols {
@@ -315,6 +320,10 @@ impl SparsePolyMat {
     /// Shared ring.
     pub fn ring(&self) -> &Arc<Ring> {
         &self.ring
+    }
+    /// The number of [`SparsePolyMat::entries`].
+    pub(crate) fn key_count(&self) -> usize {
+        self.entries.len()
     }
     /// Sorted entries (zeros, if supplied, are preserved).
     pub fn entries(&self) -> impl Iterator<Item = ((u16, u16), &Poly)> {
@@ -555,6 +564,10 @@ impl SparsePolyVec {
     /// Shared ring.
     pub fn ring(&self) -> &Arc<Ring> {
         &self.ring
+    }
+    /// The number of [`SparsePolyVec::entries`].
+    pub(crate) fn key_count(&self) -> usize {
+        self.entries.len()
     }
     /// Sorted entries.
     pub fn entries(&self) -> impl Iterator<Item = (u16, &Poly)> {

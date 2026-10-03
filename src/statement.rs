@@ -26,6 +26,8 @@ use std::{
 
 #[cfg(test)]
 mod digits_tests;
+#[cfg(test)]
+mod selector_tests;
 
 /// Integer witness bounds, applied to the whole named block.
 ///
@@ -1244,19 +1246,18 @@ fn selector(
     m1: usize,
     l: usize,
 ) -> Result<AffineBlock, Error> {
+    // The rows' entries in one buffer of exactly their number: collected from the flattened
+    // rows, whose number the iterator does not report, the buffer grew by doubling, to up to
+    // twice the size of the entries.
     let matrix = |start: usize, cols: usize| {
-        PolyMat::new(
-            ring.clone(),
-            indices.len(),
-            cols,
-            indices
-                .iter()
-                .flat_map(|idx| {
-                    (0..cols)
-                        .map(move |j| Poly::constant(ring.clone(), i128::from(*idx == start + j)))
-                })
-                .collect(),
-        )
+        let mut entries =
+            Vec::with_capacity(indices.len().checked_mul(cols).ok_or(Error::Dimension)?);
+        for idx in indices {
+            entries.extend(
+                (0..cols).map(|j| Poly::constant(ring.clone(), i128::from(*idx == start + j))),
+            );
+        }
+        PolyMat::new(ring.clone(), indices.len(), cols, entries)
     };
     Ok(AffineBlock {
         rows: indices.len(),
