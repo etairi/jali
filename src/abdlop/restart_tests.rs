@@ -34,10 +34,10 @@ fn restarts_are_taken_and_the_attempt_limit_is_enforced() {
             .map(|(proof, ())| proof)
     };
     assert_eq!(prove(0, 0).err(), Some(Error::RestartLimit));
-    // A seed whose first attempt is rejected and whose second is accepted.
-    let seed = (0..64)
+    // A seed whose first attempt is rejected and whose second is accepted (about 1 in 32).
+    let seed = (0..=255)
         .find(|seed| prove(*seed, 1).err() == Some(Error::RestartLimit) && prove(*seed, 2).is_ok())
-        .expect("a seed with exactly one restart among 64");
+        .expect("a seed with exactly one restart among 256");
     let proof = prove(seed, 2).unwrap();
     scheme.verify(&commitment, &proof, b"restarts").unwrap();
     assert_eq!(prove(seed, secret::MAX_ATTEMPTS).unwrap(), proof);

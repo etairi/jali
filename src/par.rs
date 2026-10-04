@@ -102,6 +102,17 @@ impl Abandon<'_> {
         self.decided.load(Ordering::Relaxed) < self.attempt
     }
 }
+#[cfg(test)]
+impl Abandon<'static> {
+    /// For an attempt run on its own, outside a batch: never requested.
+    pub(crate) fn never() -> Self {
+        static NONE_DECIDED: AtomicU32 = AtomicU32::new(u32::MAX);
+        Abandon {
+            decided: &NONE_DECIDED,
+            attempt: 0,
+        }
+    }
+}
 
 /// The outcomes of a rejection loop's attempts $`0,1,\dots`$ below `limit`, computed `width`
 /// at a time, in parallel with the `parallel` feature.

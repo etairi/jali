@@ -31,9 +31,9 @@ with other metadata produces other proofs.
 
 | Set | $`\log_2q`$ | MLWE rank, block size | MSIS rank, block size | $`\gamma`$, $`D`$ | Estimate | Measured |
 | --- | ---: | --- | --- | --- | ---: | ---: |
-| `kyber1024_d64` | 41.14 | 26, 348 | 17, 360 | 262142, 9 | 21,058 B | 20,334 B |
-| `kyber1024_d128` | 41.14 | 13, 348 | 8, 359 | 524286, 11 | 22,608 B | 21,824 B |
-| `demo_d64` | 60.44 | 38, 349 | 11, 347 | 65534, 7 | 24,814 B | 23,975 B |
+| `kyber1024_d64` | 41.14 | 26, 348 | 17, 360 | 262142, 9 | 21,058 B | 20,318 B |
+| `kyber1024_d128` | 41.14 | 13, 348 | 8, 359 | 524286, 11 | 22,608 B | 21,818 B |
+| `demo_d64` | 60.44 | 38, 349 | 11, 347 | 65534, 7 | 24,814 B | 23,991 B |
 
 The three sets were derived by the parameter tool from the requests in `tools/params/sets/` for
 the relation $`Aw+t=0`$ over $`\mathbb Z_p[X]/(X^{256}+1)`$ with $`A`$ of size $`4\times8`$: the
@@ -100,14 +100,37 @@ attacks.
 ## Challenges
 
 The challenge polynomials are $`\sigma_{-1}`$-stable, with coefficients in $`[-\omega,\omega]`$
-and coefficient $`d/2`$ zero. LNP22 §2.7 also bounds the operator norm of a challenge through
-$`(\|\sigma^{-1}(c^k)c^k\|_1)^{1/(2k)}\le\eta`$ with $`k=32`$, choosing $`\eta`$ so that at
-least 99% of the challenges meet it, and lists $`(\omega,\eta)=(2,59)`$ for degree 128 (Fig. 3).
-Jali uses $`(2,59)`$ at degree 128 and $`(8,140)`$ at degree 64; the degree-64 set has
-$`17^{32}\approx2^{130.8}`$ elements. Measured on 20,000 sampled challenges in two independent
-computations (Python with seed 1, SageMath 10.9 with seed 4), 99.30% meet $`\eta=140`$ at degree
-64, and 98.82% and 98.87% meet $`\eta=59`$ at degree 128. Jali does not reject challenges above
-$`\eta`$ ([security notes](security.md#deviations-from-lnp22)).
+and coefficient $`d/2`$ zero, and they meet the operator-norm bound of LNP22 §2.7,
+$`(\|\sigma_{-1}(c^k)c^k\|_1)^{1/(2k)}\le\eta`$ with $`k=32`$. LNP22 chooses $`\eta`$ so that at
+least 99% of the challenges meet it and lists $`(\omega,\eta)=(2,59)`$ for degree 128 (Fig. 3).
+Jali uses $`(2,59)`$ at degree 128 and, at degree 64, $`(8,140)`$, the pair of LaZer's parameter
+script (`scripts/lnp-tbox-codegen.sage`). `rand::challenge` draws a $`\sigma_{-1}`$-stable
+polynomial with uniform coefficients (`rand::autostable`) and keeps it if
+$`\|(\sigma_{-1}(c)c)^{32}\|_1\le\eta^{64}`$, a test in exact integer arithmetic
+(`rand::within_eta`); otherwise it draws again from the same stream, at most 64 times ([security
+notes](security.md#challenges)). The bound is what the parameter check assumes: the verifier
+bound $`B`$, the MSIS bound and the rejection constants use $`\eta`$.
+
+Measured with exact arithmetic (SageMath 10.9) on $`2\cdot10^5`$ uniform draws per degree and
+seed, 0.757% (seed 7) and 0.726% (seed 11) of the draws exceed $`\eta=140`$ at degree 64, and
+1.127% and 1.195% exceed $`\eta=59`$ at degree 128: pooled, 0.741% and 1.161%, with 95%
+intervals of $`\pm0.027\%`$ and $`\pm0.033\%`$. LNP22's $`(2,59)`$ is therefore met by about
+98.84% of the draws (95% interval 98.81% to 98.87%), slightly fewer than the 99% LNP22 aims at,
+and LaZer's $`(8,140)`$ by about 99.26%; as the test is exact, this changes only the size of the
+set. Before the test the sets have $`17^{32}\approx2^{130.80}`$ and $`5^{64}\approx2^{148.60}`$
+elements, after it about $`2^{130.79}`$ and $`2^{148.59}`$. An earlier measurement on 20,000
+draws (Python with seed 1, SageMath 10.9 with seed 4) found 99.30% within the bound at degree
+64, and 98.82% and 98.87% at degree 128.
+
+The test squares $`u=\sigma_{-1}(c)c`$ five times and accepts as soon as a norm shows the bound:
+$`\|u^{2^{j-1}}\|_1\le\eta^{2^j}`$ implies it, as $`\|xy\|_1\le\|x\|_1\|y\|_1`$, and for $`j=6`$
+it is the bound. Measured on $`2\cdot10^5`$ uniform draws per degree, 98.9% of the draws at
+degree 64 and 98.2% at degree 128 are decided within the first three products, in 128-bit
+integers; the others take the products in 256 to 1024 bits. A derivation takes 6.4 µs at degree
+64 and 20 µs at degree 128, a full test 67 µs and 259 µs
+(`cargo bench --bench arithmetic -- challenge/` on an Apple M4). Prover and verifier run one
+test per draw: a prover in each attempt of each opening proof, a verifier once per opening
+proof, and each one more per rejected draw.
 
 ## Size estimate
 

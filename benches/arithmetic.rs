@@ -4,8 +4,9 @@ use jali::{
     math::{Poly, PolyMat, PolyVec, Ring, SparsePolyMat, ntt::NttPlan},
     params::{moduli::NTT_PRIMES, toy_d64},
     rand::{
-        AesPrg, gaussian,
+        AesPrg, autostable, challenge, domain, eta_norm_power, gaussian,
         reject::{self, Policy, Variance},
+        within_eta,
     },
 };
 use std::hint::black_box;
@@ -126,6 +127,28 @@ fn arithmetic(c: &mut Criterion) {
             b.iter(|| gaussian(black_box(&mut stream), t, 64).unwrap())
         });
     }
+    // The challenge set's exact operator-norm test on one challenge (decided after the first
+    // product at degree 64 and the second at degree 128 for these), the full norm power that a
+    // draw near or above eta needs, and a whole derivation (draws until one is within eta,
+    // about 1.01 draws), at both degrees.
+    for (d, omega, eta) in [(64, 8, 140), (128, 2, 59)] {
+        let ring = Ring::new(1099511627917, d).unwrap();
+        let x = autostable(&mut AesPrg::new(&[1; 32], 0), ring.clone(), omega).unwrap();
+        c.bench_function(&format!("challenge/within-eta/d{d}"), |b| {
+            b.iter(|| within_eta(black_box(&x), eta).unwrap())
+        });
+        c.bench_function(&format!("challenge/norm-power/d{d}"), |b| {
+            b.iter(|| eta_norm_power(black_box(&x)).unwrap())
+        });
+        let mut index = 0;
+        c.bench_function(&format!("challenge/derive/d{d}"), |b| {
+            b.iter(|| {
+                index += 1;
+                let mut stream = AesPrg::new(&[2; 32], domain(0, index));
+                challenge(&mut stream, ring.clone(), omega, eta).unwrap()
+            })
+        });
+    }
     let (dot, norm) = reject::moments(&[10, -3, 17], &[2, 1, 4]).unwrap();
     c.bench_function("rejection/bimodal", |b| {
         b.iter(|| {
@@ -135,7 +158,8 @@ fn arithmetic(c: &mut Criterion) {
                 norm,
                 Variance::gaussian(0).unwrap(),
                 U256::from(2u8).shl_vartime(128),
-                black_box(u128::MAX / 3),
+                // (2^256 - 1)/3.
+                black_box(U256::from_be_hex(&"5".repeat(64))),
             )
             .unwrap()
         })

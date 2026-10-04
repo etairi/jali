@@ -259,10 +259,10 @@ fn the_possession_proof_keeps_its_fingerprint_in_every_pool() {
             .prove_bytes_with_seed([33; 32], &witness, b"example/possession", [44; 32])
             .unwrap()
     });
-    assert_eq!(bytes.len(), 18395);
+    assert_eq!(bytes.len(), 18370);
     assert_eq!(
         shake(&bytes),
-        "c7811a80e70d3f1653090b9f14f80a2436fb3fac1244b30821a41b443c7245a0"
+        "e8e5b346c49763c5bcd924129c55501a4786a65e170865f8f0e2017885134b56"
     );
     in_pools("possession verify", || {
         compiled.verify_bytes([33; 32], &bytes, b"example/possession")

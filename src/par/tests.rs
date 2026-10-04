@@ -2,7 +2,10 @@
 //! outcome of every attempt forced, and the first error of a map. With the `parallel` feature
 //! every test also runs in pools of 1, 2, 3, 4 and 8 threads.
 use super::*;
-use crate::rand::{AesPrg, domain};
+use crate::{
+    abdlop::OPENING_COIN_BYTES as N,
+    rand::{AesPrg, domain},
+};
 use std::sync::Mutex;
 
 /// The forced outcome of one attempt.
@@ -35,21 +38,21 @@ struct Run {
     abandoned: Vec<u32>,
 }
 
-/// The loop of `Abdlop::prove_core_speculative` over forced outcomes. Each attempt checks that
-/// it received bytes `32a..32a+32` of the coin stream, works a little and looks for
-/// abandonment before and after.
+/// The loop of `Abdlop::prove_core_speculative` over forced outcomes, with its coin bytes per
+/// attempt (`N`, two 256-bit coins). Each attempt checks that it received bytes `Na..N(a+1)` of
+/// the coin stream, works a little and looks for abandonment before and after.
 fn speculative(plan: &[Forced], limit: u32, width: u32) -> Run {
     let key = [7u8; 32];
-    let mut expected = vec![0u8; 32 * plan.len()];
+    let mut expected = vec![0u8; N * plan.len()];
     AesPrg::new(&key, domain(3, 0)).fill(&mut expected).unwrap();
     let (started, abandoned) = (Mutex::new(Vec::new()), Mutex::new(Vec::new()));
     let mut coins = AesPrg::new(&key, domain(3, 0));
-    let run = |a: u32, coins: &[u8; 32], abandon: &Abandon<'_>| {
+    let run = |a: u32, coins: &[u8; N], abandon: &Abandon<'_>| {
         started.lock().unwrap().push(a);
         let a_ = a as usize;
         assert_eq!(
             coins[..],
-            expected[32 * a_..32 * a_ + 32],
+            expected[N * a_..N * a_ + N],
             "coins of attempt {a}"
         );
         for _ in 0..2 {

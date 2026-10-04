@@ -24,21 +24,22 @@ fn fixture() -> Fixture {
     (scheme, commitment, opening, prefix)
 }
 
-/// Prover seeds of the fixture and the attempt each accepts, found one attempt at a time:
-/// 0, 1, 2, 3, 4, 7 and 8 are K - 1 and K for K in {1, 2, 3, 4, 8}, and 9, 15, 16 and 17 lie
-/// in and at the ends of the second batch of 8.
+/// Prover seeds of the fixture and the attempt each accepts, found one attempt at a time (the
+/// least seed of 0 to 255 for each attempt, with `prove` at width 1): 0, 1, 2, 3, 4, 7 and 8
+/// are K - 1 and K for K in {1, 2, 3, 4, 8}, and 9, 15, 16 and 17 lie in and at the ends of
+/// the second batch of 8.
 const SEEDS: [(u8, u32); 11] = [
-    (14, 0),
-    (10, 1),
-    (4, 2),
-    (108, 3),
-    (55, 4),
-    (1, 7),
-    (24, 8),
-    (28, 9),
-    (40, 15),
-    (48, 16),
-    (150, 17),
+    (28, 0),
+    (8, 1),
+    (14, 2),
+    (48, 3),
+    (4, 4),
+    (19, 7),
+    (42, 8),
+    (16, 9),
+    (11, 15),
+    (52, 16),
+    (21, 17),
 ];
 const WIDTHS: [u32; 6] = [1, 2, 3, 4, 8, 16];
 
@@ -164,10 +165,10 @@ fn the_attempt_limit_and_its_error_are_unchanged_at_every_width() {
 fn an_attempt_that_fails_ends_the_loop_where_one_at_a_time_would() {
     let f = fixture();
     let (scheme, commitment, opening, prefix) = &f;
-    // Seed 1 accepts at attempt 7. The challenge function fails at attempt e, recognised by
+    // Seed 19 accepts at attempt 7. The challenge function fails at attempt e, recognised by
     // its mask: the proof fails if e <= 7 and is unchanged if e > 7, in the accepted attempt's
     // batch or a later one.
-    let (seed, index) = (1u8, 7u32);
+    let (seed, index) = (19u8, 7u32);
     let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.digest(), &[seed; 32]);
     let mask = |a: u32| {
         sample_gaussian(

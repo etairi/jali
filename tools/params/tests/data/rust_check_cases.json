@@ -1,22 +1,22 @@
 {
  "provenance": {
   "generated_by": "python3 tools/params/rust_reference.py",
-  "date_utc": "2026-10-02T03:46Z",
+  "date_utc": "2026-10-03T07:59Z",
   "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
   "platform": "Darwin arm64",
   "build": "cargo build --locked --release --features serde --example verify_sets",
   "crate_sources_sha256": {
-   "src/params/mod.rs": "711b553b5a98fc9e8ca8476e83f2eecef3bb40addb9d27eb7787d48fde834edb",
-   "src/statement.rs": "ccb45e44c57b65a93eba788618621443cc4cd4564b8bba4bee43df2862fc2dfc",
+   "src/params/mod.rs": "617184cfdacf74544c96717f9de331bd33387284f61eef597a15a6143059f828",
+   "src/statement.rs": "e277e79b4733ceba7c0ea0994973cab5359f0bd1b915a77e8ac6bba01d119139",
    "src/lin.rs": "10feb78a97a0b1bc08f179d4e6a7730f9d74bcacee80ffb0dc2be536edee1451",
-   "src/lnp.rs": "f2a2f18c15cd601ba189362ab3409298233d9825049fc8e8a14d88d4a9ac6c7a",
-   "src/abdlop.rs": "b15d5873b4d217334b1d790f615b5487bc9d51c3be521ea9d0d6ab94ebc5c58c",
+   "src/lnp.rs": "c7ff971ec47548c7c2260308e519ad9fd62fd52f34479a39d53bcbfba848f54b",
+   "src/abdlop.rs": "ed0b44e3911014569dc091485a65805bfea971d780b8f95074f3d9570d859a98",
    "src/json.rs": "09d48678e206aacccc7315f98d9ca468f7dee2e4f956c4819dfafdf4ffa46e26",
    "src/dcompress.rs": "e99f2c83ccf7d26fb99de8b4c651ca88d6cf9d596b1dcf9f2cddb371aa55b94c",
    "src/math/int.rs": "a3d25fea3db37537984d04812381dedb7438f14462101f98b0d339a7fb9436d2",
    "src/math/ring.rs": "6e7365a4b2f90723f1ebd057c2aaae9b229a35da0079f93cfbcf4358e71eb1d9",
    "src/params/moduli.rs": "7b8029423a41367e890eb2e0884cf24bfeadf80ac5c7639d8e1d4eb7bb64e18f",
-   "src/rand/mod.rs": "da4fbcaa979cbab4bd3a6b02d8b2ed82dac25ca991be386d237f3101a548f94e"
+   "src/rand/mod.rs": "5b9c5a836319bb253637ae5b8a66aa1d13ac627c224791b858cf1800b9cd58f3"
   },
   "what": "TboxParams::from_json and lin::compile of the worst-case statement, per case; the case text is case_text(bases[base], case) of tools/params/rust_reference.py, whose SHA-256 is recorded"
  },

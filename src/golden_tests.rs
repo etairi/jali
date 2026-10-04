@@ -1,6 +1,8 @@
 //! Pinned values: parameter transcripts, scheme fingerprints, opening-proof bytes and ring
 //! arithmetic. A change to any of them changes what verifiers accept, so each must stay byte for
-//! byte unless the parameters themselves change.
+//! byte unless the parameters themselves change, or, for the proof bytes, the way proofs draw
+//! their randomness (the 256-bit sampler, the 256-bit rejection coins and the challenges within
+//! eta changed them).
 use crate::{
     abdlop::Abdlop,
     math::{Poly, PolyVec, Ring, int},
@@ -54,16 +56,16 @@ fn parameter_transcripts_fingerprints_and_opening_proofs_are_unchanged() {
             "b62dab81063396d79799ad6df6fe49f97cc65b008a74945592dbffc457c55ad0",
             "5ade81f1ea9aae9d97121f8ecc4148eaeef0e9982f502d88cb2aee62bcd816f3",
             "8cdf0f0af4ad3e5dced199c44d288761f28784c005af309e8412aa490433d213",
-            6870,
-            "dbff8fc3d5d388003838302bd77b24b5e6aef4cf131a3c68f033694dfaa3548a",
+            6873,
+            "26ef4830b9090fe5797baa904fafd25e01f68851914a71de81be2dbe599f532c",
         ),
         (
             possession(),
             "7f3cb670ea5a236803f5d7ecc2b99bbde64bf3943372479d25f3e00be1abe768",
             "485842745d59ecd6766db654dddd8923ff752970efa6dc9957269f444c7ed4d5",
             "c04b68734ec1e840dc329c5c6a532212690e16a8b798af3e12d7a69f2cec716f",
-            8026,
-            "edee2bbfbb48ce46595d695982a964482e306fbc9749479de6b9dd3a5f1d1646",
+            8020,
+            "3766a7b4063151864f671ba741dc129f2496678bfabb05f92186323efb4b54f8",
         ),
     ] {
         assert_eq!(digest(&p.transcript_bytes()), transcript);
@@ -87,6 +89,36 @@ fn parameter_transcripts_fingerprints_and_opening_proofs_are_unchanged() {
         );
         let proof = scheme
             .prove_with_seed(&commitment, &opening, b"ctx", [93; 32])
+            .unwrap();
+        let bytes = scheme.encode_proof(&proof).unwrap();
+        assert_eq!(
+            (bytes.len(), digest(&bytes).as_str()),
+            (length, proof_digest)
+        );
+    }
+}
+
+/// Opening proofs whose challenge is the second draw of its stream, the first exceeding eta
+/// (`abdlop::verifier_check_tests::redrawn_challenge_cases`): their bytes change if the
+/// challenge derivation stops testing eta.
+#[test]
+fn opening_proofs_with_a_redrawn_challenge_are_unchanged() {
+    use crate::abdlop::verifier_check_tests::{
+        commitment_for, redrawn_challenge_cases, search_seed,
+    };
+    for ((params, i), (length, proof_digest)) in redrawn_challenge_cases().into_iter().zip([
+        (
+            6883,
+            "f58c376d78efab26bd75574c3649aa9c8fdb124897dcaed0ee9157c1767f4d2a",
+        ),
+        (
+            9848,
+            "f47247f63650499c6b946de9cfbc663d7f051a3c16ae5e30e76288c0186fbb32",
+        ),
+    ]) {
+        let (scheme, commitment, opening) = commitment_for(params);
+        let proof = scheme
+            .prove_with_seed(&commitment, &opening, b"ctx", search_seed(i))
             .unwrap();
         let bytes = scheme.encode_proof(&proof).unwrap();
         assert_eq!(

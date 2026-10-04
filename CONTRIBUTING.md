@@ -60,11 +60,13 @@ JALI_KAT_PATH=primitives-100k.json cargo test --locked --release \
 
 `src/golden_tests.rs` pins the parameter transcripts, scheme fingerprints, opening proofs and
 ring arithmetic; `tests/statement.rs`, `tests/threads.rs` and `tests/param_sets.rs` pin seeded
-proofs; `src/rand/gauss/table_tests.rs` pins the base Gaussian table, which only
+proofs; `src/rand/gauss/table_tests.rs` pins the base Gaussian tables, which only
 `tools/kat/half_gaussian_cdf.py` writes. A change to any of them changes what verifiers accept
-or what a seed produces, so update a pin only with the change that explains it. Every parameter
-field enters the transcript, the `estimator` string included, so parameter metadata changes the
-pins too.
+or what a seed produces, so update a pin only with the change that explains it. A change to how
+proof randomness is read (the sampler, the challenge derivation) also changes the version of the
+key labels `abdlop/opening-proof` and `tbox/proof`
+([security notes](docs/security.md#randomness-and-seeds)). Every parameter field enters the
+transcript, the `estimator` string included, so parameter metadata changes the pins too.
 
 ## Benchmarks
 

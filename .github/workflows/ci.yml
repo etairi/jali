@@ -81,7 +81,7 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
   tools:
     # The Python tools regenerate the checked-in parameter sets, test fixtures, known-answer
-    # vectors, base Gaussian table and NTT primes exactly; the parameter tool's own tests follow
+    # vectors, base Gaussian tables and NTT primes exactly; the parameter tool's own tests follow
     # (their SageMath oracles skip here). Last, a verifier built against this crate checks that
     # the Rust checks still decide the recorded cases as the tool's reference data say. The
     # runner image and the Rust toolchain are pinned, the toolchain to the rustc that recorded
@@ -122,7 +122,7 @@ jobs:
               grep -q 'no suitable divisor' "$out/$n.err"
             fi
           done
-      - name: Known-answer vectors, base Gaussian table and NTT primes
+      - name: Known-answer vectors, base Gaussian tables and NTT primes
         run: |
           out=$(mktemp -d)
           python tools/kat/half_gaussian_cdf.py --check

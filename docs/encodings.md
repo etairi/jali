@@ -32,11 +32,24 @@ supply the context itself when verifying. A proof carries no copy of its context
 Every transcript starts from SHAKE128 of the tag `LNP22-RUST-v1` and absorbs, each
 length-framed, a protocol label, the parameters, the public seed and one more field
 (`transcript::Transcript::new`). The lower layers put the application context in that field. The
-toolbox puts its own version tag `LNP22-toolbox-v2` there and absorbs the context after the
+toolbox puts its own version tag `LNP22-toolbox-v3` there and absorbs the context after the
 commitment (see [application context](protocol.md#application-context)). Messages are chained
 through 32-byte SHAKE128 digests, and each challenge has its own domain. The transcript binds
 the full parameter fingerprint, the public seed, the application context and every public
 equation. The wire and transcript formats are not a promise of future compatibility.
+
+## Challenges
+
+The challenge of an opening proof, at every layer, follows the absorption of $`w_1`$: an
+AES-256-CTR stream (`rand::AesPrg`) under the transcript's challenge seed for the label `c`, in
+domain 0. `rand::autostable` reads $`d/2`$ values uniform in $`[-\omega,\omega]`$ from it by the
+rule of `rand::uniform` (byte-rounded passes of $`\mathrm{bits}(2\omega)`$-bit words, least
+significant bit first, keeping the words below $`2\omega+1`$), as coefficients $`0`$ to
+$`d/2-1`$; coefficient $`d/2`$ is zero and coefficient $`d-i`$ is minus coefficient $`i`$. The
+draw is the challenge if $`\|(\sigma_{-1}(c)c)^{32}\|_1\le\eta^{64}`$; otherwise the next draw
+continues the stream where the last pass of the rejected one ended, for at most 64 draws
+(`rand::challenge`). The proof encodes the challenge as each coefficient plus $`\omega`$, in
+$`[0,2\omega]`$.
 
 ## Parameters in the transcript
 
@@ -109,9 +122,9 @@ and parts are:
 | Label | Parts, in order |
 | --- | --- |
 | `abdlop/commitment` | scheme fingerprint; $`s_1`$; $`m`$ |
-| `abdlop/opening-proof` | caller, `opening` (`Abdlop`) or `quadratic` (`quad`, also inside `quad_many` and `quad_eval`); transcript digest before the first prover message; $`s_1`$; $`m`$; $`s_2`$ |
+| `abdlop/opening-proof/v2` | caller, `opening` (`Abdlop`) or `quadratic` (`quad`, also inside `quad_many` and `quad_eval`); transcript digest before the first prover message; $`s_1`$; $`m`$; $`s_2`$ |
 | `quad-eval/garbage` | transcript digest after both equation lists, before the garbage commitments; $`s_1`$; $`m`$; $`s_2`$ |
-| `tbox/proof` | scheme fingerprint; statement digest; context; $`s_1`$; $`m`$ |
+| `tbox/proof/v2` | scheme fingerprint; statement digest; context; $`s_1`$; $`m`$ |
 
 The scheme fingerprint is the transcript digest of the parameter bytes and the public seed under
 the protocol label `abdlop-scheme`. The statement digest is the transcript digest of the
@@ -124,4 +137,8 @@ which absorb the parameters. For the toolbox, $`s_1`$ is the caller's bounded wi
 slack. The toolbox draws the seed of its evaluation proof from its own stream, and that proof
 derives its keys from it as above. The caller part of the opening-proof key keeps the keys of
 the opening proof and the quadratic proof apart even if their transcript digests were equal
-(they differ, because the quadratic proof absorbs its equation).
+(they differ, because the quadratic proof absorbs its equation). The suffix `/v2`
+of two labels marks the 256-bit Gaussian sampler, the 256-bit rejection coins (`reject::coin`:
+32 bytes per test, little-endian) and the challenges within $`\eta`$; the labels change
+whenever the way these keys' streams are read changes
+([security notes](security.md#randomness-and-seeds)).

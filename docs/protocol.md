@@ -306,7 +306,7 @@ Every transcript starts in `transcript::Transcript::new`, which absorbs, each le
 protocol label, the parameters, the public seed and a field under the label `statement`. The
 lower layers (`Abdlop`, `quad`, `quad_many`, `quad_eval`) pass the context as that field, so it
 is absorbed before the commitment and the equations. The toolbox (`tbox`, `Prover` and
-`Verifier`, `Compiled`) passes its version tag `LNP22-toolbox-v2` there instead and absorbs the
+`Verifier`, `Compiled`) passes its version tag `LNP22-toolbox-v3` there instead and absorbs the
 context under the label `application-context` right after the commitment and before the
 equations, so the range-projection challenge and every later challenge depend on it. Its inner
 evaluation proof takes the transcript digest after the range responses as its context.
