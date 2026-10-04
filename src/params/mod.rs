@@ -93,7 +93,9 @@ pub struct CheckedParams {
     pub lambda: usize,
     /// Challenge coefficient bound.
     pub omega: i128,
-    /// Challenge operator-norm bound used in the parameter analysis.
+    /// Challenge operator-norm bound $`\eta`$ of LNP22 §2.7, used in the parameter analysis
+    /// and met by every challenge: the challenge set holds only challenges within it
+    /// (`rand::challenge`, `rand::within_eta`).
     pub eta: u64,
     /// Length of the exact-range vector, including binary and slack coordinates.
     pub n_ex: usize,

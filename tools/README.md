@@ -19,8 +19,8 @@ from the repository root.
 | `params/rust_reference.py` | Records what the crate's checks decide, for the tool's tests |
 | `params/moduli.py` | The 62-bit NTT primes of `src/params/moduli.rs` |
 | `params/tests/` | The tool's tests (standard-library `unittest`) and their recorded data |
-| `kat/generate.py` | Independent known-answer vectors of the primitives, `kat/primitives.json` |
-| `kat/half_gaussian_cdf.py` | The base Gaussian table of `src/rand/cdf.rs`, from its definition; `--digest` prints the digest that `cargo test` pins |
+| `kat/generate.py` | Independent known-answer vectors of the primitives, `kat/primitives.json`, the challenges within $`\eta`$ included |
+| `kat/half_gaussian_cdf.py` | The 256-bit tables of the base Gaussians (widths 3.1 and 1.55) of `src/rand/cdf.rs`, from their definition; `--digest` prints the digest that `cargo test` pins |
 
 ## Deriving a parameter set
 
@@ -178,7 +178,7 @@ python3 $p/lnp_params.py regenerate --check
 # The toy set: its MLWE report, then the set (compare with src/params/sets/toy-d64.json).
 python3 $p/lnp_params.py rank --degree 64 --q 1099511627917 --mlwe-report
 python3 $p/lnp_params.py $p/toy-d64.request.json $p/toy-d64.report.json --output toy.json
-# The known-answer vectors (compare with kat/primitives.json) and the base Gaussian table.
+# The known-answer vectors (compare with kat/primitives.json) and the base Gaussian tables.
 python3 tools/kat/generate.py --output primitives.json
 python3 tools/kat/half_gaussian_cdf.py --check
 # The NTT primes of src/params/moduli.rs, as JSON.

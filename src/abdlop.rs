@@ -9,7 +9,7 @@ use crate::{
     math::{I256, Poly, PolyMat, PolyVec, Ring, U256, int},
     params::{CheckedParams, TboxParams},
     rand::{
-        AesPrg, autostable, bounded, derive_key, domain, gaussian,
+        AesPrg, bounded, derive_key, domain, gaussian,
         reject::{self, Policy, Variance},
         secret, take_seed, uniform_ring,
     },
@@ -17,6 +17,10 @@ use crate::{
 };
 use std::sync::Arc;
 use zeroize::Zeroizing;
+
+/// Coin bytes of one attempt of the opening proof: the coins of Rej_1 and of Rej_2, in that
+/// order, of [`reject::COIN_BYTES`] each.
+pub(crate) const OPENING_COIN_BYTES: usize = 2 * reject::COIN_BYTES;
 
 /// Public commitment with compressed Ajtai part and full BDLOP messages.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +31,8 @@ pub struct Commitment {
     pub t_b: PolyVec,
 }
 
+#[cfg(test)]
+mod coin_tests;
 #[cfg(test)]
 mod restart_tests;
 #[cfg(test)]
@@ -689,16 +695,30 @@ impl Abdlop {
         t.absorb(b"commitment", &w.finish());
         Ok(t)
     }
+    /// The challenge after `w1`: drawn from the challenge set (`rand::challenge`, LNP22 §2.7,
+    /// with this set's $`\omega`$ and $`\eta`$) with the stream of [`Self::challenge_stream`];
+    /// the draws that exceed $`\eta`$ are rejected and the next continues the stream. Prover and
+    /// verifier call this same function, and it never returns a challenge above $`\eta`$.
     pub(crate) fn challenge(&self, prefix: &Transcript, w1: &PolyVec) -> Result<Poly, Error> {
+        crate::rand::challenge(
+            &mut self.challenge_stream(prefix, w1)?,
+            self.ring.clone(),
+            self.checked.omega,
+            self.checked.eta,
+        )
+    }
+    /// The stream the challenge after `w1` is drawn from: AES-256-CTR under the challenge seed
+    /// `c` of the transcript after `w1`, in domain 0.
+    pub(crate) fn challenge_stream(
+        &self,
+        prefix: &Transcript,
+        w1: &PolyVec,
+    ) -> Result<AesPrg, Error> {
         let mut writer = BitWriter::new();
         encode_vec(&mut writer, w1, &self.compression.hint_modulus())?;
         let mut t = prefix.clone();
         t.absorb(b"w1", &writer.finish());
-        autostable(
-            &mut AesPrg::new(&t.challenge_seed(b"c"), 0),
-            self.ring.clone(),
-            self.checked.omega,
-        )
+        Ok(AesPrg::new(&t.challenge_seed(b"c"), 0))
     }
     fn rejection_constants(&self) -> Result<[U256; 2], Error> {
         let p = &self.parameters;
@@ -769,8 +789,12 @@ impl Abdlop {
         binding: &[u8; 32],
         seed: &[u8; 32],
     ) -> Zeroizing<[u8; 32]> {
+        // "/v2" since the 256-bit sampler, the 256-bit rejection coins and the challenges
+        // within eta. The earlier version read these streams differently: masks that two
+        // samplers read from one stream are correlated, and two proofs with correlated masks can
+        // reveal the witness.
         derive_key(
-            b"abdlop/opening-proof",
+            b"abdlop/opening-proof/v2",
             seed,
             &[
                 caller.tag(),
@@ -837,9 +861,10 @@ impl Abdlop {
     /// the index of the accepted attempt. The result does not depend on `width`.
     ///
     /// Attempt $`a`$ reads its masks from the streams of the words
-    /// `OPENING_MASKS` $`+2a`$ and $`+2a+1`$ and its rejection coins, two 16-byte values, from
-    /// bytes $`32a`$ to $`32a+31`$ of the coin stream: an attempt that does not fail runs both
-    /// rejection tests, so it reads exactly 32 bytes, and one that fails ends the loop. Its
+    /// `OPENING_MASKS` $`+2a`$ and $`+2a+1`$ and its rejection coins, two 32-byte values
+    /// ([`reject::coin`]: that of Rej_1 for $`z_1`$, then that of Rej_2 for $`z_2`$), from bytes
+    /// $`64a`$ to $`64a+63`$ of the coin stream: an attempt that does not fail runs both
+    /// rejection tests, so it reads exactly 64 bytes, and one that fails ends the loop. Its
     /// outcome is therefore a function of the key and $`a`$ alone, and the first attempt in
     /// order whose outcome is not a rejection (an accepted proof, or an error) gives the result
     /// of the sequential loop. The challenge function must not read the coin stream either.
@@ -878,8 +903,9 @@ impl Abdlop {
         }
         Err(Error::RestartLimit)
     }
-    /// One attempt of the opening proof, with its 32 coin bytes: `Ok(None)` if it is rejected,
-    /// or abandoned because an earlier attempt of its batch has decided (`par::Attempts`).
+    /// One attempt of the opening proof, with its coin bytes, the coins of Rej_1 and Rej_2 in
+    /// that order: `Ok(None)` if it is rejected, or abandoned because an earlier attempt of its
+    /// batch has decided (`par::Attempts`).
     #[allow(clippy::too_many_arguments)]
     fn attempt<T>(
         &self,
@@ -887,7 +913,7 @@ impl Abdlop {
         key: &[u8; 32],
         constants: &[U256; 2],
         attempt: u32,
-        coins: &[u8; 32],
+        coins: &[u8; OPENING_COIN_BYTES],
         challenge: &impl Fn(&PolyVec, &PolyVec, &PolyVec) -> Result<(Poly, T), Error>,
         abandon: &crate::par::Abandon<'_>,
     ) -> Result<Option<(OpeningProof, T)>, Error> {
@@ -941,10 +967,10 @@ impl Abdlop {
             .zip([variance1, variance2].into_iter().zip(*constants))
             .zip([Policy::Standard, Policy::Rej2])
             .map(|((zv, vm), policy)| (zv, vm, policy))
-            .zip(coins.as_chunks::<16>().0)
+            .zip(coins.as_chunks::<{ reject::COIN_BYTES }>().0)
         {
             let (dot, norm) = reject::moments(&flatten(z)?, &flatten(v)?)?;
-            keep &= reject::accept(policy, dot, norm, variance, m, u128::from_le_bytes(*u))?;
+            keep &= reject::accept(policy, dot, norm, variance, m, reject::coin(u))?;
         }
         if !keep || !self.z1_within_bound(&z1)? {
             return Ok(None);
@@ -1009,9 +1035,14 @@ impl Abdlop {
         let prefix = self.prefix(commitment, context)?;
         self.verify_core(commitment, proof, |w1| self.challenge(&prefix, w1))
     }
-    /// Whether `c` lies in the challenge set: in this ring, sigma-stable, with coefficients of
-    /// absolute value at most omega and a zero coefficient at d/2.
-    pub(crate) fn challenge_in_set(&self, c: &Poly) -> bool {
+    /// Whether `c` has the form of a challenge: in this ring, sigma-stable, with coefficients of
+    /// absolute value at most omega and a zero coefficient at d/2. The last condition of the
+    /// challenge set, the operator-norm bound eta, is not tested here: `verify_core` accepts
+    /// only the challenge it derives, and the derivation (`Abdlop::challenge`, through
+    /// `rand::challenge`) never returns one above eta. A challenge above eta is therefore
+    /// refused there, and the exact test, the costly part, runs once per derived draw rather
+    /// than once more here.
+    pub(crate) fn challenge_well_formed(&self, c: &Poly) -> bool {
         c.ring() == &self.ring
             && c.auto() == *c
             && c.norm_infinity() <= U256::from_u128(self.checked.omega as u128)
@@ -1027,6 +1058,11 @@ impl Abdlop {
         let norm = z21.norm_squared()?.saturating_add(&z22.norm_squared()?);
         Ok(norm <= U256::from(self.checked.b_squared))
     }
+    /// The opening-proof verifier, with `challenge` deriving the challenge from the
+    /// reconstructed `w1`. Before that, only the form of the proof's challenge is checked
+    /// (`challenge_well_formed`); its bound eta holds because it must equal the derived one.
+    /// `challenge` must therefore return challenges of the set, as `Abdlop::challenge` does;
+    /// the tests that fix a challenge instead fix one within eta.
     pub(crate) fn verify_core(
         &self,
         commitment: &Commitment,
@@ -1037,7 +1073,7 @@ impl Abdlop {
         self.shape(&proof.z21, self.a2.cols())?;
         self.shape(&proof.hint, self.parameters.n_msis)?;
         let c = &proof.challenge;
-        if !self.challenge_in_set(c) {
+        if !self.challenge_well_formed(c) {
             return Err(Error::InvalidProof);
         }
         if !self.z1_within_bound(&proof.z1)? {

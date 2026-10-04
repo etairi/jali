@@ -23,7 +23,7 @@ fn toolbox_key_by_forms(
     );
     absorb_statement(&mut statement, extended, forms)?;
     Ok(derive_key(
-        b"tbox/proof",
+        b"tbox/proof/v2",
         seed,
         &[
             &scheme.fingerprint(),

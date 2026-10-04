@@ -1,9 +1,24 @@
-//! Rejection sampling with exact moments and 192-bit fixed-point exponentials.
+//! Rejection sampling with exact moments, 192-bit fixed-point exponentials and 256-bit coins.
 //! Arithmetic is variable time. The exponential's absolute error is bounded conservatively
-//! by $`2^{-170}`$ on nonnegative rational inputs; probabilities below $`e^{-256}`$ round to
-//! zero.
+//! by $`2^{-170}`$ on nonnegative rational inputs (`docs/security.md` derives 198 units of
+//! $`2^{-192}`$ below 256, and `bernoulli` 12286 below 16); probabilities below $`e^{-256}`$
+//! round to zero.
 use crate::Error;
-use crypto_bigint::{CheckedAdd, I256, I512, NonZero, U256, U512};
+use crypto_bigint::{CheckedAdd, I256, I512, NonZero, U256, U512, U1024};
+
+/// Bytes of a rejection coin: a uniform integer in $`[0,2^{256})`$, little-endian ([`coin`]).
+///
+/// [`accept`] resolves an acceptance probability to $`2^{-256}`$, below the error of its
+/// 192-bit exponentials, so the coin adds at most $`2^{-256}`$ to it. A coin of 128 bits would
+/// move every acceptance probability by up to $`2^{-128}`$, and an accepted response's law by up
+/// to $`2^{-128}`$ divided by the test's acceptance rate.
+pub const COIN_BYTES: usize = 32;
+
+/// The coin that `bytes` encode: the integer they give little-endian, uniform in
+/// $`[0,2^{256})`$ when the bytes are uniform.
+pub fn coin(bytes: &[u8; COIN_BYTES]) -> U256 {
+    U256::from_le_slice(bytes)
+}
 
 /// Rejection policies of LNP22 Fig. 1–2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,17 +121,24 @@ fn exp_impl(n: U512, d: U512) -> U512 {
 }
 
 /// Decide acceptance from exact moments, the exact variance, $`\mathrm{round}(M2^{128})`$,
-/// and a uniform 128-bit integer. Rejects constants outside $`1\le M<2^{16}`$.
+/// and a uniform 256-bit coin $`u`$ ([`coin`]). Rejects constants outside $`1\le M<2^{16}`$.
+///
+/// Let $`p`$ be the policy's acceptance probability, with its exponentials computed by the
+/// same 192-bit fixed-point algorithm as [`exp_negative`], on moments scaled to 512 bits. The
+/// test accepts exactly when $`u\le2^{256}p`$, comparing exact integer products (below
+/// $`2^{785}`$), so with probability
+/// $`\min(1,(\lfloor2^{256}p\rfloor+1)/2^{256})`$, within $`2^{-256}`$ of $`\min(1,p)`$: the
+/// exponentials' error is the only other approximation.
 ///
 /// The bimodal comparison is rearranged into nonpositive exponentials, avoiding cosh
-/// overflow and preserving the full 128-bit uniform comparison.
+/// overflow.
 pub fn accept(
     policy: Policy,
     dot: I256,
     norm: U256,
     variance: Variance,
     m_scaled: U256,
-    u: u128,
+    u: U256,
 ) -> Result<bool, Error> {
     if variance.numerator == U256::ZERO
         || variance.denominator == 0
@@ -136,33 +158,39 @@ pub fn accept(
     let norm = norm.resize::<{ U512::LIMBS }>().wrapping_mul(&den);
     let dot = dot.resize::<{ U512::LIMBS }>().wrapping_mul(den.as_int());
     let variance = variance.numerator.resize::<{ U512::LIMBS }>();
-    let lhs = m_scaled
-        .resize::<{ U512::LIMBS }>()
-        .wrapping_mul(&U512::from(u));
+    // u·M·2^128 < 2^400. The exponentials are at most 2^192 and the bimodal denominator at most
+    // 2^193, so no product below reaches 2^785.
+    let lhs = m_scaled.resize::<{ U1024::LIMBS }>().wrapping_mul(&u);
     let d = variance.shl_vartime(1);
-    let scale = U512::ONE.shl_vartime(192);
-    let boundary = U512::ONE.shl_vartime(448);
+    let wide = |x: U512| x.resize::<{ U1024::LIMBS }>();
     if matches!(policy, Policy::Standard | Policy::Rej2) {
+        // p = exp(numerator/d)/M, with numerator = norm - 2dot.
         let numerator = norm
             .as_int()
             .wrapping_sub(&dot.wrapping_mul(&I512::from(2i64)));
-        let exp = exp_impl(numerator.abs(), d);
+        let exp = wide(exp_impl(numerator.abs(), d));
         return Ok(if bool::from(numerator.is_negative()) {
-            lhs.shl_vartime(192) <= exp.shl_vartime(256)
+            // p = (exp/2^192)/M: u/2^256 <= p iff u·M·2^128 <= exp·2^192.
+            lhs <= exp.shl_vartime(192)
         } else {
-            lhs.wrapping_mul(&exp) <= boundary
+            // p = 2^192/(exp·M): u/2^256 <= p iff u·M·2^128·exp <= 2^576.
+            lhs.wrapping_mul(&exp) <= U1024::ONE.shl_vartime(576)
         });
     }
-    // 2^257 exp(norm/(2s²))/(exp(dot/s²)+exp(-dot/s²)). Factor out exp(|dot|/s²).
+    // p = 2exp(norm/(2s²))/(M(exp(dot/s²)+exp(-dot/s²))). Factor out exp(|dot|/s²):
+    // p = 2exp((norm - 2|dot|)/(2s²))/(M(1 + exp(-2|dot|/s²))).
     let absdot = dot.abs();
     let numerator = norm.as_int().wrapping_sub(absdot.shl_vartime(1).as_int());
-    let exp = exp_impl(numerator.abs(), d);
-    let denominator = scale.wrapping_add(&exp_impl(absdot.shl_vartime(1), variance));
-    // First round lhs*(1+exp(-2|dot|/s²)) to the scale used by the final comparison.
-    let adjusted = lhs.wrapping_mul(&denominator).shr_vartime(192);
+    let exp = wide(exp_impl(numerator.abs(), d));
+    // 2^192(1 + exp(-2|dot|/s²)), at most 2^193.
+    let denominator = wide(U512::ONE.shl_vartime(192))
+        .wrapping_add(&wide(exp_impl(absdot.shl_vartime(1), variance)));
+    let lhs = lhs.wrapping_mul(&denominator);
     Ok(if bool::from(numerator.is_negative()) {
-        adjusted.shl_vartime(192) <= exp.shl_vartime(257)
+        // p = 2exp/(M·denominator): u/2^256 <= p iff u·M·2^128·denominator <= exp·2^385.
+        lhs <= exp.shl_vartime(385)
     } else {
-        adjusted.wrapping_mul(&exp) <= boundary.shl_vartime(1)
+        // p = 2^385/(exp·M·denominator): u/2^256 <= p iff u·M·2^128·denominator·exp <= 2^769.
+        lhs.wrapping_mul(&exp) <= U1024::ONE.shl_vartime(769)
     })
 }

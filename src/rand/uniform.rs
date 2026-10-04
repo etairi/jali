@@ -153,9 +153,10 @@ pub fn binomial(stream: &mut impl ByteStream, k: usize, count: usize) -> Result<
         .collect())
 }
 
-/// Sample a $`\sigma`$-stable challenge; coefficient $`d/2`$ is zero.
-/// Unlike the challenge space of LNP22 §2.7, no challenge is rejected for exceeding the
-/// operator-norm bound $`\eta`$.
+/// Sample a $`\sigma`$-stable polynomial with coefficients in $`[-\omega,\omega]`$ and
+/// coefficient $`d/2`$ zero, uniformly: one draw, which no operator-norm bound filters. The
+/// challenges of the proofs come from [`challenge`](super::challenge), which repeats this
+/// draw until it meets the bound $`\eta`$ of LNP22 §2.7.
 pub fn autostable(
     stream: &mut impl ByteStream,
     ring: Arc<Ring>,

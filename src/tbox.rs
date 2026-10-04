@@ -200,6 +200,9 @@ fn forms(scheme: &Abdlop, extended: &Abdlop, statement: &Statement) -> Result<Fo
         mask_d,
     })
 }
+/// The toolbox's version tag, which its transcripts take as their statement field. Version 3
+/// draws its masks with the 256-bit Gaussian sampler and its challenges within eta.
+const TOOLBOX_TAG: &[u8] = b"LNP22-toolbox-v3";
 fn round_prefix(
     scheme: &Abdlop,
     commitment: &Commitment,
@@ -207,7 +210,7 @@ fn round_prefix(
     context: &[u8],
 ) -> Result<Transcript, Error> {
     // The toolbox's version tag, then the application context right after the commitment.
-    let mut prefix = scheme.prefix(commitment, b"LNP22-toolbox-v2")?;
+    let mut prefix = scheme.prefix(commitment, TOOLBOX_TAG)?;
     prefix.absorb(b"application-context", context);
     absorb_statement(&mut prefix, scheme, forms)?;
     Ok(prefix)
@@ -219,7 +222,7 @@ fn round_prefix_encoded(
     encoded: &EncodedForms,
     context: &[u8],
 ) -> Result<Transcript, Error> {
-    let mut prefix = scheme.prefix(commitment, b"LNP22-toolbox-v2")?;
+    let mut prefix = scheme.prefix(commitment, TOOLBOX_TAG)?;
     prefix.absorb(b"application-context", context);
     absorb_encoded_statement(&mut prefix, scheme, encoded);
     Ok(prefix)
@@ -286,8 +289,12 @@ fn toolbox_key(
         b"",
     );
     absorb_encoded_statement(&mut statement, extended, encoded);
+    // "/v2" since the 256-bit sampler, the 256-bit rejection coins and the challenges
+    // within eta. The earlier version read these streams differently: masks that two
+    // samplers read from one stream are correlated, and two proofs with correlated masks can
+    // reveal the witness.
     Ok(derive_key(
-        b"tbox/proof",
+        b"tbox/proof/v2",
         seed,
         &[
             &scheme.fingerprint(),
@@ -319,6 +326,8 @@ fn projections(seed: &[u8; 32], exact: bool, values: &[i128]) -> Result<Vec<i128
     // In parallel with the `parallel` feature, in order.
     crate::par::try_map(256, compute_row)
 }
+/// The response of one range block, or `None` to restart: the bimodal test reads one 256-bit
+/// coin ([`reject::coin`]) from `random`, after the check against q/2 and before the bound.
 fn range_response(
     scheme: &Abdlop,
     seed: &[u8; 32],
@@ -326,7 +335,7 @@ fn range_response(
     values: &[i128],
     mask: &abdlop::Mask,
     sign: i128,
-    random: &mut AesPrg,
+    random: &mut impl ByteStream,
 ) -> Result<Option<PolyVec>, Error> {
     if values.is_empty() {
         return Ok(Some(PolyVec::zero(scheme.ring().clone(), 0)));
@@ -349,15 +358,15 @@ fn range_response(
     }
     let m = range_rejection_m(scheme, exact)?;
     let (dot, norm) = reject::moments(&z, &v)?;
-    let mut u = [0u8; 16];
-    random.fill(&mut u)?;
+    let mut u = Zeroizing::new([0u8; reject::COIN_BYTES]);
+    random.fill(&mut *u)?;
     if !reject::accept(
         Policy::Bimodal,
         dot,
         norm,
         mask.variance,
         U256::from(m).shl_vartime(128),
-        u128::from_le_bytes(u),
+        reject::coin(&u),
     )? {
         return Ok(None);
     }

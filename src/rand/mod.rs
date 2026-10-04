@@ -1,11 +1,13 @@
 //! Deterministic PRGs and local-state samplers.
 mod bernoulli;
 mod cdf;
+mod challenge;
 mod gauss;
 mod key;
 mod prg;
 pub mod reject;
 mod uniform;
+pub use challenge::{MAX_CHALLENGE_DRAWS, challenge, eta_norm_power, within_eta};
 pub use gauss::gaussian;
 
 /// Largest Gaussian exponent $`t`$, for widths $`1.55\cdot2^t`$: the sampler, its variance, the

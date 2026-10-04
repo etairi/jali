@@ -110,7 +110,7 @@ fn range_responses_restart_above_q_over_2_and_above_their_bounds() {
     let slots = 256 / ring.degree();
     let seed = [9; 32];
     let coins = |domain: u64| AesPrg::new(&[7; 32], domain);
-    // The response to the projections of `values` under `mask`, and the next 16 bytes of the
+    // The response to the projections of `values` under `mask`, and the next 32 bytes of the
     // coin stream after it.
     let respond = |exact: bool, values: &[i128], mask: PolyVec, domain: u64| {
         let t = scheme.parameters.log_sigma[if exact { 2 } else { 3 }];
@@ -120,7 +120,7 @@ fn range_responses_restart_above_q_over_2_and_above_their_bounds() {
         };
         let mut random = coins(domain);
         let z = range_response(&scheme, &seed, exact, values, &mask, 1, &mut random).unwrap();
-        let mut next = [0u8; 16];
+        let mut next = [0u8; 32];
         random.fill(&mut next).unwrap();
         (z, next)
     };
@@ -154,10 +154,10 @@ fn range_responses_restart_above_q_over_2_and_above_their_bounds() {
     }
     // A mask coefficient is at most q/2, so only a long projection exceeds it. Values (h, 1),
     // with h = (q - 1)/2, project to at most h + 1 in absolute value, and the prover restarts
-    // before it reads a coin; values (h, 0) project to at most h, and it reads one before the
-    // z4 bound refuses.
+    // before it reads a coin; values (h, 0) project to at most h, and it reads one coin, 32
+    // bytes, before the z4 bound refuses.
     let half = ring.modulus_i128() / 2;
-    let mut fresh = [0u8; 16];
+    let mut fresh = [0u8; 64];
     coins(domain).fill(&mut fresh).unwrap();
     for (second, reads_a_coin) in [(1, false), (0, true)] {
         let values = [half, second];
@@ -169,7 +169,61 @@ fn range_responses_restart_above_q_over_2_and_above_their_bounds() {
         assert_eq!(most, Some((half + second) as u128));
         let (z, next) = respond(false, &values, zero.clone(), domain);
         assert_eq!(z, None);
-        assert_eq!(next != fresh, reads_a_coin, "{second}");
+        let read = if reads_a_coin { 32 } else { 0 };
+        assert_eq!(next[..], fresh[read..read + 32], "{second}");
+    }
+}
+
+/// A finite tape of bytes, read in order.
+struct Tape(Vec<u8>, usize);
+impl ByteStream for Tape {
+    fn fill(&mut self, output: &mut [u8]) -> Result<(), Error> {
+        let end = self.1 + output.len();
+        output.copy_from_slice(self.0.get(self.1..end).ok_or(Error::Randomness)?);
+        self.1 = end;
+        Ok(())
+    }
+}
+
+#[test]
+fn a_range_test_decides_with_one_whole_256_bit_coin() {
+    // Zero values project to zero, and the bimodal test then accepts with probability exactly
+    // 1/M whatever the mask: it takes the coins u with u M <= 2^256, read little-endian from 32
+    // bytes. A coin of 128 bits, or one compared on its high half, would decide alike on either
+    // side of the threshold.
+    let scheme = Abdlop::new([1; 32], crate::params::toy_d64()).unwrap();
+    let ring = scheme.ring().clone();
+    let slots = 256 / ring.degree();
+    for exact in [true, false] {
+        let t = scheme.parameters.log_sigma[if exact { 2 } else { 3 }];
+        let mask = abdlop::Mask {
+            values: PolyVec::zero(ring.clone(), slots),
+            variance: Variance::gaussian(t).unwrap(),
+        };
+        let m = range_rejection_m(&scheme, exact).unwrap();
+        assert!(m >= 2, "{m}");
+        let threshold = if m.is_power_of_two() {
+            U256::ONE.shl_vartime(256 - m.trailing_zeros())
+        } else {
+            U256::MAX
+                .div_rem_vartime(&crypto_bigint::NonZero::new(U256::from(m)).unwrap())
+                .0
+        };
+        let respond = |u: &U256| {
+            let mut tape = Tape(u.to_le_bytes()[..].to_vec(), 0);
+            tape.0.extend_from_slice(&[0xa5; 32]);
+            let z = range_response(&scheme, &[9; 32], exact, &[0; 2], &mask, 1, &mut tape);
+            (z.unwrap().is_some(), tape.1)
+        };
+        let one = U256::ONE;
+        assert_eq!(respond(&threshold), (true, 32), "{exact}");
+        assert_eq!(
+            respond(&threshold.wrapping_add(&one)),
+            (false, 32),
+            "{exact}"
+        );
+        assert_eq!(respond(&U256::ZERO), (true, 32), "{exact}");
+        assert_eq!(respond(&U256::MAX), (false, 32), "{exact}");
     }
 }
 

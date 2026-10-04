@@ -1,10 +1,13 @@
 //! Each check of the opening-proof verifier, at its boundary where it has one. Structural
 //! rejections must come before the challenge is recomputed: the closure passed to
-//! `verify_core` panics if it is reached.
+//! `verify_core` panics if it is reached. The bound eta on the challenge is enforced by the
+//! derivation of the challenge, which the last tests here check at both degrees.
 use super::*;
+use crate::rand::{autostable, within_eta};
 
-fn fixture() -> (Abdlop, Commitment, OpeningProof) {
-    let scheme = Abdlop::new([91; 32], crate::params::toy_d64()).unwrap();
+/// A commitment to $`s_1=1`$ and $`m=3`$ (all coefficients) under `params`.
+pub(crate) fn commitment_for(params: TboxParams) -> (Abdlop, Commitment, Opening) {
+    let scheme = Abdlop::new([91; 32], params).unwrap();
     let ring = scheme.ring().clone();
     let s1 = PolyVec::new(
         ring.clone(),
@@ -17,6 +20,10 @@ fn fixture() -> (Abdlop, Commitment, OpeningProof) {
     )
     .unwrap();
     let (commitment, opening) = scheme.commit_with_seed(s1, m, [92; 32]).unwrap();
+    (scheme, commitment, opening)
+}
+fn fixture() -> (Abdlop, Commitment, OpeningProof) {
+    let (scheme, commitment, opening) = commitment_for(crate::params::toy_d64());
     let proof = scheme
         .prove_with_seed(&commitment, &opening, b"ctx", [93; 32])
         .unwrap();
@@ -65,11 +72,11 @@ pub(crate) fn with_norm(ring: &Arc<Ring>, len: usize, n: u128) -> PolyVec {
 }
 
 #[test]
-fn challenges_outside_the_set_are_rejected_before_the_challenge_is_recomputed() {
+fn malformed_challenges_are_rejected_before_the_challenge_is_recomputed() {
     let (scheme, commitment, proof) = fixture();
     let omega = scheme.checked.omega;
     let d = scheme.ring().degree();
-    assert!(scheme.challenge_in_set(&proof.challenge));
+    assert!(scheme.challenge_well_formed(&proof.challenge));
     // Not sigma-stable.
     let mut p = proof.clone();
     let x = p.challenge.coefficient_i128(1).unwrap();
@@ -84,10 +91,10 @@ fn challenges_outside_the_set_are_rejected_before_the_challenge_is_recomputed() 
     // Coefficient bound: omega is in the set, omega + 1 is not; both are sigma-stable.
     let mut c = Poly::zero(scheme.ring().clone());
     c.set_coefficient(0, omega).unwrap();
-    assert!(scheme.challenge_in_set(&c));
+    assert!(scheme.challenge_well_formed(&c));
     c.set_coefficient(0, -omega - 1).unwrap();
     assert_eq!(c.auto(), c);
-    assert!(!scheme.challenge_in_set(&c));
+    assert!(!scheme.challenge_well_formed(&c));
     let mut p = proof.clone();
     p.challenge = c;
     assert_eq!(
@@ -111,6 +118,17 @@ fn challenges_outside_the_set_are_rejected_before_the_challenge_is_recomputed() 
         scheme.verify_core(&commitment, &p, unreachable),
         Err(Error::InvalidProof)
     );
+    // Every free coefficient at omega: well formed, and far above eta, which these early
+    // checks leave to the derivation (the last tests of this file).
+    let mut c = Poly::zero(scheme.ring().clone());
+    for i in 0..d / 2 {
+        c.set_coefficient(i, omega).unwrap();
+        if i > 0 {
+            c.set_coefficient(d - i, -omega).unwrap();
+        }
+    }
+    assert!(scheme.challenge_well_formed(&c));
+    assert!(!within_eta(&c, scheme.checked.eta).unwrap());
 }
 
 #[test]
@@ -204,4 +222,83 @@ fn t_a_above_the_compressed_range_is_rejected() {
         scheme.verify(&with_t_a(high_max + 1), &proof, b"ctx"),
         Err(Error::InvalidProof)
     );
+}
+
+/// The proof seed for search index `i`.
+pub(crate) fn search_seed(i: u32) -> [u8; 32] {
+    let mut seed = [93; 32];
+    seed[..4].copy_from_slice(&i.to_le_bytes());
+    seed
+}
+
+/// Proofs of `commitment_for` under context `ctx` whose challenge stream starts with a draw
+/// above eta, at degrees 64 and 128: the first `i` for which both provers of the next test,
+/// with proof seed `search_seed(i)`, meet such a stream in the attempt they accept.
+pub(crate) fn redrawn_challenge_cases() -> [(TboxParams, u32); 2] {
+    [
+        (crate::params::toy_d64(), 42),
+        (crate::params::kyber1024_d128(), 146),
+    ]
+}
+
+/// The eta test of the challenge derivation, in the protocol. On a stream whose first draw
+/// exceeds eta the prover answers the second draw, and the proof verifies. A proof that answers
+/// the first draw, as a derivation without the eta test would, passes every other check but is
+/// refused. Dropping the eta test from the derivation, for the prover, the verifier or both,
+/// fails this test.
+#[test]
+fn a_first_draw_above_eta_is_redrawn_by_the_prover_and_refused_by_the_verifier() {
+    for (params, i) in redrawn_challenge_cases() {
+        let (scheme, commitment, opening) = commitment_for(params);
+        let prefix = scheme.prefix(&commitment, b"ctx").unwrap();
+        let ring = scheme.ring().clone();
+        let (d, omega, eta) = (ring.degree(), scheme.checked.omega, scheme.checked.eta);
+        // The prover.
+        let proof = scheme
+            .prove_with_seed(&commitment, &opening, b"ctx", search_seed(i))
+            .unwrap();
+        scheme.verify(&commitment, &proof, b"ctx").unwrap();
+        let mut w1 = None;
+        scheme
+            .verify_core(&commitment, &proof, |x| {
+                w1 = Some(x.clone());
+                scheme.challenge(&prefix, x)
+            })
+            .unwrap();
+        let mut stream = scheme.challenge_stream(&prefix, &w1.unwrap()).unwrap();
+        let first = autostable(&mut stream, ring.clone(), omega).unwrap();
+        let second = autostable(&mut stream, ring.clone(), omega).unwrap();
+        assert!(!within_eta(&first, eta).unwrap(), "{d}");
+        assert!(within_eta(&second, eta).unwrap(), "{d}");
+        assert_eq!(proof.challenge, second, "{d}");
+        // A proof that answers the first draw of its stream.
+        let first_draw = |w1: &PolyVec| -> Result<Poly, Error> {
+            autostable(
+                &mut scheme.challenge_stream(&prefix, w1)?,
+                ring.clone(),
+                omega,
+            )
+        };
+        let (unfiltered, ()) = scheme
+            .prove_core(
+                &commitment,
+                &opening,
+                Caller::Opening,
+                &prefix.digest(),
+                &Zeroizing::new(search_seed(i)),
+                |_, _, w1| Ok((first_draw(w1)?, ())),
+            )
+            .unwrap();
+        assert!(scheme.challenge_well_formed(&unfiltered.challenge));
+        assert!(!within_eta(&unfiltered.challenge, eta).unwrap(), "{d}");
+        // A verifier that took the first draw would accept it; this one refuses it.
+        scheme
+            .verify_core(&commitment, &unfiltered, first_draw)
+            .unwrap();
+        assert_eq!(
+            scheme.verify(&commitment, &unfiltered, b"ctx"),
+            Err(Error::InvalidProof),
+            "{d}"
+        );
+    }
 }

@@ -1,12 +1,12 @@
-use crypto_bigint::{I256, U256};
+use crypto_bigint::{I256, U256, U1024};
 use jali::{
     Error,
     codec::{BitReader, BitWriter},
     math::Ring,
     rand::{
-        AesPrg, ByteStream, ShakePrg, autostable, binomial, gaussian,
+        AesPrg, ByteStream, ShakePrg, autostable, binomial, challenge, eta_norm_power, gaussian,
         reject::{self, Policy, Variance},
-        uniform, uniform_u256,
+        uniform, uniform_u256, within_eta,
     },
     transcript::Transcript,
 };
@@ -143,6 +143,50 @@ fn python_prg_sampler_and_codec_known_answers() {
 }
 
 #[test]
+fn python_challenge_known_answers() {
+    // Draws of `autostable` from the stream (seed, domain) with the exact operator-norm test:
+    // the l1 norm of (sigma_{-1}(c) c)^32 of every draw, rejected ones included, is the Python
+    // oracle's, every draw but the last exceeds eta^64, and `challenge` returns the last. Per
+    // degree: domains 0 and 1, and the first two domains whose first draw is rejected.
+    let kat = vectors();
+    let seed: [u8; 32] = hex::decode(kat["seed"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let items = kat["challenges"].as_array().unwrap();
+    let mut redrawn = 0;
+    for item in items {
+        let d = item["degree"].as_u64().unwrap() as usize;
+        let omega = i128::from(item["omega"].as_i64().unwrap());
+        let eta = item["eta"].as_u64().unwrap();
+        let domain: u64 = item["domain"].as_str().unwrap().parse().unwrap();
+        let ring = Ring::new(1099511627917, d).unwrap();
+        let norms: Vec<U1024> = item["norms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| U1024::from_str_radix_vartime(x.as_str().unwrap(), 10).unwrap())
+            .collect();
+        let mut stream = AesPrg::new(&seed, domain);
+        for (i, norm) in norms.iter().enumerate() {
+            let c = autostable(&mut stream, ring.clone(), omega).unwrap();
+            assert_eq!(eta_norm_power(&c).unwrap(), *norm, "{d} {domain} {i}");
+            assert_eq!(within_eta(&c, eta).unwrap(), i + 1 == norms.len());
+        }
+        let expected: Vec<i128> = item["challenge"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| i128::from(x.as_i64().unwrap()))
+            .collect();
+        let c = challenge(&mut AesPrg::new(&seed, domain), ring, omega, eta).unwrap();
+        assert_eq!(*c.coefficients_i128().unwrap(), expected, "{d} {domain}");
+        redrawn += usize::from(norms.len() > 1);
+    }
+    assert_eq!((items.len(), redrawn), (8, 4));
+}
+
+#[test]
 fn fixed_point_rejection_matches_300_bit_mpmath_including_boundaries() {
     let kat = vectors();
     for item in kat["exponentials"].as_array().unwrap() {
@@ -187,10 +231,139 @@ fn fixed_point_rejection_matches_300_bit_mpmath_including_boundaries() {
             uint(&item["norm"]),
             variance,
             uint(&item["m_scaled"]),
-            item["u"].as_str().unwrap().parse().unwrap(),
+            uint(&item["u"]),
         )
         .unwrap();
         assert_eq!(actual, item["accept"].as_bool().unwrap(), "{item}");
+    }
+}
+
+/// The largest coin that `accepts` takes, for a test that takes 0 and refuses `U256::MAX`, by
+/// bisection: a rejection test takes exactly the coins up to a threshold.
+fn largest_accepted(accepts: impl Fn(U256) -> bool) -> U256 {
+    let (mut low, mut high) = (U256::ZERO, U256::MAX);
+    while high.wrapping_sub(&low) > U256::ONE {
+        let mid = low.wrapping_add(&high.wrapping_sub(&low).shr_vartime(1));
+        if accepts(mid) {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
+/// `x` in floating point, for ratios that need about 50 bits.
+fn to_f64(x: &U256) -> f64 {
+    x.to_le_bytes()[..]
+        .iter()
+        .rev()
+        .fold(0.0, |acc, b| acc * 256.0 + f64::from(*b))
+}
+
+#[test]
+fn rejection_decides_with_every_bit_of_its_256_bit_coin() {
+    // A test takes exactly the coins up to its threshold, and the threshold is resolved to one
+    // unit of 2^-256: it lies anywhere modulo 2^128, so coins with the same high 128 bits are
+    // decided differently on either side of it. A test that read 128 bits of its coin, or
+    // compared only the coin's high half, would take whole blocks of 2^128 coins, and every
+    // threshold + 1 would be a multiple of 2^128 (for a genuine 256-bit test, with probability
+    // about 2^-128 per input). The lowest bit counts too: for each policy some threshold + 1
+    // is odd, which a test that dropped any low bits of its coin would never give. The
+    // bisection follows the test's own decisions, so the exact comparison (<=) is pinned by
+    // rejection_takes_exactly_the_coins_up_to_its_threshold instead.
+    let low_half = U256::ONE.shl_vartime(128).wrapping_sub(&U256::ONE);
+    let mut thresholds = 0;
+    let mut odd = [false; 3];
+    for t in [1u32, 8, 16] {
+        let variance = Variance::gaussian(t).unwrap();
+        let s = (961.0 * 4f64.powi(t as i32) / 400.0).sqrt();
+        let v = (0.8 * s).round() as i128;
+        for m in [2u8, 3, 5] {
+            let m_scaled = U256::from(m).shl_vartime(128);
+            for policy in [Policy::Standard, Policy::Rej2, Policy::Bimodal] {
+                for step in -8i128..=8 {
+                    let z = (step as f64 * s / 4.0).round() as i128;
+                    let (dot, norm) = reject::moments(&[z], &[v]).unwrap();
+                    let accepts =
+                        |u: U256| reject::accept(policy, dot, norm, variance, m_scaled, u).unwrap();
+                    if !accepts(U256::ZERO) || accepts(U256::MAX) {
+                        continue; // never accepted (Rej2, z*v < 0) or always accepted
+                    }
+                    let threshold = largest_accepted(accepts);
+                    let next = threshold.wrapping_add(&U256::ONE);
+                    let block = threshold.bitand(&low_half.not());
+                    assert!(
+                        accepts(threshold) && !accepts(next),
+                        "{t} {m} {policy:?} {z}"
+                    );
+                    assert!(
+                        next.bitand(&low_half) != U256::ZERO,
+                        "{t} {m} {policy:?} {z}"
+                    );
+                    // The block of 2^128 coins around the threshold: the start is taken, the
+                    // end refused.
+                    assert!(accepts(block), "{t} {m} {policy:?} {z}");
+                    assert!(!accepts(block.bitor(&low_half)), "{t} {m} {policy:?} {z}");
+                    odd[policy as usize] |= next.bitand(&U256::ONE) == U256::ONE;
+                    thresholds += 1;
+                }
+            }
+        }
+    }
+    assert!(thresholds > 200, "{thresholds}");
+    assert_eq!(odd, [true; 3]);
+}
+
+#[test]
+fn rejection_takes_exactly_the_coins_up_to_its_threshold() {
+    // Where 2^256 p is an integer, a test must take that coin and refuse the next, odd one: this
+    // pins the comparison (<=, not <) and the coin's lowest bit. With M = 2 and the exponent
+    // -k/(2n) (norm k, dot k, variance n/1), Rej_1 and Rej_2 accept exactly when
+    // u 2^129 <= e 2^192, with e = exp_negative(k, 2n): the threshold is e 2^63. With norm and
+    // dot 0, every policy accepts with probability 1/2 (a positive-exponent branch): the
+    // threshold is 2^255. The bimodal test's negative branch has an exact threshold where its
+    // denominator 1 + exp(-2|dot|/s^2) is exactly 1, which the 192-bit exponential gives from
+    // 2|dot|/s^2 >= 256 on: with variance 1, dot 128 and norm 254, p = 2 e^-1/M and the
+    // threshold is e 2^64, with e = exp_negative(2, 2).
+    let m_scaled = U256::from(2u8).shl_vartime(128);
+    let mut cases = Vec::new();
+    for (k, n) in [
+        (1u64, 7u64),
+        (5, 3),
+        (1000, 999),
+        (12345, 6789),
+        (3, 1 << 40),
+    ] {
+        let e = reject::exp_negative(U256::from(k), U256::from(2 * n)).unwrap();
+        let variance = Variance {
+            numerator: U256::from(n),
+            denominator: 1,
+        };
+        for policy in [Policy::Standard, Policy::Rej2] {
+            let moments = (I256::from(k as i64), U256::from(k));
+            cases.push((policy, moments, variance, e.shl_vartime(63)));
+        }
+    }
+    for t in [0u32, 1, 8] {
+        let variance = Variance::gaussian(t).unwrap();
+        for policy in [Policy::Standard, Policy::Rej2, Policy::Bimodal] {
+            let moments = (I256::ZERO, U256::ZERO);
+            cases.push((policy, moments, variance, U256::ONE.shl_vartime(255)));
+        }
+    }
+    let e = reject::exp_negative(U256::from(2u8), U256::from(2u8)).unwrap();
+    let variance = Variance {
+        numerator: U256::ONE,
+        denominator: 1,
+    };
+    let moments = (I256::from(128i64), U256::from(254u16));
+    cases.push((Policy::Bimodal, moments, variance, e.shl_vartime(64)));
+    for (policy, (dot, norm), variance, threshold) in cases {
+        let accepts = |u: U256| reject::accept(policy, dot, norm, variance, m_scaled, u).unwrap();
+        let case = format!("{policy:?} {dot:?} {norm:?} {variance:?}");
+        assert!(accepts(threshold), "{case}");
+        assert!(!accepts(threshold.wrapping_add(&U256::ONE)), "{case}");
     }
 }
 
@@ -213,16 +386,13 @@ fn rejection_at_the_sampler_variance_outputs_the_target_gaussian() {
             for step in -40i128..=40 {
                 let z = step * (3.0 * s2.sqrt()).round() as i128 / 40;
                 let (dot, norm) = reject::moments(&[z], &[v]).unwrap();
-                let accepts = |u| reject::accept(policy, dot, norm, variance, m_scaled, u).unwrap();
-                if !accepts(0) || accepts(u128::MAX) {
+                let accepts =
+                    |u: U256| reject::accept(policy, dot, norm, variance, m_scaled, u).unwrap();
+                if !accepts(U256::ZERO) || accepts(U256::MAX) {
                     continue; // never accepted (Rej2, z*v < 0) or always accepted (capped at 1)
                 }
-                let (mut low, mut high) = (0u128, u128::MAX);
-                while high - low > 1 {
-                    let mid = low + (high - low) / 2;
-                    if accepts(mid) { low = mid } else { high = mid }
-                }
-                let acceptance = (low as f64 + 1.0) / 2f64.powi(128);
+                let low = largest_accepted(accepts);
+                let acceptance = to_f64(&low.wrapping_add(&U256::ONE)) / 2f64.powi(256);
                 let (z, v) = (z as f64, v as f64);
                 let proposal = match policy {
                     Policy::Bimodal => (rho(z - v) + rho(z + v)) / 2.0,
@@ -263,7 +433,14 @@ fn rejection_with_a_scaled_variance_decides_alike_at_extreme_inputs() {
         for dot in dots {
             for norm in norms {
                 for m in ms {
-                    for u in [0, 1, u128::MAX / 2, u128::MAX] {
+                    for u in [
+                        U256::ZERO,
+                        U256::ONE,
+                        U256::from_u128(u128::MAX / 2),
+                        U256::from_u128(u128::MAX),
+                        U256::MAX.shr_vartime(1),
+                        U256::MAX,
+                    ] {
                         let decide = |variance| reject::accept(policy, dot, norm, variance, m, u);
                         for numerator in numerators {
                             let reference = decide(Variance {
@@ -532,7 +709,7 @@ fn proof_decoders_enforce_value_ranges() {
 
 #[test]
 fn gaussians_are_local_deterministic_and_have_expected_moments() {
-    for t in [0, 1, 3, 6, 24, 29, 60] {
+    for t in [0, 1, 2, 3, 6, 24, 29, 60] {
         let samples = gaussian(&mut AesPrg::new(&[7; 32], 19), t, 20000).unwrap();
         let sigma = 1.55 * (2.0f64).powi(t as i32);
         let mean = samples.iter().map(|x| *x as f64 / sigma).sum::<f64>() / samples.len() as f64;
@@ -548,6 +725,50 @@ fn gaussians_are_local_deterministic_and_have_expected_moments() {
         assert_eq!(
             gaussian(&mut AesPrg::new(&[7; 32], 19), t, 20000).unwrap(),
             samples
+        );
+    }
+}
+
+#[test]
+fn gaussians_follow_the_discrete_gaussian_at_small_widths() {
+    // Chi-square against D_{Z,sigma} at the widths whose paths differ: t = 0 (no offset and no
+    // Bernoulli test), t = 1 (no offset bits), t = 2 (one offset bit) and t = 3. One bin per
+    // value with an expected count of at least 5, the tails merged into the outermost bins.
+    // The streams are fixed, so the outcome is deterministic: |z| < 4 for
+    // z = (chi^2 - dof) / sqrt(2 dof). A wrong width exponent, offset or table changes the
+    // variance by a factor of 2 or more and fails this by far.
+    let n = 100_000;
+    for t in 0..=3u32 {
+        let samples = gaussian(&mut AesPrg::new(&[17; 32], u64::from(t)), t, n).unwrap();
+        let s2 = 961.0 * 4f64.powi(t as i32) / 400.0;
+        let rho = |x: i128| (-(x * x) as f64 / (2.0 * s2)).exp();
+        let reach = (20.0 * s2.sqrt()) as i128;
+        let total: f64 = (-reach..=reach).map(rho).sum();
+        let expected = |x: i128| n as f64 * rho(x) / total;
+        // The outermost bins are (-inf, -m] and [m, inf), m the last value with 5 expected.
+        let m = (0..reach)
+            .take_while(|x| expected(*x) >= 5.0)
+            .last()
+            .unwrap();
+        let bin = |x: i128| (x.clamp(-m, m) + m) as usize;
+        let mut observed = vec![0f64; 2 * m as usize + 1];
+        let mut want = vec![0f64; 2 * m as usize + 1];
+        for x in &samples {
+            observed[bin(*x)] += 1.0;
+        }
+        for x in -reach..=reach {
+            want[bin(x)] += expected(x);
+        }
+        let chi2: f64 = observed
+            .iter()
+            .zip(&want)
+            .map(|(o, e)| (o - e).powi(2) / e)
+            .sum();
+        let dof = (want.len() - 1) as f64;
+        let z = (chi2 - dof) / (2.0 * dof).sqrt();
+        assert!(
+            z.abs() < 4.0,
+            "t = {t}: chi^2 = {chi2} with {dof} degrees of freedom"
         );
     }
 }

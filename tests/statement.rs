@@ -165,10 +165,10 @@ fn named_quadratic_possession_with_degree_lowering_and_committed_carries() {
     hash.update(&bytes);
     let mut digest = [0u8; 32];
     hash.finalize_xof().read(&mut digest);
-    assert_eq!(bytes.len(), 18395);
+    assert_eq!(bytes.len(), 18370);
     assert_eq!(
         hex::encode(digest),
-        "c7811a80e70d3f1653090b9f14f80a2436fb3fac1244b30821a41b443c7245a0"
+        "e8e5b346c49763c5bcd924129c55501a4786a65e170865f8f0e2017885134b56"
     );
 }
 
@@ -403,10 +403,10 @@ fn a_quadratic_relation_modulo_a_200_bit_prime_lifts_to_a_241_bit_proof_modulus(
     hash.update(&bytes);
     let mut digest = [0u8; 32];
     hash.finalize_xof().read(&mut digest);
-    assert_eq!(bytes.len(), 40298);
+    assert_eq!(bytes.len(), 40284);
     assert_eq!(
         hex::encode(digest),
-        "2045b2eeb633fb55d7d4a09826997060a9ca5965dc7b48c7b061e90768ad74f4"
+        "7327d379269e58bd0b2d7837d94a1f9dcd2ecb9add47fe5ab9e629a426c1a637"
     );
     // A flipped bit of x breaks the relation modulo p, and the witness map refuses it.
     let mut wrong = witness.clone();

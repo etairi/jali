@@ -57,7 +57,7 @@ const SETS: [Set; 3] = [
         ],
         lifting: (11570096, 3476),
         previous: 2423973072749,
-        proof_bytes: 20334,
+        proof_bytes: 20318,
     },
     Set {
         name: "kyber1024-d128",
@@ -79,7 +79,7 @@ const SETS: [Set; 3] = [
         ],
         lifting: (11570096, 3476),
         previous: 2423890569493,
-        proof_bytes: 21824,
+        proof_bytes: 21818,
     },
     Set {
         name: "demo",
@@ -101,7 +101,7 @@ const SETS: [Set; 3] = [
         ],
         lifting: (12441688183056, 2897),
         previous: 1563674726743538501,
-        proof_bytes: 23975,
+        proof_bytes: 23991,
     },
 ];
 
