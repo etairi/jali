@@ -84,6 +84,8 @@ LIN_REQUIRED = ("statement_degree", "statement_modulus", "rows", "blocks")
 BLOCK_KEYS = ("name", "length", "norm", "placement")
 BLOCK_REQUIRED = ("name", "length", "norm")
 NORM_KINDS = ("l2_squared", "binary", "unbounded")
+# The exported norms with an exact Euclidean upper bound, second in their tuple.
+EXACT_NORMS = ("l2_squared", "l2_squared_range")
 PLACEMENTS = ("ajtai", "bdlop")
 REQUIREMENTS_STATEMENT_KEYS = ("source", "requirements", "statement_modulus", "blocks",
                                "movable", "export_modulus")
@@ -255,9 +257,23 @@ def lin_blocks(s):
 
 def _exported_norm(v, what):
     """A norm as `serde_json` writes `statement::Norm`: `{"l2_squared": B}`, `"binary"`,
-    `{"linf": b}`, `"unbounded"` or `{"linf_exact": b}`."""
+    `{"linf": b}`, `"unbounded"`, `{"linf_exact": b}` or
+    `{"l2_squared_range": {"min": a, "max": b}}` (as `("l2_squared_range", b, a)`: the upper
+    bound second, where every exact-norm block has it)."""
     if v in ("binary", "unbounded"):
         return (v,)
+    if isinstance(v, dict) and set(v) == {"l2_squared_range"}:
+        r = v["l2_squared_range"]
+        if not isinstance(r, dict) or set(r) != {"min", "max"}:
+            raise RequestError(f"{what}.l2_squared_range must be {{\"min\": a, \"max\": b}}")
+        lo = _int(r["min"], f"{what}.l2_squared_range.min")
+        hi = _int(r["max"], f"{what}.l2_squared_range.max")
+        if hi >= 1 << 64:
+            raise RequestError(f"{what}.l2_squared_range.max must fit a u64")
+        if lo == 0 or lo > hi:
+            raise RequestError(f"{what}: Statement::var refuses l2_squared_range with min 0 "
+                               "or min above max")
+        return ("l2_squared_range", hi, lo)
     if isinstance(v, dict) and len(v) == 1 and set(v) <= {"l2_squared", "linf", "linf_exact"}:
         (kind, bound), = v.items()
         bound = _int(bound, f"{what}.{kind}")
@@ -269,14 +285,15 @@ def _exported_norm(v, what):
             raise RequestError(f"{what}: Statement::var refuses linf_exact from 2^63 on")
         return (kind, bound)
     raise RequestError(f"{what} must be {{\"l2_squared\": B}}, \"binary\", {{\"linf\": b}}, "
-                       "\"unbounded\" or {\"linf_exact\": b}, as Rust writes a Norm")
+                       "\"unbounded\", {\"linf_exact\": b} or "
+                       "{\"l2_squared_range\": {\"min\": a, \"max\": b}}, as Rust writes a Norm")
 
 
 def share(norm, rows, degree):
     """A block's share of `alpha_squared` in the Ajtai part, for `rows` polynomials of the
     proof degree (`statement::BlockRequirement`): an exactly bounded block's rows are binary
     bits."""
-    if norm[0] == "l2_squared":
+    if norm[0] in EXACT_NORMS:
         return norm[1]
     if norm[0] in ("binary", "linf_exact"):
         return rows * degree
@@ -351,16 +368,19 @@ def _approx(v, req, d):
     return a
 
 
-def _check_blocks(req, blocks, has_linf):
-    """The blocks describe the requirements: they add up to the aggregate fields."""
+def _check_blocks(req, blocks, has_linf, d):
+    """The blocks describe the requirements: they add up to the aggregate fields. A two-sided
+    exact-norm block (`l2_squared_range`) adds one binary lower-bound row to the Ajtai part,
+    wherever it is placed, with a share of the proof degree `d` (`Statement::requirements`)."""
     ajtai = [b for b in blocks if b["placement"] == "ajtai"]
     bdlop = [b for b in blocks if b["placement"] == "bdlop"]
-    l2 = [b for b in blocks if b["norm"][0] == "l2_squared"]
+    l2 = [b for b in blocks if b["norm"][0] in EXACT_NORMS]
+    lower = sum(1 for b in blocks if b["norm"][0] == "l2_squared_range")
     linf_rows = sum(b["rows"] for b in blocks if b["norm"][0] == "linf")
-    got = {"m1": sum(b["rows"] for b in ajtai),
-           "alpha_squared": sum(b["share"] for b in ajtai),
+    got = {"m1": sum(b["rows"] for b in ajtai) + lower,
+           "alpha_squared": sum(b["share"] for b in ajtai) + lower * d,
            "n_bin": sum(b["rows"] for b in blocks
-                        if b["norm"][0] in ("binary", "linf_exact")),
+                        if b["norm"][0] in ("binary", "linf_exact")) + lower,
            "l2_rows": [b["rows"] for b in l2],
            "l2_bounds_squared": [b["norm"][1] for b in l2]}
     for key, value in got.items():
@@ -422,7 +442,7 @@ def requirements_of(r):
         if has_linf and blocks is None:
             raise RequestError("requirements with linf need the statement's blocks "
                                "(Statement::blocks) to tell the linf rows and bounds")
-        linf_rows = _check_blocks(req, blocks, has_linf) if blocks is not None else 0
+        linf_rows = _check_blocks(req, blocks, has_linf, d) if blocks is not None else 0
         betas = [b["norm"][1] for b in blocks or [] if b["norm"][0] == "linf"]
         # A constraint is lifted if there are range rows beyond the linf variables' own.
         lifted = req["n_prime"] > linf_rows

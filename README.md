@@ -160,9 +160,11 @@ There are no default features.
   $`\equiv5\pmod8`$. Binary, exact-norm and range proofs need a single prime. Factors below
   $`2^{64}`$ are proven prime (deterministic Miller–Rabin); larger factors pass the Baillie–PSW
   probable-prime test, which is not a proof of primality.
-- **Norms**: exact squared Euclidean (`Norm::L2Squared`), binary, exact $`\ell_\infty`$ through
-  bits (`Norm::LinfExact`), approximate $`\ell_\infty`$ (`Norm::Linf`, which a proof bounds only
-  by the extraction bound of the approximate range proof), or unbounded. Bounds fit `u64`.
+- **Norms**: exact squared Euclidean (`Norm::L2Squared`), also two-sided
+  (`Norm::L2SquaredRange`, $`\mathrm{min}\le\|s\|^2\le\mathrm{max}`$, for example $`s\neq0`$
+  with `min = 1`), binary, exact $`\ell_\infty`$ through bits (`Norm::LinfExact`), approximate
+  $`\ell_\infty`$ (`Norm::Linf`, which a proof bounds only by the extraction bound of the
+  approximate range proof), or unbounded. Bounds fit `u64`.
 - **Capacities**: Gaussian width exponents up to 100, derived response bounds below $`2^{128}`$,
   encoded proofs up to 16 MiB. Violations return errors.
 - **Arithmetic** is exact, with 62-bit RNS/NTT products over up to nine primes: two at

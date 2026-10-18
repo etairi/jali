@@ -173,8 +173,8 @@ the carries, `Compiled::prove` and `verify` handle typed proofs and `prove_bytes
 blocks; `lin::compile_placed` puts the blocks it names in the BDLOP part. The transcript of a
 compiled statement binds the whole compiled statement, the parameters, the public seed and the
 application context. `examples/possession.rs` is a complete cross-ring quadratic proof;
-`tests/statement.rs`, `tests/compiler_paths.rs`, `tests/linf.rs`, `tests/linf_exact.rs` and
-`tests/subring.rs` cover the other paths.
+`tests/statement.rs`, `tests/compiler_paths.rs`, `tests/linf.rs`, `tests/linf_exact.rs`,
+`tests/l2_range.rs` and `tests/subring.rs` cover the other paths.
 
 ## Bounds in $`\ell_\infty`$
 
@@ -212,6 +212,33 @@ $`q\approx2^{41.1}`$. Use `Norm::Linf` where the relaxed bound suffices and the 
 not enter products of lifted constraints; use `Norm::LinfExact` where the exact bound matters,
 at a cost of $`\mathrm{bitlen}(2\beta)`$ committed bit polynomials per committed polynomial.
 Carries and quotients always stay in the approximate block.
+
+## Two-sided Euclidean bounds
+
+The exact-norm proof of LNP22 bounds a block from above: it commits the bits of the slack
+$`B-\|s\|^2`$ and proves $`\|s\|^2+\sum_j2^jx_j=B`$, so $`s=0`$ meets every such bound.
+`Norm::L2SquaredRange { min, max }`, $`1\le\mathrm{min}\le\mathrm{max}<2^{64}`$, adds the lower
+bound $`\|s\|^2\ge\mathrm{min}`$, for example $`s\neq0`$ with `min = 1`, as some lattice
+signatures require of the preimage they certify. The upper bound is the exact-norm proof of
+`Norm::L2Squared(max)`, unchanged. For the lower bound the compiler commits one more binary
+proof-ring polynomial $`y`$, at the end of the Ajtai part whatever the block's placement, and
+proves the evaluation equation
+
+```math
+\mathrm{ct}\Big(\sum_c\sigma(s_c)\,s_c\Big)-\sum_bc_by_b-\mathrm{min}=0
+```
+
+at the proof modulus, over the block's committed components $`s_c`$ and the weights $`c_b`$ of
+$`W=\mathrm{max}-\mathrm{min}`$ ($`c_b=\lfloor W/2^b\rfloor-\lfloor W/2^{b+1}\rfloor`$,
+$`b<\mathrm{bitlen}(W)`$, the weights of `Norm::LinfExact` for another $`B`$), whose subset sums
+are exactly $`[0,W]`$. The witness map refuses a block outside $`[\mathrm{min},\mathrm{max}]`$
+and writes the greedy bits of $`\|s\|^2-\mathrm{min}`$ into the first coefficients of $`y`$.
+`Requirements` counts the block as an exact-norm block with bound `max`, and $`y`$ as one more row
+of `m1` and of `n_bin`, with a share of $`d`$ in `alpha_squared`; `Statement::blocks` exports the
+block's own rows, so a tool that moves it between the parts leaves $`y`$ in the Ajtai part.
+`Compiled::extraction_bound` reports `Extraction::L2SquaredRange { min, max }`. The cost is that
+polynomial and one evaluation equation; statements without such a block compile exactly as
+before.
 
 ## Subring variables
 
@@ -295,6 +322,16 @@ the last. (Plain powers of two are wrong: for $`B=10`$ they reach 15.) Extractio
 bits (LNP22 Lemma 5.2 with the binary lifting bound), so each extracted coefficient
 $`\sum_bc_b\bar x_b-\beta`$ is an integer in $`[-\beta,\beta]`$; a library test checks the
 weights exhaustively for $`B\le2^{12}`$.
+
+**Lower Euclidean bounds.** For a `Norm::L2SquaredRange` block, extraction gives
+$`0\le\|\bar s\|^2\le\mathrm{max}`$ (the exact-norm proof) and a binary $`\bar y`$, so
+$`0\le\sum_bc_b\bar y_b\le W`$, and the evaluation equation holds modulo $`q`$. The integer
+$`\|\bar s\|^2-\sum_bc_b\bar y_b-\mathrm{min}`$ then lies in
+$`[-\mathrm{max},\mathrm{max}-\mathrm{min}]`$, and $`\mathrm{max}<q`$ (which `compile` checks,
+and which the exact-norm lifting bound $`q>3\,\mathrm{max}+\cdots`$ of `TboxParams::check`
+implies) makes it zero: $`\|\bar s\|^2=\mathrm{min}+\sum_bc_b\bar y_b\ge\mathrm{min}`$. The
+committed components are the block's integers, as for the upper bound, so the bound holds for
+the extracted block.
 
 ## Application context
 

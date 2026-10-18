@@ -56,6 +56,19 @@ parameter checks and four parameter sets.
   not give correlated masks, nor coins read at other offsets
   ([security notes](docs/security.md#randomness-and-seeds)).
 
+### Added
+
+- `statement::Norm::L2SquaredRange { min, max }`: a two-sided exact Euclidean bound
+  $`\mathrm{min}\le\|s\|^2\le\mathrm{max}`$, $`1\le\mathrm{min}\le\mathrm{max}`$, for example
+  $`s\neq0`$ with `min = 1`. The upper bound is the exact-norm proof of `Norm::L2Squared(max)`;
+  the compiler adds one binary proof-ring polynomial in the Ajtai part and one evaluation
+  equation for the lower bound ([protocol notes](docs/protocol.md#two-sided-euclidean-bounds)),
+  and `Compiled::extraction_bound` reports `Extraction::L2SquaredRange`. In JSON,
+  `{"l2_squared_range": {"min": a, "max": b}}`, which the parameter tool reads. Statements
+  without such a block compile, prove and encode exactly as before, and every parameter set,
+  fixture and pinned proof is unchanged. `Norm` and `Extraction` gain a variant each, which an
+  exhaustive `match` outside the crate must cover.
+
 ### Changed
 
 - The toolbox's transcript tag is `LNP22-toolbox-v3`. Masks and challenges change, and with
