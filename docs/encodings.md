@@ -91,9 +91,10 @@ In `Requirements`, JSON leaves out the optional fields when they are absent or e
 `lifting`, a list of objects with `modulus`, `exact`, `linear` and `quadratic`, and
 `extraction_limit`, `null` or a value). `Statement::blocks` exports a list of
 `BlockRequirement`: objects with `name`, `rows`, `norm` and `placement`, where a `Norm` is
-`{"l2_squared": B}`, `"binary"`, `{"linf": β}`, `"unbounded"` or `{"linf_exact": β}` and a
-`Placement` is `"ajtai"` or `"bdlop"`. Formats that read by position write a `Norm` as its
-variant index, 0 to 4 in the order just listed, and its bound.
+`{"l2_squared": B}`, `"binary"`, `{"linf": β}`, `"unbounded"`, `{"linf_exact": β}` or
+`{"l2_squared_range": {"min": a, "max": b}}` and a `Placement` is `"ajtai"` or `"bdlop"`.
+Formats that read by position write a `Norm` as its variant index, 0 to 5 in the order just
+listed, and its bounds (`min`, then `max`, for the last).
 
 ## Uniform sampling modulo large moduli
 

@@ -3,7 +3,9 @@
 //! quadratic relations and of constant-coefficient clauses, packing the latter $`d`$ to a
 //! proof-ring polynomial. Each constraint has its own source modulus, that of the ring its form
 //! is built over. Blocks bounded in $`\ell_\infty`$ share the one approximate range proof with
-//! the carries (LNP22 §5.1), or are bounded exactly through bits ([`Norm::LinfExact`]). A block
+//! the carries (LNP22 §5.1), or are bounded exactly through bits ([`Norm::LinfExact`]). A
+//! Euclidean bound may be two-sided ([`Norm::L2SquaredRange`]), for one more committed binary
+//! polynomial and one equation. A block
 //! may hold elements of a subring of smaller degree ([`Statement::var_subring`]), of which only
 //! the nonzero components are committed. Each block sits in the part of the commitment its
 //! declaration names ([`Placement`]). Parameters must be generated for the resulting shape and
@@ -60,8 +62,29 @@ pub enum Norm {
     /// committed. A proof bounds an extracted coefficient by $`\beta`$ exactly
     /// ([`Extraction::LinfExact`]), and every soundness check uses $`\beta`$. Each committed
     /// proof-ring polynomial of the block becomes $`n`$ binary ones: 2 for $`\beta=1`$, 11 for
-    /// $`\beta=512`$. (Last, so that the serde variant indices of the others stay.)
+    /// $`\beta=512`$. (After the earlier variants, so that their serde variant indices stay.)
     LinfExact(u64),
+    /// Exact squared Euclidean bounds on both sides, $`\mathrm{min}\le\|s\|^2\le\mathrm{max}`$
+    /// with $`1\le\mathrm{min}\le\mathrm{max}<2^{64}`$; `min = 1` proves $`s\neq0`$. The upper
+    /// bound is the exact-norm proof of [`Norm::L2Squared`]`(max)`. For the lower bound the
+    /// compiler commits one more binary proof-ring polynomial $`y`$ in the Ajtai part and proves
+    /// one constant-coefficient equation at the proof modulus,
+    /// $`\mathrm{ct}\big(\sum_c\sigma(s_c)s_c\big)-\sum_bc_by_b-\mathrm{min}=0`$, over the
+    /// committed components $`s_c`$ of the block, with the weights $`c_b`$ of
+    /// $`W=\mathrm{max}-\mathrm{min}`$ of [`Norm::LinfExact`], whose subset sums are exactly
+    /// $`[0,W]`$. A proof bounds an extracted block by both exactly
+    /// ([`Extraction::L2SquaredRange`]): extraction gives $`0\le\|s\|^2\le\mathrm{max}`$ and a
+    /// binary $`y`$, so the integer value of the equation lies in
+    /// $`[-\mathrm{max},\mathrm{max}-\mathrm{min}]`$ and vanishes, as $`\mathrm{max}<q`$, which
+    /// `compile` checks and the exact-norm lifting bound of `TboxParams::check` implies. In JSON,
+    /// `{"l2_squared_range": {"min": a, "max": b}}`. (Last, so that the serde variant indices of
+    /// the others stay.)
+    L2SquaredRange {
+        /// The lower bound on $`\|s\|^2`$, at least 1.
+        min: u64,
+        /// The upper bound on $`\|s\|^2`$, at least `min`.
+        max: u64,
+    },
 }
 
 /// The part of the ABDLOP commitment that holds a block (LNP22 §3.1, Fig. 4).
@@ -131,22 +154,25 @@ pub struct BlockRequirement {
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct Requirements {
     /// Witness polynomials of the Ajtai part in the proof ring, before slack insertion: the
-    /// rows of the bounded blocks placed there ([`Placement`], [`BlockRequirement::rows`]).
+    /// rows of the bounded blocks placed there ([`Placement`], [`BlockRequirement::rows`]), and
+    /// one lower-bound polynomial per [`Norm::L2SquaredRange`] block, wherever that block is
+    /// placed.
     pub m1: usize,
     /// BDLOP message polynomials: bounded blocks placed there, unbounded blocks and committed
     /// carries: $`d'/d`$ for each lifted quadratic `eq_mod_p`, and $`\lceil m/d\rceil`$ for the
     /// $`m`$ lifted constant-coefficient clauses together, which share packed carry
     /// polynomials ([`Statement::const_coeff_zero`]).
     pub l: usize,
-    /// Sufficient squared bound on the Ajtai part.
+    /// Sufficient squared bound on the Ajtai part, $`d`$ for each lower-bound polynomial among
+    /// them.
     #[cfg_attr(feature = "serde", serde(with = "crate::json::u128_field"))]
     pub alpha_squared: u128,
-    /// Binary selector rows: those of the binary blocks and the bits of the
-    /// [`Norm::LinfExact`] blocks.
+    /// Binary selector rows: those of the binary blocks, the bits of the [`Norm::LinfExact`]
+    /// blocks, and the lower-bound polynomials of the [`Norm::L2SquaredRange`] blocks.
     pub n_bin: usize,
-    /// Exact-norm selector rows per named block.
+    /// Exact-norm selector rows per named block, a [`Norm::L2SquaredRange`] block's among them.
     pub l2_rows: Vec<usize>,
-    /// Exact squared bounds.
+    /// Exact squared bounds: the upper bound `max` of a [`Norm::L2SquaredRange`] block.
     #[cfg_attr(feature = "serde", serde(with = "crate::json::u64_list"))]
     pub l2_bounds_squared: Vec<u64>,
     /// Approximate-range rows: $`d'/d`$ for the implicit quotients or committed carries of each
@@ -351,8 +377,12 @@ fn bit_count(beta: u64) -> usize {
 /// most $`a`$, and a remainder below $`c_b\le a+1`$ is at most $`a`$; after the last weight
 /// the remainder is 0. Plain powers of two would be wrong: for $`B=10`$ they reach 15.
 fn weights(beta: u64) -> Vec<u64> {
-    let b = 2 * beta;
-    (0..bit_count(beta) as u32)
+    cover_weights(2 * beta)
+}
+/// The weights $`c_b=\lfloor B/2^b\rfloor-\lfloor B/2^{b+1}\rfloor`$, $`b<\mathrm{bitlen}(B)`$,
+/// whose subset sums are exactly $`[0,B]`$ ([`weights`]); none for $`B=0`$.
+fn cover_weights(b: u64) -> Vec<u64> {
+    (0..u64::BITS - b.leading_zeros())
         .map(|i| (b >> i) - b.checked_shr(i + 1).unwrap_or(0))
         .collect()
 }
@@ -534,7 +564,7 @@ impl Statement {
         for var in &self.variables {
             let rows = var.rows(proof_degree);
             match var.norm {
-                Norm::L2Squared(bound) => {
+                Norm::L2Squared(bound) | Norm::L2SquaredRange { max: bound, .. } => {
                     out.l2_rows.push(rows);
                     out.l2_bounds_squared.push(bound);
                 }
@@ -559,6 +589,18 @@ impl Statement {
                 out.l += rows;
             }
         }
+        // One binary lower-bound polynomial per two-sided Euclidean block, in the Ajtai part
+        // whatever the block's placement: a binary row with a share of d.
+        let ranges = self
+            .variables
+            .iter()
+            .filter(|v| matches!(v.norm, Norm::L2SquaredRange { .. }))
+            .count();
+        out.m1 += ranges;
+        out.n_bin += ranges;
+        out.alpha_squared = ((ranges * proof_degree) as u128)
+            .checked_add(out.alpha_squared)
+            .ok_or(Error::Overflow)?;
         // Every constraint not at the proof modulus is lifted; the largest F per modulus.
         let mut lifted = BTreeMap::<U256, U256>::new();
         let mut linf_lifting = Vec::new();
@@ -658,7 +700,9 @@ impl Statement {
                 let fits = match norms[usize::from(i)] {
                     Norm::Binary => true,
                     // Every value is at most isqrt(B) in absolute value: 2 isqrt(B) < p.
-                    Norm::L2Squared(b) => U256::from_u64(2 * b.isqrt()) < p,
+                    Norm::L2Squared(b) | Norm::L2SquaredRange { max: b, .. } => {
+                        U256::from_u64(2 * b.isqrt()) < p
+                    }
                     // Every extracted value is at most beta < 2^63: 2 beta < p, strictly, as for
                     // an even p the bits also encode -p/2, which a witness reads as p/2.
                     Norm::LinfExact(beta) => U256::from_u64(2 * beta) < p,
@@ -684,7 +728,9 @@ impl Statement {
     fn alpha_share(&self, var: &Variable) -> Result<u128, Error> {
         let coefficients = (var.count * var.degree) as u128;
         match var.norm {
-            Norm::L2Squared(bound) => Ok(u128::from(bound)),
+            Norm::L2Squared(bound) | Norm::L2SquaredRange { max: bound, .. } => {
+                Ok(u128::from(bound))
+            }
             Norm::Binary => Ok(coefficients),
             // count * d_v coefficients of absolute value at most beta.
             Norm::Linf(beta) => u128::from(beta)
@@ -788,6 +834,7 @@ impl Statement {
             || count == 0
             || matches!(norm, Norm::Linf(0) | Norm::LinfExact(0))
             || matches!(norm, Norm::LinfExact(beta) if beta >= 1 << 63)
+            || matches!(norm, Norm::L2SquaredRange { min, max } if min == 0 || min > max)
             || !degree.is_power_of_two()
             || !(64..=self.ring.degree()).contains(&degree)
             || (norm == Norm::Unbounded && placement == Placement::Ajtai)
@@ -965,8 +1012,22 @@ pub struct Compiled {
     layout: Vec<Lowered>,
     bounded: usize,
     carries: Vec<Carry>,
+    /// The lower-bound polynomial of each [`Norm::L2SquaredRange`] block.
+    ranges: Vec<LowerBound>,
     /// `approx_extraction_bound` of the parameters.
     extraction: u128,
+}
+
+/// The committed lower-bound polynomial $`y`$ of a [`Norm::L2SquaredRange`] block: its bits are
+/// those of $`\|s\|^2-\mathrm{min}`$ for the weights of $`\mathrm{max}-\mathrm{min}`$.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LowerBound {
+    /// The variable's index among the declared variables.
+    variable: usize,
+    /// Its proof-ring polynomial, in the Ajtai part.
+    row: usize,
+    min: u64,
+    max: u64,
 }
 
 /// Where the committed carries of a lifted constraint sit among the proof-ring messages.
@@ -1011,6 +1072,14 @@ pub enum Extraction {
     LinfExact(u64),
     /// No bound: values modulo the proof modulus.
     Unbounded,
+    /// $`\mathrm{min}\le\|s\|^2\le\mathrm{max}`$, the declared bounds of a
+    /// [`Norm::L2SquaredRange`] variable, both extracted exactly.
+    L2SquaredRange {
+        /// The lower bound.
+        min: u64,
+        /// The upper bound.
+        max: u64,
+    },
 }
 
 /// Bounds are computed exactly in 1024 bits: squared norms of 256-bit coefficients over 1024
@@ -1090,7 +1159,9 @@ fn form_bound(statement: &Statement, form: &QuadEq) -> Result<FormBound, Error> 
     for var in &statement.variables {
         let degree = Bound::from_u64(var.degree as u64);
         let b = match var.norm {
-            Norm::L2Squared(b) => Kind::Squared(Bound::from_u64(b)),
+            Norm::L2Squared(b) | Norm::L2SquaredRange { max: b, .. } => {
+                Kind::Squared(Bound::from_u64(b))
+            }
             Norm::Binary => Kind::Squared(Bound::from_u64((var.count * var.degree) as u64)),
             Norm::Linf(beta) => Kind::Linf(Bound::from_u64(beta), degree),
             Norm::LinfExact(beta) => Kind::Exact(Bound::from_u64(beta), degree),
@@ -1337,6 +1408,7 @@ fn compile(source: Statement, params: TboxParams) -> Result<Compiled, Error> {
     // LinfExact, each as its bits. `requirements` checked that d divides d_v.
     let mut layout = vec![Lowered::Zero; source.count * k];
     let (mut bounded, mut total) = (0, 0);
+    let mut ranges = Vec::new();
     for (part, belongs) in parts.into_iter().enumerate() {
         for var in source.variables.iter().filter(|v| belongs(v)) {
             let stride = source.ring.degree() / var.degree;
@@ -1362,6 +1434,19 @@ fn compile(source: Statement, params: TboxParams) -> Result<Compiled, Error> {
             }
         }
         if part == 0 {
+            // The lower-bound polynomial of each two-sided Euclidean block, in declaration
+            // order, after the Ajtai part's blocks (Requirements::m1).
+            for (variable, var) in source.variables.iter().enumerate() {
+                if let Norm::L2SquaredRange { min, max } = var.norm {
+                    ranges.push(LowerBound {
+                        variable,
+                        row: total,
+                        min,
+                        max,
+                    });
+                    total += 1;
+                }
+            }
             bounded = total;
         }
     }
@@ -1433,7 +1518,10 @@ fn compile(source: Statement, params: TboxParams) -> Result<Compiled, Error> {
     for var in &source.variables {
         let indices = committed(&layout, var, k);
         match var.norm {
-            Norm::L2Squared(bound_squared) => statement.l2.push(L2Block {
+            Norm::L2Squared(bound_squared)
+            | Norm::L2SquaredRange {
+                max: bound_squared, ..
+            } => statement.l2.push(L2Block {
                 map: selector(&ring, &indices, bounded, params.l)?,
                 bound_squared,
             }),
@@ -1442,6 +1530,8 @@ fn compile(source: Statement, params: TboxParams) -> Result<Compiled, Error> {
             Norm::Linf(_) | Norm::Unbounded => {}
         }
     }
+    // The lower-bound polynomials are binary, after the declared binary rows.
+    binary.extend(ranges.iter().map(|r| r.row));
     if !binary.is_empty() {
         statement.binary = Some(selector(&ring, &binary, bounded, params.l)?);
     }
@@ -1514,6 +1604,29 @@ fn compile(source: Statement, params: TboxParams) -> Result<Compiled, Error> {
                 statement.quadratic.push(equation);
             }
         }
+    }
+    // The lower bound of each two-sided Euclidean block, after the constraints' equations: the
+    // evaluation equation ct(sum_c sigma(s_c) s_c) - sum_b c_b y_b - min = 0 at the proof
+    // modulus, over the block's committed components s_c and its lower-bound polynomial y
+    // (Norm::L2SquaredRange; the soundness argument is in the docs of Statement::compile).
+    for range in &ranges {
+        if U256::from_u64(range.max) >= ring.modulus() {
+            return Err(Error::Parameter("exact norm lifting bound"));
+        }
+        let mut equation = QuadEq::zero(ring.clone(), dim)?;
+        for index in committed(&layout, &source.variables[range.variable], k) {
+            let component = term(&ring, dim, index, one.clone())?;
+            equation.add_product_affine(&component.conjugate()?, &component)?;
+        }
+        // ct(sigma(W) y) = sum_b W_b y_b for W = -sum_b c_b X^b.
+        let mut weights = vec![0i128; params.degree];
+        for (weight, c) in weights.iter_mut().zip(cover_weights(range.max - range.min)) {
+            *weight = -i128::from(c);
+        }
+        let weights = Poly::new(ring.clone(), weights)?.auto();
+        equation.add_assign(&term(&ring, dim, range.row, weights)?)?;
+        equation.r0 = Poly::constant(ring.clone(), -i128::from(range.min));
+        statement.evaluation.push(equation);
     }
     // Each coefficient of an ℓ∞ variable is a row of the approximate range proof, after the
     // carries and quotients: a selector, as any affine image of the witness can be.
@@ -1589,6 +1702,7 @@ fn compile(source: Statement, params: TboxParams) -> Result<Compiled, Error> {
         layout,
         bounded,
         carries,
+        ranges,
         extraction,
     })
 }
@@ -1787,6 +1901,7 @@ impl Compiled {
             .ok_or(Error::Index)?;
         Ok(match var.norm {
             Norm::L2Squared(b) => Extraction::L2Squared(b),
+            Norm::L2SquaredRange { min, max } => Extraction::L2SquaredRange { min, max },
             Norm::Binary => Extraction::Binary,
             Norm::Linf(_) => Extraction::Linf(self.extraction),
             Norm::LinfExact(beta) => Extraction::LinfExact(beta),
@@ -1840,6 +1955,14 @@ impl Compiled {
                 Norm::L2Squared(b) if block_vec.norm_squared()? > U256::from(b) => {
                     return Err(Error::Witness);
                 }
+                Norm::L2SquaredRange { min, max }
+                    if {
+                        let norm = block_vec.norm_squared()?;
+                        norm < U256::from(min) || norm > U256::from(max)
+                    } =>
+                {
+                    return Err(Error::Witness);
+                }
                 Norm::Binary
                     if block
                         .iter()
@@ -1888,6 +2011,23 @@ impl Compiled {
                     }
                 }
             }
+        }
+        // The lower-bound polynomials: the greedy bits of ||s||^2 - min for the weights of
+        // max - min, in their first coefficients (the norm of each block was checked above).
+        for range in &self.ranges {
+            let name = &self.source.variables[range.variable].name;
+            let block = witness.get(name).ok_or(Error::Witness)?;
+            let norm = PolyVec::new(self.source.ring.clone(), block.clone())?.norm_squared()?;
+            // At most max < 2^64.
+            let norm = u64::try_from(int::low_u128(&norm)).map_err(|_| Error::Witness)?;
+            let weights = cover_weights(range.max - range.min);
+            let mut bits = Zeroizing::new(vec![0u64; weights.len()]);
+            digits(norm - range.min, &weights, &mut bits);
+            let mut coefficients = Zeroizing::new(vec![0i128; self.ring.degree()]);
+            for (c, bit) in coefficients.iter_mut().zip(bits.iter()) {
+                *c = i128::from(*bit);
+            }
+            mapped[range.row] = Poly::new(self.ring.clone(), std::mem::take(&mut *coefficients))?;
         }
         let original_vec = PolyVec::new(self.source.ring.clone(), original.clone())?;
         // The witness over each other constraint ring: its integers reduced modulo p_j.

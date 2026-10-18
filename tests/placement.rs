@@ -161,7 +161,7 @@ fn requirements_and_blocks_follow_the_placement() {
         );
         // What a tool recomputes from the blocks: rows and shares of the Ajtai part.
         let share = |b: &BlockRequirement| match b.norm {
-            Norm::L2Squared(bound) => u128::from(bound),
+            Norm::L2Squared(bound) | Norm::L2SquaredRange { max: bound, .. } => u128::from(bound),
             Norm::Binary | Norm::LinfExact(_) => b.rows as u128 * 64,
             Norm::Linf(beta) => b.rows as u128 * 64 * u128::from(beta).pow(2),
             Norm::Unbounded => 0,
