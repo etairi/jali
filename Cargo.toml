@@ -31,7 +31,8 @@ include = [
 aes = { version = "0.9", features = ["zeroize"] }
 ctr = { version = "0.10", features = ["zeroize"] }
 shake = { version = "0.1", features = ["zeroize"] }
-crypto-bigint = { version = "0.7", features = ["zeroize"] }
+# 0.7.10 or later: 0.7.0 to 0.7.8 are yanked, and 0.7.6 fixed carry and timing bugs.
+crypto-bigint = { version = "0.7.10", features = ["zeroize"] }
 crypto-primes = { version = "0.7", default-features = false }
 zeroize = { version = "1.9", features = ["derive"] }
 rand_core = "0.10"
