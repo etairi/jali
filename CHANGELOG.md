@@ -3,7 +3,7 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
-## [Unreleased]
+## [0.1.0] - 2026-11-02
 
 First release: the LNP22 proof system (Lyubashevsky, Nguyen and Plançon, CRYPTO 2022, ePrint
 2022/284), with ABDLOP commitments, quadratic and evaluation proofs, binary, exact-norm and
@@ -113,3 +113,5 @@ parameter checks and four parameter sets.
   of entries. Collected from their flattened rows, the buffer grew by doubling: for a binary
   block of 140 polynomials over 140 bounded ones, to room for 35,840 entries for its 19,600, or
   1,146,880 bytes for 627,200 on 64-bit targets. The matrices, and so the proofs, do not change.
+- `crypto-bigint` 0.7.10 or later. Every release from 0.7.0 to 0.7.8 is yanked, and 0.7.6
+  fixed carry and timing bugs. Transcripts, proofs and known-answer vectors do not change.

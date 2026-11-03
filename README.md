@@ -10,7 +10,7 @@ several moduli, $`\ell_\infty`$ bounds and subring variables.
 
 ## Status
 
-Jali is research code, version 0.1, not yet published on crates.io.
+Jali is research code, version 0.1.
 
 - **Not audited.** No independent review of the code or of its parameters has taken place.
 - **No constant-time guarantee.** Arithmetic, sampling and rejection run in variable time, so
@@ -37,14 +37,12 @@ details, including what the Fiat–Shamir proofs do and do not guarantee.
 
 ## Installation
 
-Until Jali is on crates.io, use it as a git or path dependency. It needs Rust 1.95 or later
-(edition 2024).
+Jali is on [crates.io](https://crates.io/crates/jali). It needs Rust 1.95 or later (edition
+2024).
 
 ```toml
 [dependencies]
-jali = { git = "https://github.com/etairi/jali", features = ["serde"] }
-# For reproducible builds, pin a commit: rev = "<commit>".
-# Or a local checkout: jali = { path = "../jali" }
+jali = { version = "0.1", features = ["serde"] }
 ```
 
 The crate forbids `unsafe` code and has no C dependencies.
