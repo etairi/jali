@@ -6,7 +6,7 @@ proofs of quadratic relations with automorphisms, evaluation proofs, and the com
 with binary, exact Euclidean-norm and approximate range proofs. On top of it, a statement
 compiler turns relations over other polynomial rings and moduli into those proofs: named
 variables with norm bounds, degree lowering, modulus lifting with carries, constraints modulo
-several moduli, $`\ell_\infty`$ bounds and subring variables.
+several moduli, ℓ<sub>∞</sub> bounds and subring variables.
 
 ## Status
 
@@ -29,7 +29,7 @@ Jali is research code, version 0.1.
 - **Context binding.** Every proof takes an application `context: &[u8]` and verifies only under
   the same bytes.
 - **Parameters.** The shipped parameter sets meet a root-Hermite-factor criterion
-  ($`\delta\le1.0044`$, about 101 bits under core-SVP), not 128 bits. Hardness figures are
+  (*δ* ≤ 1.0044, about 101 bits under core-SVP), not 128 bits. Hardness figures are
   heuristic estimates.
 
 The [security notes](https://github.com/etairi/jali/blob/main/docs/security.md) give the
@@ -75,9 +75,9 @@ fn main() -> Result<(), Error> {
 A `statement::Statement` declares named variables with norm bounds over a statement ring and
 adds constraints built from affine and quadratic forms. `compile` checks the statement against a
 parameter set and returns a `Compiled` statement that proves and verifies. This example proves
-knowledge of a short $`w`$ with $`Aw+t=0`$ over $`\mathbb Z_{3329}[X]/(X^{256}+1)`$, with $`A`$
-of size $`4\times8`$ and $`\|w\|^2\le2950`$, the shape of a Kyber-1024 key pair, for which the
-crate ships parameters.
+knowledge of a short **w** with **Aw** + **t** = **0** over
+ℤ<sub>3329</sub>\[*X*\]/(*X*<sup>256</sup> + 1), with **A** of size 4 × 8 and ‖**w**‖<sup>2</sup> ≤ 2950,
+the shape of a Kyber-1024 key pair, for which the crate ships parameters.
 
 ```rust
 use jali::{
@@ -152,33 +152,33 @@ There are no default features.
 
 ## Supported parameters and limits
 
-- **Statement rings** $`\mathbb Z_p[X]/(X^{d'}+1)`$: any modulus $`2\le p<2^{256}`$ and
-  power-of-two degrees $`64\le d'\le1024`$. Each constraint may have its own modulus.
-- **Proof rings**: degree 64 or 128, with a modulus $`q<2^{256}`$ of one or two prime factors
-  $`\equiv5\pmod8`$. Binary, exact-norm and range proofs need a single prime. Factors below
-  $`2^{64}`$ are proven prime (deterministic Miller–Rabin); larger factors pass the Baillie–PSW
+- **Statement rings** ℤ<sub>*p*</sub>\[*X*\]/(*X*<sup>*d*′</sup> + 1): any modulus 2 ≤ *p* < 2<sup>256</sup>
+  and power-of-two degrees 64 ≤ *d*′ ≤ 1024. Each constraint may have its own modulus.
+- **Proof rings**: degree 64 or 128, with a modulus *q* < 2<sup>256</sup> of one or two prime
+  factors ≡ 5 (mod 8). Binary, exact-norm and range proofs need a single prime. Factors below
+  2<sup>64</sup> are proven prime (deterministic Miller–Rabin); larger factors pass the Baillie–PSW
   probable-prime test, which is not a proof of primality.
 - **Norms**: exact squared Euclidean (`Norm::L2Squared`), also two-sided
-  (`Norm::L2SquaredRange`, $`\mathrm{min}\le\|s\|^2\le\mathrm{max}`$, for example $`s\neq0`$
-  with `min = 1`), binary, exact $`\ell_\infty`$ through bits (`Norm::LinfExact`), approximate
-  $`\ell_\infty`$ (`Norm::Linf`, which a proof bounds only by the extraction bound of the
+  (`Norm::L2SquaredRange`, min ≤ ‖**s**‖<sup>2</sup> ≤ max, for example **s** ≠ **0** with
+  `min = 1`), binary, exact ℓ<sub>∞</sub> through bits (`Norm::LinfExact`), approximate
+  ℓ<sub>∞</sub> (`Norm::Linf`, which a proof bounds only by the extraction bound of the
   approximate range proof), or unbounded. Bounds fit `u64`.
-- **Capacities**: Gaussian width exponents up to 100, derived response bounds below $`2^{128}`$,
-  encoded proofs up to 16 MiB. Violations return errors.
+- **Capacities**: Gaussian width exponents up to 100, derived response bounds below
+  2<sup>128</sup>, encoded proofs up to 16 MiB. Violations return errors.
 - **Arithmetic** is exact, with 62-bit RNS/NTT products over up to nine primes: two at
-  $`q\approx2^{40}`$, eight or nine at $`q\approx2^{240}`$.
+  *q* ≈ 2<sup>40</sup>, eight or nine at *q* ≈ 2<sup>240</sup>.
 
 ## Parameter sets
 
-| Function | Relation | Proof degree | $`\log_2q`$ | Proof size |
+| Function | Relation | Proof degree | log<sub>2</sub> *q* | Proof size |
 | --- | --- | ---: | ---: | ---: |
-| `params::kyber1024_d64` | $`Aw+t=0`$ over $`\mathbb Z_{3329}[X]/(X^{256}+1)`$, $`A\in R^{4\times8}`$, $`\|w\|^2\le2950`$ | 64 | 41.14 | about 20.3 kB |
+| `params::kyber1024_d64` | **Aw** + **t** = **0** over ℤ<sub>3329</sub>\[*X*\]/(*X*<sup>256</sup> + 1), **A** ∈ *R*<sup>4×8</sup>, ‖**w**‖<sup>2</sup> ≤ 2950 | 64 | 41.14 | about 20.3 kB |
 | `params::kyber1024_d128` | the same | 128 | 41.14 | about 21.8 kB |
-| `params::demo_d64` | the same shape with $`p=2^{32}-4607`$ and $`\|w\|^2\le2048`$, the size of the Module-LWE example of LNP22 §6.2 | 64 | 60.44 | about 24.0 kB |
+| `params::demo_d64` | the same shape with *p* = 2<sup>32</sup> − 4607 and ‖**w**‖<sup>2</sup> ≤ 2048, the size of the Module-LWE example of LNP22 §6.2 | 64 | 60.44 | about 24.0 kB |
 | `params::toy_d64` | a small statement with every kind of block, for tests and examples | 64 | 40.00 | about 17.3 kB |
 
 The first three were derived by the parameter tool for the worst case over public data, so they
-compile every instance of their shape. Their hardness criterion is $`\delta\le1.0044`$ for MLWE
+compile every instance of their shape. Their hardness criterion is *δ* ≤ 1.0044 for MLWE
 and MSIS, about 101 bits under core-SVP; the [parameter
 notes](https://github.com/etairi/jali/blob/main/docs/parameters.md) give the estimates and
 lattice-estimator cross-checks. Proof sizes vary by up to a few tens of bytes with the seed.
