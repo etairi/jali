@@ -1,34 +1,42 @@
 //! LNP22 toolbox reduction (Fig. 10): binary, exact norm and approximate range blocks.
-//! The default transcript absorbs the application context and the statement before the first
-//! challenge, range responses before Gamma, then h before mu.
+//!
+//! One transcript runs through the whole proof, `JALI-V02-LNP22-TBOX-C1-SHAKE128`, or
+//! `JALI-V02-LNP22-TBOX-SL-C1-SHAKE128` in the straight-line extractable mode, with the caller's
+//! context in the tag. Its instance is the parameters, the public seed and the statement's four
+//! equation families, then the extraction set in the extractable mode. The extractable mode
+//! squeezes the LinHC key first. The prover messages and the verifier messages then follow in
+//! protocol order: the commitment (with the LinHC commitment), the projection matrices, the
+//! range responses and the garbage commitments, $`\Gamma`$, $`h`$, $`\mu`$, the final message
+//! $`(t,v,w_1)`$ (with the LinHC mask commitment before $`w_1`$), and the challenge
+//! (`docs/encodings.md`).
 use crate::{
     Error,
     abdlop::{self, Abdlop, Commitment},
-    codec::Segments,
+    codec::{BitWriter, fields},
     linhc::{self, LinhcChecked, LinhcCommitment, LinhcKey, LinhcParams},
     lnp::Statement,
     math::{
         Poly, PolyNtt, PolyVec, Ring, SparsePolyVec, U256,
         terms::{Accumulator, Term},
     },
-    params::ExtractionParams,
+    params::{ExtractionParams, response_width},
     quad::{self, QuadEq},
     quad_eval::{self, EvalProof},
     quad_many,
     rand::{
-        AesPrg, ByteStream, binomial, derive_key, domain,
+        AesPrg, ByteStream, derive_key, domain,
         reject::{self, Policy},
         secret, take_seed,
     },
-    transcript::Transcript,
+    transcript::{Protocol, Transcript},
 };
 use std::{collections::BTreeMap, sync::Arc};
 use zeroize::Zeroizing;
 
 #[cfg(test)]
-mod encoding_reuse_tests;
-#[cfg(test)]
 mod extractable_tests;
+#[cfg(test)]
+mod io_pattern_tests;
 #[cfg(test)]
 mod lifting_soundness_tests;
 #[cfg(test)]
@@ -88,11 +96,8 @@ pub struct ExtractableProof {
     pub z3: PolyVec,
 }
 
-/// The extractable mode's version tag, the statement field of its toolbox transcripts.
-const TOOLBOX_EXTRACTABLE_TAG: &[u8] = b"LNP22-toolbox-sl-v1";
-
 /// The prover's two modes: plain Fiat–Shamir, or straight-line extractable with Katsumata's
-/// transform, with the LinHC key derived from the transcript unless one is given.
+/// transform, with the LinHC key squeezed from the transcript unless one is given.
 #[derive(Clone, Copy)]
 enum Mode<'a> {
     Plain,
@@ -102,65 +107,69 @@ enum Mode<'a> {
     },
 }
 
-/// What prover and verifier of the extractable mode share: the LinHC parameters, its key, and
-/// the transcript after the parameters, the extraction set, the context and the statement.
+/// What prover and verifier of the extractable mode share: the LinHC parameters and its key.
 struct Extractable {
     params: LinhcParams,
     checked: LinhcChecked,
     key: LinhcKey,
-    base: Transcript,
 }
 
-/// Start the extractable mode's transcript: the toolbox parameters, public seed and extractable
-/// tag, then the extraction set, the application context and the statement (`absorb`). Its
-/// challenge seed `linhc-key` expands the LinHC key, unless `key` is given, so the key is a
-/// random-oracle output on the statement and context.
+/// The toolbox's transcript after its instance: the tag of the mode with `context`, the
+/// parameters and the public seed of `scheme` (`Abdlop::absorb_scheme`), the four equation
+/// families that `families` absorbs, in the order of [`Forms::families`], and in the
+/// extractable mode the extraction set as `SerializeVarLenString`.
+fn instance(
+    scheme: &Abdlop,
+    extraction: Option<&ExtractionParams>,
+    context: &[u8],
+    families: impl FnOnce(&mut Transcript) -> Result<(), Error>,
+) -> Result<Transcript, Error> {
+    let protocol = match extraction {
+        None => Protocol::Toolbox,
+        Some(_) => Protocol::ToolboxExtractable,
+    };
+    let mut transcript = Transcript::new(protocol, context)?;
+    scheme.absorb_scheme(&mut transcript)?;
+    families(&mut transcript)?;
+    if let Some(extraction) = extraction {
+        transcript.absorb_varlen(&extraction.transcript_bytes())?;
+    }
+    Ok(transcript)
+}
+
+/// The extractable mode's first verifier message: the LinHC key, squeezed from the transcript
+/// after the instance ([`LinhcKey::squeeze`]), so that it is a random-oracle output on the
+/// statement and the context. A given `key` (tests use a trapdoored one, as an extractor
+/// programs the oracle) replaces the squeezed key, which is squeezed all the same.
 fn extractable_setup(
     extended: &Abdlop,
     extraction: &ExtractionParams,
-    context: &[u8],
-    absorb: impl FnOnce(&mut Transcript) -> Result<(), Error>,
+    transcript: &mut Transcript,
     key: Option<&LinhcKey>,
 ) -> Result<Extractable, Error> {
     let (params, checked) = extraction.linhc(&extended.parameters, &extended.checked)?;
-    let mut base = Transcript::new(
-        b"abdlop-opening",
-        &extended.parameter_bytes(),
-        &extended.seed,
-        TOOLBOX_EXTRACTABLE_TAG,
-    );
-    base.absorb(b"extraction-parameters", &extraction.transcript_bytes());
-    base.absorb(b"application-context", context);
-    absorb(&mut base)?;
-    let key = match key {
-        Some(key) => key.clone(),
-        None => LinhcKey::expand(&params.ring()?, &params, &base.challenge_seed(b"linhc-key"))?,
-    };
+    let squeezed = LinhcKey::squeeze(&params.ring()?, &params, transcript)?;
     Ok(Extractable {
         params,
         checked,
-        key,
-        base,
+        key: key.cloned().unwrap_or(squeezed),
     })
 }
 
-/// The extractable mode's transcript before the projection challenge: the setup's transcript,
-/// then the toolbox commitment and the LinHC commitment.
-fn extractable_prefix(
+/// The toolbox's first prover message: the commitment's serialization, then in the extractable
+/// mode the LinHC commitment's (`linhc::write_pair`).
+fn commitment_message(
     extended: &Abdlop,
-    setup: &Extractable,
     commitment: &Commitment,
-    linhc_commitment: &LinhcCommitment,
-) -> Result<Transcript, Error> {
-    let mut prefix = setup.base.clone();
-    extended.absorb_commitment(&mut prefix, commitment)?;
-    linhc::absorb_pair(
-        &mut prefix,
-        b"linhc-commitment",
-        &linhc_commitment.t1,
-        &linhc_commitment.t2,
-    )?;
-    Ok(prefix)
+    linhc_commitment: Option<&LinhcCommitment>,
+) -> Result<Vec<u8>, Error> {
+    let mut bytes = extended.commitment_bytes(commitment)?;
+    if let Some(linhc_commitment) = linhc_commitment {
+        let mut w = BitWriter::new();
+        linhc::write_pair(&mut w, &linhc_commitment.t1, &linhc_commitment.t2)?;
+        bytes.extend_from_slice(&w.into_bytes()?);
+    }
+    Ok(bytes)
 }
 struct Forms {
     eqs: Vec<QuadEq>,
@@ -305,153 +314,88 @@ fn forms(scheme: &Abdlop, extended: &Abdlop, statement: &Statement) -> Result<Fo
         mask_d,
     })
 }
-/// The toolbox's version tag, which its transcripts take as their statement field. Version 3
-/// draws its masks with the 256-bit Gaussian sampler and its challenges within eta.
-const TOOLBOX_TAG: &[u8] = b"LNP22-toolbox-v3";
-fn round_prefix(
-    scheme: &Abdlop,
-    commitment: &Commitment,
-    forms: &Forms,
-    context: &[u8],
-) -> Result<Transcript, Error> {
-    // The toolbox's version tag, then the application context right after the commitment.
-    let mut prefix = scheme.prefix(commitment, TOOLBOX_TAG)?;
-    prefix.absorb(b"application-context", context);
-    absorb_statement(&mut prefix, scheme, forms)?;
-    Ok(prefix)
-}
-/// [`round_prefix`] from the forms' encodings: the same transcript, without encoding again.
-fn round_prefix_encoded(
-    scheme: &Abdlop,
-    commitment: &Commitment,
-    encoded: &EncodedForms,
-    context: &[u8],
-) -> Result<Transcript, Error> {
-    let mut prefix = scheme.prefix(commitment, TOOLBOX_TAG)?;
-    prefix.absorb(b"application-context", context);
-    absorb_encoded_statement(&mut prefix, scheme, encoded);
-    Ok(prefix)
-}
-const FAMILIES: [&[u8]; 4] = [b"quadratic", b"evaluation", b"exact-map", b"approx-map"];
-/// The equation families and range parameters, which the verifier derives from the statement.
-fn absorb_statement(prefix: &mut Transcript, scheme: &Abdlop, forms: &Forms) -> Result<(), Error> {
-    for (label, eqs) in FAMILIES.into_iter().zip(forms.families()) {
-        quad_many::absorb_equations(prefix, label, eqs)?;
+/// Absorb the four equation families of the statement into the instance, in the order of
+/// [`Forms::families`], each as `quad_many::absorb_equations`.
+fn absorb_families(transcript: &mut Transcript, forms: &Forms) -> Result<(), Error> {
+    for eqs in forms.families() {
+        quad_many::absorb_equations(transcript, eqs)?;
     }
-    absorb_range_parameters(prefix, scheme);
     Ok(())
 }
-/// [`absorb_statement`] from the forms' encodings.
-fn absorb_encoded_statement(prefix: &mut Transcript, scheme: &Abdlop, encoded: &EncodedForms) {
-    for (label, eqs) in FAMILIES.into_iter().zip(&encoded.0) {
-        quad_many::absorb_encoded(prefix, label, eqs);
-    }
-    absorb_range_parameters(prefix, scheme);
-}
-fn absorb_range_parameters(prefix: &mut Transcript, scheme: &Abdlop) {
-    let mut params = Vec::new();
-    for x in [
-        scheme.checked.z3_bound_squared,
-        scheme.checked.z4_bound,
-        scheme.parameters.linf_bound as u128,
-        scheme.parameters.log_sigma[2] as u128,
-        scheme.parameters.log_sigma[3] as u128,
-        scheme.checked.lambda as u128,
-    ] {
-        params.extend_from_slice(&x.to_le_bytes());
-    }
-    prefix.absorb(b"range-parameters", &params);
-}
-/// The encodings of the four equation families, computed once per proof: the toolbox key and
-/// the transcript of every range attempt absorb them. They are held as segments, in chunks of
-/// at most 32 KiB in which the zero codes of zero polynomials are counts once they span 64
-/// whole bytes, so those runs take no memory. The lists that hold them take 40 bytes per
-/// equation of a family and 24 bytes per chunk of an encoding.
-struct EncodedForms([Vec<Segments>; 4]);
-impl EncodedForms {
-    fn new(forms: &Forms) -> Result<Self, Error> {
-        let [eqs, evals, exact, approx] = forms.families();
-        Ok(Self([
-            quad_many::encode_equations(eqs)?,
-            quad_many::encode_equations(evals)?,
-            quad_many::encode_equations(exact)?,
-            quad_many::encode_equations(approx)?,
-        ]))
-    }
-}
-/// The toolbox key: the seed, the scheme, the statement, the context and the witness. Calls
-/// that agree on all of these commit identically and so read identical transcripts.
+/// The toolbox key under `label`: the seed, the transcript after the instance (the mode, the
+/// context, the parameters, the public seed, the statement and in the extractable mode the
+/// extraction set) through its `Transcript::binding`, and the witness. Calls that agree on all
+/// of these commit identically and so read identical transcripts.
 fn toolbox_key(
-    scheme: &Abdlop,
-    extended: &Abdlop,
-    encoded: &EncodedForms,
-    context: &[u8],
-    s1: &PolyVec,
-    m: &PolyVec,
-    seed: &[u8; 32],
-) -> Result<Zeroizing<[u8; 32]>, Error> {
-    // "/v2" since the 256-bit sampler, the 256-bit rejection coins and the challenges
-    // within eta. The earlier version read these streams differently: masks that two
-    // samplers read from one stream are correlated, and two proofs with correlated masks can
-    // reveal the witness.
-    toolbox_key_labeled(
-        b"tbox/proof/v2",
-        scheme,
-        extended,
-        encoded,
-        context,
-        s1,
-        m,
-        seed,
-    )
-}
-/// [`toolbox_key`] under another label. The extractable mode reads more streams (its LinHC
-/// commitment's randomness), so it takes its own label, `tbox/proof-sl/v1`.
-#[allow(clippy::too_many_arguments)]
-fn toolbox_key_labeled(
     label: &[u8],
-    scheme: &Abdlop,
-    extended: &Abdlop,
-    encoded: &EncodedForms,
-    context: &[u8],
+    binding: &[u8; 32],
     s1: &PolyVec,
     m: &PolyVec,
     seed: &[u8; 32],
-) -> Result<Zeroizing<[u8; 32]>, Error> {
-    let mut statement = Transcript::new(
-        b"LNP22-toolbox-statement",
-        &extended.parameter_bytes(),
-        &extended.seed,
-        b"",
-    );
-    absorb_encoded_statement(&mut statement, extended, encoded);
-    Ok(derive_key(
+) -> Zeroizing<[u8; 32]> {
+    derive_key(
         label,
         seed,
-        &[
-            &scheme.fingerprint(),
-            &statement.digest(),
-            context,
-            &abdlop::secret_bytes(s1),
-            &abdlop::secret_bytes(m),
-        ],
-    ))
-}
-fn row(seed: &[u8; 32], exact: bool, index: usize, count: usize) -> Result<Vec<i128>, Error> {
-    binomial(
-        &mut AesPrg::new(
-            seed,
-            domain(if exact { 0x52584500 } else { 0x52584400 }, index as u32),
-        ),
-        1,
-        count,
+        &[binding, &abdlop::secret_bytes(s1), &abdlop::secret_bytes(m)],
     )
 }
-fn projections(seed: &[u8; 32], exact: bool, values: &[i128]) -> Result<Vec<i128>, Error> {
+/// The projection matrices of the range proofs, the toolbox's first verifier message: 256 rows
+/// per block, one entry per coefficient of the block's vector, row-major, the exact block's
+/// matrix first, each entry from 2 squeezed bits (`transcript::ternary_entry`). The squeezed
+/// bytes are kept and rows decoded when read, so a matrix takes 64 bytes per column. An absent
+/// block's matrix is empty, and a block of more than $`2^{24}`$ columns is refused.
+struct Projections {
+    exact: Vec<u8>,
+    approx: Vec<u8>,
+    exact_cols: usize,
+    approx_cols: usize,
+}
+impl Projections {
+    fn squeeze(transcript: &mut Transcript, forms: &Forms, degree: usize) -> Result<Self, Error> {
+        let exact_cols = forms.exact.len() * degree;
+        let approx_cols = forms.approx.len() * degree;
+        if exact_cols.max(approx_cols) > 1 << 24 {
+            return Err(Error::Dimension);
+        }
+        Ok(Self {
+            exact: transcript.ternary_packed(256 * exact_cols)?,
+            approx: transcript.ternary_packed(256 * approx_cols)?,
+            exact_cols,
+            approx_cols,
+        })
+    }
+    /// Test only: matrices of `exact_cols` and `approx_cols` columns squeezed from a
+    /// transcript whose context is `seed`.
+    #[cfg(test)]
+    fn for_tests(seed: &[u8; 32], exact_cols: usize, approx_cols: usize) -> Self {
+        let mut transcript = Transcript::new(Protocol::Toolbox, seed).unwrap();
+        Self {
+            exact: transcript.ternary_packed(256 * exact_cols).unwrap(),
+            approx: transcript.ternary_packed(256 * approx_cols).unwrap(),
+            exact_cols,
+            approx_cols,
+        }
+    }
+    /// Row `index` of the exact block's matrix, or of the approximate block's.
+    fn row(&self, exact: bool, index: usize) -> Vec<i8> {
+        let (matrix, cols) = if exact {
+            (&self.exact, self.exact_cols)
+        } else {
+            (&self.approx, self.approx_cols)
+        };
+        (index * cols..(index + 1) * cols)
+            .map(|i| crate::transcript::ternary_entry(matrix, i))
+            .collect()
+    }
+}
+fn projections(matrices: &Projections, exact: bool, values: &[i128]) -> Result<Vec<i128>, Error> {
     let compute_row = |i| {
-        let row = row(seed, exact, i, values.len())?;
+        let row = matrices.row(exact, i);
+        if row.len() != values.len() {
+            return Err(Error::Dimension);
+        }
         row.iter().zip(values).try_fold(0i128, |sum, (r, v)| {
-            sum.checked_add(r.checked_mul(*v).ok_or(Error::Overflow)?)
+            sum.checked_add(i128::from(*r).checked_mul(*v).ok_or(Error::Overflow)?)
                 .ok_or(Error::Overflow)
         })
     };
@@ -459,10 +403,11 @@ fn projections(seed: &[u8; 32], exact: bool, values: &[i128]) -> Result<Vec<i128
     crate::par::try_map(256, compute_row)
 }
 /// The response of one range block, or `None` to restart: the bimodal test reads one 256-bit
-/// coin ([`reject::coin`]) from `random`, after the check against q/2 and before the bound.
+/// coin ([`reject::coin`]) from `random`, after the check against q/2 and before the bound and
+/// the width of the response's fixed-width code.
 fn range_response(
     scheme: &Abdlop,
-    seed: &[u8; 32],
+    matrices: &Projections,
     exact: bool,
     values: &[i128],
     mask: &abdlop::Mask,
@@ -472,7 +417,7 @@ fn range_response(
     if values.is_empty() {
         return Ok(Some(PolyVec::zero(scheme.ring().clone(), 0)));
     }
-    let mut v = Zeroizing::new(projections(seed, exact, values)?);
+    let mut v = Zeroizing::new(projections(matrices, exact, values)?);
     for x in v.iter_mut() {
         *x *= sign;
     }
@@ -508,6 +453,12 @@ fn range_response(
     if !exact && z.iter().any(|x| x.unsigned_abs() > scheme.checked.z4_bound) {
         return Ok(None);
     }
+    // The fixed-width code: a coefficient beyond it restarts, a test of the response alone.
+    let t = scheme.parameters.log_sigma[if exact { 2 } else { 3 }];
+    let max = (1u128 << (response_width(t) - 1)) - 1;
+    if z.iter().any(|x| x.unsigned_abs() > max) {
+        return Ok(None);
+    }
     Ok(Some(PolyVec::new(
         scheme.ring().clone(),
         z.chunks_exact(scheme.ring().degree())
@@ -534,7 +485,7 @@ fn range_rejection_m(scheme: &Abdlop, exact: bool) -> Result<u64, Error> {
 fn projection_equations(
     scheme: &Abdlop,
     forms: &Forms,
-    seed: &[u8; 32],
+    matrices: &Projections,
     ze: &PolyVec,
     zd: &PolyVec,
 ) -> Result<Vec<QuadEq>, Error> {
@@ -559,10 +510,19 @@ fn projection_equations(
         // Each row reads its own stream: the rows are computed in parallel (`parallel`) and
         // kept in order.
         let rows = crate::par::try_map(256, |i| {
-            let r = row(seed, exact, i, affines.len() * ring.degree())?;
+            let r = matrices.row(exact, i);
+            if r.len() != affines.len() * ring.degree() {
+                return Err(Error::Dimension);
+            }
             let rows = r
                 .chunks_exact(ring.degree())
-                .map(|coeffs| Ok(Poly::new(ring.clone(), coeffs.to_vec())?.auto()))
+                .map(|coeffs| {
+                    Ok(Poly::new(
+                        ring.clone(),
+                        coeffs.iter().map(|x| i128::from(*x)).collect(),
+                    )?
+                    .auto())
+                })
                 .collect::<Result<Vec<_>, Error>>()?;
             let projection = match &prepared {
                 Some(prepared) => prepared.projection(ring, dim, &rows)?,
@@ -668,12 +628,13 @@ impl Prepared {
         Ok(out)
     }
 }
-fn bind_responses(prefix: &mut Transcript, ze: &PolyVec, zd: &PolyVec) -> Result<(), Error> {
-    let mut writer = crate::codec::BitWriter::new();
-    abdlop::encode_vec(&mut writer, ze, &ze.ring().modulus())?;
-    abdlop::encode_vec(&mut writer, zd, &zd.ring().modulus())?;
-    prefix.absorb(b"range-responses-before-Gamma", &writer.finish());
-    Ok(())
+/// The serialization of the range responses, the toolbox's second prover message (with the
+/// garbage commitments after it): $`z^{(e)}`$ then $`z^{(d)}`$, each in its response width.
+fn range_message(scheme: &Abdlop, ze: &PolyVec, zd: &PolyVec) -> Result<Vec<u8>, Error> {
+    let mut w = BitWriter::new();
+    fields::write_signed(&mut w, ze, response_width(scheme.parameters.log_sigma[2]))?;
+    fields::write_signed(&mut w, zd, response_width(scheme.parameters.log_sigma[3]))?;
+    w.into_bytes()
 }
 
 /// Prove a full statement, checking its original witness before inserting slack and masks.
@@ -791,40 +752,32 @@ fn prove_rounds_mode(
     let d_slots = if p.n_prime > 0 { 256 / p.degree } else { 0 };
     let extended = scheme.extend_messages(e_slots + d_slots + 1)?;
     let forms = forms(scheme, &extended, statement)?;
-    let encoded = EncodedForms::new(&forms)?;
-    let key = match mode {
-        Mode::Plain => toolbox_key(scheme, &extended, &encoded, context, s1, m, seed)?,
-        Mode::Extractable { .. } => toolbox_key_labeled(
-            b"tbox/proof-sl/v1",
-            scheme,
-            &extended,
-            &encoded,
-            context,
-            s1,
-            m,
-            seed,
-        )?,
+    let extraction = match mode {
+        Mode::Plain => None,
+        Mode::Extractable { extraction, .. } => Some(extraction),
     };
+    let mut base = instance(scheme, extraction, context, |t| absorb_families(t, &forms))?;
+    // "/v3" and "/v2" since the duplex-sponge transcript of version 0.2, which the binding
+    // comes from. The earlier versions read these streams under other keys: masks that two
+    // samplers read from one stream are correlated, and two proofs with correlated masks can
+    // reveal the witness. The extractable mode reads more streams (its LinHC commitment's
+    // randomness), so it has a label of its own.
+    let label: &[u8] = match mode {
+        Mode::Plain => b"tbox/proof/v3",
+        Mode::Extractable { .. } => b"tbox/proof-sl/v2",
+    };
+    let key = toolbox_key(label, &base.binding(), s1, m, seed);
     let (_, opening) =
         scheme.commit_in_domain(bounded.clone(), m.clone(), &key, secret::TOOLBOX_COMMITMENT)?;
-    // The extractable mode commits, once, to the final opening's witness (s1 || s21) with the
-    // LinHC, whose key the statement and context determine.
+    // The extractable mode squeezes the LinHC key after the instance and commits, once, to the
+    // final opening's witness (s1 || s21) with it.
     let extractable = match mode {
         Mode::Plain => None,
         Mode::Extractable {
             extraction,
             key: given,
         } => {
-            let setup = extractable_setup(
-                &extended,
-                extraction,
-                context,
-                |t| {
-                    absorb_encoded_statement(t, &extended, &encoded);
-                    Ok(())
-                },
-                given,
-            )?;
+            let setup = extractable_setup(&extended, extraction, &mut base, given)?;
             let witness = linhc::message(
                 setup.key.a.ring(),
                 &bounded,
@@ -870,13 +823,14 @@ fn prove_rounds_mode(
         let witness = quad::interleave(&bounded, &messages)?;
         let (commitment, full_opening) =
             extended.commit_with_randomness(bounded.clone(), messages, opening.s2.clone())?;
-        let mut prefix = match &extractable {
-            None => round_prefix_encoded(&extended, &commitment, &encoded, context)?,
-            Some((setup, linhc_commitment, _)) => {
-                extractable_prefix(&extended, setup, &commitment, linhc_commitment)?
-            }
-        };
-        let projection_seed = prefix.challenge_seed(b"range-matrices");
+        // Each attempt forks the transcript after the instance (and the LinHC key).
+        let mut transcript = base.clone();
+        transcript.absorb(&commitment_message(
+            &extended,
+            &commitment,
+            extractable.as_ref().map(|(_, c, _)| c),
+        )?);
+        let matrices = Projections::squeeze(&mut transcript, &forms, ring.degree())?;
         // Evaluated in parallel (`parallel`) and in order.
         let exact = PolyVec::new(
             ring.clone(),
@@ -888,7 +842,7 @@ fn prove_rounds_mode(
         )?;
         let Some(ze) = range_response(
             scheme,
-            &projection_seed,
+            &matrices,
             true,
             &abdlop::flatten(&exact)?,
             &ye,
@@ -900,7 +854,7 @@ fn prove_rounds_mode(
         };
         let Some(zd) = range_response(
             scheme,
-            &projection_seed,
+            &matrices,
             false,
             &abdlop::flatten(&approx)?,
             &yd,
@@ -910,14 +864,12 @@ fn prove_rounds_mode(
         else {
             continue;
         };
-        let evals = projection_equations(&extended, &forms, &projection_seed, &ze, &zd)?;
-        bind_responses(&mut prefix, &ze, &zd)?;
+        let evals = projection_equations(&extended, &forms, &matrices, &ze, &zd)?;
+        transcript.absorb(&range_message(scheme, &ze, &zd)?);
         let mut proof_seed = Zeroizing::new([0; 32]);
         random.fill(&mut *proof_seed)?;
         #[cfg(test)]
         crate::rand::stream_log::child(&key, &proof_seed);
-        // The encodings are not needed past the last range attempt.
-        drop(encoded);
         let ext = extractable
             .as_ref()
             .map(|(setup, _, secret)| linhc::ProverExt {
@@ -926,13 +878,13 @@ fn prove_rounds_mode(
                 checked: &setup.checked,
                 secret,
             });
-        let (evaluation, linhc_opening) = quad_eval::prove_seeded_ext(
+        let (evaluation, linhc_opening) = quad_eval::prove_in(
             &extended,
             &commitment,
             &full_opening,
             &forms.eqs,
             &evals,
-            &prefix.digest(),
+            transcript,
             &proof_seed,
             ext.as_ref(),
         )?;
@@ -960,12 +912,13 @@ fn prove_rounds_mode(
 /// commitment to the final opening's witness and the LinHC opening beside it
 /// ([`ExtractableProof`]). An extractor that holds the LinHC key's trapdoor recovers the
 /// committed witness from one proof, without rewinding: it decrypts the responses for other
-/// challenges. In the random-oracle model the key is the oracle's output on the statement and
-/// the context, so the extractor programs it. `docs/security.md` gives the argument and its
+/// challenges. In the random-oracle model the key, squeezed from the transcript after the
+/// instance, is the oracle's output on the statement and the context, so the extractor programs
+/// it. `docs/security.md` gives the argument and its
 /// status.
 ///
 /// Seeds work as for [`prove_with_seed`], with keys under labels of this mode
-/// (`tbox/proof-sl/v1`, `abdlop/opening-proof-sl/v1`).
+/// (`tbox/proof-sl/v2`, `abdlop/opening-proof-sl/v2`).
 pub fn prove_extractable_with_seed(
     scheme: &Abdlop,
     extraction: &ExtractionParams,
@@ -1063,22 +1016,25 @@ pub fn verify(
     let (e_slots, d_slots) = response_shape_and_bounds(scheme, proof)?;
     let extended = scheme.extend_messages(e_slots + d_slots + 1)?;
     let forms = forms(scheme, &extended, statement)?;
-    let mut prefix = round_prefix(&extended, &proof.commitment, &forms, context)?;
+    let mut transcript = instance(scheme, None, context, |t| absorb_families(t, &forms))?;
+    transcript.absorb(&commitment_message(&extended, &proof.commitment, None)?);
+    let matrices = Projections::squeeze(&mut transcript, &forms, scheme.ring().degree())?;
     let evals = projection_equations(
         &extended,
         &forms,
-        &prefix.challenge_seed(b"range-matrices"),
+        &matrices,
         &proof.z_exact,
         &proof.z_approx,
     )?;
-    bind_responses(&mut prefix, &proof.z_exact, &proof.z_approx)?;
-    quad_eval::verify(
+    transcript.absorb(&range_message(scheme, &proof.z_exact, &proof.z_approx)?);
+    quad_eval::verify_in(
         &extended,
         &proof.commitment,
         &forms.eqs,
         &evals,
         &proof.evaluation,
-        &prefix.digest(),
+        transcript,
+        None,
     )
 }
 
@@ -1109,13 +1065,10 @@ pub(crate) fn verify_extractable_with_key(
     let (e_slots, d_slots) = response_shape_and_bounds(scheme, &proof.proof)?;
     let extended = scheme.extend_messages(e_slots + d_slots + 1)?;
     let forms = forms(scheme, &extended, statement)?;
-    let setup = extractable_setup(
-        &extended,
-        extraction,
-        context,
-        |t| absorb_statement(t, &extended, &forms),
-        key,
-    )?;
+    let mut transcript = instance(scheme, Some(extraction), context, |t| {
+        absorb_families(t, &forms)
+    })?;
+    let setup = extractable_setup(&extended, extraction, &mut transcript, key)?;
     let ring = setup.key.a.ring();
     let p = &setup.params;
     for (v, len) in [
@@ -1139,20 +1092,24 @@ pub(crate) fn verify_extractable_with_key(
     let linhc_opening = linhc::LinhcOpening {
         z: [proof.z1.clone(), proof.z2.clone(), proof.z3.clone()],
     };
-    let mut prefix = extractable_prefix(
+    transcript.absorb(&commitment_message(
         &extended,
-        &setup,
         &proof.proof.commitment,
-        &linhc_commitment,
-    )?;
+        Some(&linhc_commitment),
+    )?);
+    let matrices = Projections::squeeze(&mut transcript, &forms, scheme.ring().degree())?;
     let evals = projection_equations(
         &extended,
         &forms,
-        &prefix.challenge_seed(b"range-matrices"),
+        &matrices,
         &proof.proof.z_exact,
         &proof.proof.z_approx,
     )?;
-    bind_responses(&mut prefix, &proof.proof.z_exact, &proof.proof.z_approx)?;
+    transcript.absorb(&range_message(
+        scheme,
+        &proof.proof.z_exact,
+        &proof.proof.z_approx,
+    )?);
     let ext = linhc::VerifierExt {
         key: &setup.key,
         params: &setup.params,
@@ -1160,13 +1117,13 @@ pub(crate) fn verify_extractable_with_key(
         commitment: &linhc_commitment,
         opening: &linhc_opening,
     };
-    quad_eval::verify_ext(
+    quad_eval::verify_in(
         &extended,
         &proof.proof.commitment,
         &forms.eqs,
         &evals,
         &proof.proof.evaluation,
-        &prefix.digest(),
+        transcript,
         Some(&ext),
     )
 }

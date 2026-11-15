@@ -126,11 +126,16 @@ pub struct CheckedParams {
     pub arp_bound: f64,
     /// MSIS root Hermite factor from the specified closed form.
     pub msis_delta: f64,
-    /// Estimated proof bytes; not a decoder allocation limit. The full-size polynomials are
-    /// counted exactly, a Gaussian coefficient as $`\lceil\log_2\sigma+2.5\rceil`$ bits, and a
-    /// hint coefficient as $`\max(2.25,1.6\sigma_2/\gamma+0.7)`$ bits, an upper bound on its
-    /// expected length in a model of the hints. It is not a proven bound on a proof's length.
+    /// The length of every toolbox proof's encoding (`codec::proof::encode`), exact: every
+    /// field has a fixed width (`docs/encodings.md`). The name is kept from the variable-length
+    /// codes of version 0.1, for which it was an estimate.
     pub estimated_proof_bytes: usize,
+    /// Width in bits of a hint's fixed-width code: $`1+\mathrm{bitlen}(H)`$ for
+    /// $`H=\max(1,\lceil9s\rceil)`$ and
+    /// $`s=\sqrt{\sigma_2^2+(d-1)\omega^2(1+4^{D-1}/3)}/\gamma`$, so a hint of absolute value
+    /// at most $`2^{w-1}-1\ge H`$ is written. A prover restarts the attempt whose hints do not
+    /// fit, which a model of the hints makes rare (`docs/encodings.md`).
+    pub hint_width: u32,
 }
 
 /// The transcript encoding of the prime factors.
@@ -160,23 +165,34 @@ fn prime_factor_bytes(factors: &[U256], out: &mut Vec<u8>) {
     }
 }
 
-/// Bits per hint coefficient in `estimated_proof_bytes`: $`\max(2.25,\,1.6s+0.7)`$ for
-/// $`s=\sigma_2/\gamma`$, so 2.25 up to $`s=0.96875`$, the average that LNP22 §6.1 takes for
-/// hints in $`\{-1,0,1\}`$.
+/// The width of the hints' fixed-width code, $`1+\mathrm{bitlen}(H)`$ bits for
+/// $`H=\max(1,\lceil9s\rceil)`$ and
+/// $`s=\sqrt{\sigma_2^2+(d-1)\omega^2(1+4^{D-1}/3)}/\gamma`$.
 ///
-/// A hint is about $`\mathrm{round}(z_{22}/\gamma)`$, and its code (`BitWriter::hint`) takes
-/// 2 bits for $`|h|\le1`$ and $`2|h|-1`$ or $`2|h|`$ beyond. Model $`z_{22}/\gamma`$ as $`X+U`$,
-/// $`X`$ normal of deviation $`s`$ and $`U`$ the rounding error, uniform on $`(-1/2,1/2]`$,
-/// leaving out the challenge terms. Then $`P(h=k)=E[\max(0,1-|X-k|)]`$, and the expected
-/// length is $`H(s)=2-3Q(1/s)-2Q(2/s)+3s\varphi(1/s)+s\varphi(2/s)`$, with $`\varphi`$ the
-/// standard normal density and $`Q`$ its tail. $`H`$ is nondecreasing and convex, with slope at
-/// most $`2\sqrt{2/\pi}<1.6`$, and $`H(s)=2.25`$ at $`s\approx0.989`$ (computed), so the
-/// allowance bounds $`H`$ everywhere. It bounds the expectation, not each proof: at
-/// $`s=12.45`$, where $`H=19.48`$ and the allowance is 20.62, ten measured proofs had 18.5 to
-/// 19.7 bits per hint (`docs/parameters.md`). Only correctly rounded operations, so the
-/// parameter tool's mirror computes the same double.
-fn hint_bits(sigma2: f64, gamma: u64) -> f64 {
-    (1.6 * (sigma2 / gamma as f64) + 0.7).max(2.25)
+/// A hint is about $`\mathrm{round}(z_{22}/\gamma)`$. In the model of the hints, a heuristic,
+/// $`z_{22}/\gamma`$ is $`X+U`$ with $`U`$ the rounding error of $`w_0`$, uniform on
+/// $`(-1/2,1/2]`$, and $`X`$ the rest, $`(y_{22}+c(s_{22}-t_{A,0}))/\gamma`$ with
+/// $`t_{A,0}`$ the low part of the commitment, of deviation at most $`s`$: $`(d-1)\omega^2`$
+/// bounds $`\|c\|^2`$, and $`1+4^{D-1}/3`$ bounds the second moments of a coefficient of
+/// $`s_{22}`$ ($`2/3`$) and of $`t_{A,0}`$ ($`4^{D-1}/3+1/6`$). A hint above $`H`$ in absolute
+/// value needs $`|X|>H\ge9s`$, which a normal $`X`$ exceeds with probability below
+/// $`2^{-61}`$ per coefficient. The model only sets the restart rate: a prover restarts every
+/// attempt whose hints do not fit, and an accepted proof's hints are a function of the
+/// accepted response and the public data (`docs/security.md`). Only correctly rounded
+/// operations, so the parameter tool's mirror computes the same width.
+pub(crate) fn hint_width(sigma2: f64, degree: usize, omega: i128, d_bits: u32, gamma: u64) -> u32 {
+    let challenge = (degree as f64 - 1.0) * (omega * omega) as f64;
+    let moments = 1.0 + (2.0f64).powi(2 * d_bits as i32 - 2) / 3.0;
+    let s = (sigma2 * sigma2 + challenge * moments).sqrt() / gamma as f64;
+    let h = ((9.0 * s).ceil() as u128).max(1);
+    1 + (128 - h.leading_zeros())
+}
+
+/// The width of a Gaussian response's fixed-width code: $`t+4`$ bits for the width
+/// $`1.55\cdot2^t`$, so a coefficient of absolute value at most $`2^{t+3}-1`$, about
+/// $`5.16\sigma`$, is written. A prover restarts every attempt with a coefficient beyond.
+pub(crate) const fn response_width(log_sigma: u32) -> u32 {
+    log_sigma + 4
 }
 
 /// $`\lfloor(a\cdot2^{s})\cdot b/c\rfloor`$ with checked 256-bit arithmetic, as `u128`.
@@ -317,11 +333,7 @@ impl TboxParams {
         while lambda as f64 * log_q1 < 128.0 {
             lambda += 2;
         }
-        let (omega, eta, challenge_bits) = if self.degree == 64 {
-            (8, 140, 5)
-        } else {
-            (2, 59, 3)
-        };
+        let (omega, eta) = if self.degree == 64 { (8, 140) } else { (2, 59) };
         let n_ex = self.n_bin + self.l2_rows.iter().sum::<usize>() + z;
         // The range proofs conclude that each committed sign is +1 or -1 from b^2 = 1 in Z_q,
         // which needs Z_q to be a field (LNP22, proof of Prop. 5.1). Modulo q = q1*q2 the CRT
@@ -353,7 +365,7 @@ impl TboxParams {
         if !self.mlwe_delta.is_finite() || !(1.0..=1.0044).contains(&self.mlwe_delta) {
             return Err(Error::Parameter("MLWE estimate"));
         }
-        let [s1, s2, s3, s4] = self.log_sigma.map(|t| 1.55 * (2.0f64).powi(t as i32));
+        let [s1, s2, s3, _] = self.log_sigma.map(|t| 1.55 * (2.0f64).powi(t as i32));
         let nd = (self.n_msis * self.degree) as f64;
         let b = s2 * ((2 * self.m2 * self.degree) as f64).sqrt();
         let b = b
@@ -411,16 +423,30 @@ impl TboxParams {
                 return Err(Error::Parameter("exact norm lifting bound"));
             }
         }
-        let log_q = q_bits;
-        let gaussian_bits = |s: f64| (s.log2() + 2.5).ceil();
-        let bits = nd * (log_q - self.d_bits) as f64
-            + ((self.l + l_ext + lambda / 2) * self.degree) as f64 * log_q as f64
-            + (challenge_bits * self.degree) as f64
-            + ((self.m1 + z) * self.degree) as f64 * gaussian_bits(s1)
-            + ((self.m2 - self.n_msis) * self.degree) as f64 * gaussian_bits(s2)
-            + (exact_slots * self.degree) as f64 * gaussian_bits(s3)
-            + (approx_slots * self.degree) as f64 * gaussian_bits(s4)
-            + hint_bits(s2, self.gamma) * nd;
+        let hint_width = hint_width(s2, self.degree, omega, self.d_bits, self.gamma);
+        if hint_width > 127 {
+            return Err(Error::Parameter("hint width"));
+        }
+        // Every field is a whole number of bytes: d is 64 or 128, and the challenge is written
+        // as its first d/2 coefficients.
+        let (d, k_q) = (self.degree as u128, u128::from(q_bits));
+        let k_a = u128::from(q_bits - self.d_bits);
+        let k_c = u128::from(128 - ((2 * omega) as u128).leading_zeros());
+        let width = |t: u32| u128::from(response_width(t));
+        let rows = |n: usize| n as u128 * d;
+        let bits = rows(self.n_msis) * k_a
+            + rows(self.l + exact_slots + approx_slots + 1) * k_q
+            + rows(exact_slots) * width(self.log_sigma[2])
+            + rows(approx_slots) * width(self.log_sigma[3])
+            + rows(lambda) * k_q
+            + rows(1) * k_q
+            + d / 2 * k_c
+            + rows(self.m1 + z) * width(self.log_sigma[0])
+            + rows(self.m2 - self.n_msis) * width(self.log_sigma[1])
+            + rows(self.n_msis) * u128::from(hint_width);
+        debug_assert!(bits.is_multiple_of(8));
+        let estimated_proof_bytes =
+            usize::try_from(bits / 8).map_err(|_| Error::Parameter("proof size"))?;
         Ok(CheckedParams {
             q,
             lambda,
@@ -444,7 +470,8 @@ impl TboxParams {
                 .ok_or(Error::Parameter("response bound capacity"))?,
             arp_bound,
             msis_delta,
-            estimated_proof_bytes: (bits / 8.0).ceil() as usize,
+            estimated_proof_bytes,
+            hint_width,
         })
     }
     /// Strict JSON decoding followed by the complete parameter check.

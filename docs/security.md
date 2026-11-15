@@ -15,7 +15,9 @@ a vulnerability, see [SECURITY.md](../SECURITY.md).
   temporaries may remain on the stack.
 - **No `unsafe` code** (`#![forbid(unsafe_code)]`) and no C dependencies in the library.
 - **Formats are unstable.** The API, the proof encoding and the transcripts may change between
-  versions, and proofs do not interoperate with other implementations.
+  versions, and proofs do not interoperate with other implementations. Since version 0.2 the
+  transcripts follow draft-irtf-cfrg-fiat-shamir-04, an Internet-Draft that can still change
+  ([encodings](encodings.md#transcript)).
 
 ## Randomness and seeds
 
@@ -32,13 +34,15 @@ and from them the witness. Use fresh seeds wherever multi-theorem zero-knowledge
 faults can be injected.
 
 The keys carry a version for the same reason. The keys of the opening proof and of the toolbox
-use the labels `abdlop/opening-proof/v2` and `tbox/proof/v2` since the 256-bit Gaussian sampler,
-the 256-bit rejection coins and the challenges within $`\eta`$: the earlier version read the
-same streams with another sampler, and masks that two samplers read from one stream are
-correlated (the first mask coefficients are congruent modulo $`2^{t-1}`$), so that a proof from
-each version, for the same seed and inputs, can reveal linear relations of the witness. Any
-change to how proof randomness is read, such as the sampler, the coins or the challenge
-derivation, must change these labels.
+use the labels `abdlop/opening-proof/v3` and `tbox/proof/v3` since the duplex-sponge transcript
+of version 0.2, and `/v2` before it since the 256-bit Gaussian sampler, the 256-bit rejection
+coins and the challenges within $`\eta`$: the version before that read the same streams with
+another sampler, and masks that two samplers read from one stream are correlated (the first mask
+coefficients are congruent modulo $`2^{t-1}`$), so that a proof from each version, for the same
+seed and inputs, can reveal linear relations of the witness. Any change to how proof randomness
+is read, such as the sampler, the coins or the challenge derivation, must change these labels.
+The keys bind the transcript through `Transcript::binding`, 32 bytes squeezed from a copy of the
+sponge, a function of public data only.
 
 ## Challenges
 
@@ -46,11 +50,15 @@ Every challenge of the opening proof, also inside the quadratic, evaluation and 
 lies in the challenge set of LNP22 §2.7: $`\sigma_{-1}`$-stable, with coefficients in
 $`[-\omega,\omega]`$, coefficient $`d/2`$ zero, and the operator-norm bound
 $`\|\sigma_{-1}(c^{32})c^{32}\|_1^{1/64}\le\eta`$ that the rejection widths, the verifier bound
-and the MSIS bound of `TboxParams::check` assume. `rand::challenge` draws from the transcript's
-challenge stream until a draw meets the bound, which it tests as
-$`\|(\sigma_{-1}(c)c)^{32}\|_1\le\eta^{64}`$ in exact integer arithmetic (`rand::within_eta`; no
-floating point, so every platform decides alike), and fails after 64 rejected draws. Prover and
-verifier run it on the same stream. The verifier refuses a challenge of the wrong form (from
+and the MSIS bound of `TboxParams::check` assume. `rand::challenge_from_bytes` decodes the
+challenge from the 4032 bytes that the transcript squeezes for it: the first draw in those bytes
+that meets the bound, which it tests as $`\|(\sigma_{-1}(c)c)^{32}\|_1\le\eta^{64}`$ in exact
+integer arithmetic (`rand::within_eta`, with no floating point, so every platform decides
+alike), or the constant 1 if no draw there meets it. Prover and verifier decode the same bytes.
+The fallback has probability at most $`2^{-208}`$ per derivation if at most a quarter of the
+draws fail the bound, and far less at the measured rate below ([encodings](encodings.md#decodings)),
+so it adds at most $`2^{-208}`$ per oracle query to the soundness error and is among the
+negligible terms of the [whole-proof bound](#statistical-distance-of-whole-proofs). The verifier refuses a challenge of the wrong form (from
 another ring, not $`\sigma_{-1}`$-stable, or with a coefficient above $`\omega`$ or a nonzero
 coefficient $`d/2`$) before it recomputes the challenge, and then any challenge other than the
 recomputed one, which is always within $`\eta`$; testing $`\eta`$ on the proof's challenge as
@@ -192,9 +200,10 @@ per proof. The derivation of the table, in order of the columns:
      - The worst case is four squarings, from $`x_0=1/16`$ (input 1).
      - The largest error measured on 20,000 inputs is 31.3.
 5. **Masks.** Use the bound of the previous section, with its count $`M`$ the expected number
-   of coefficients that a proof draws:
+   of coefficients that a proof draws (the restarts of the fixed-width codes,
+   [below](#fixed-width-codes), raise it by less than 0.2%, which the figures below leave out):
    - opening: $`(\text{bounded\_len}+m_2)d/a`$, from 70,656 (`kyber1024_d128`) to 130,560
-     (`toy_d64`);
+     (`toy_d64`),
    - range round: $`512/a`$, that is 2,048.
 6. **Bimodal tests.** A bimodal test reproduces $`D_s`$ exactly when
    $`\|Re\|^2\le2s^2\ln M`$, because its acceptance probability then never exceeds 1.
@@ -211,10 +220,10 @@ per proof. The derivation of the table, in order of the columns:
      add $`(\Pr[B_e]+\Pr[B_d])/(1-2^{-128})`$. For another set, whose rounding leaves no slack,
      this is $`2^{-121.75}`$ at most, and it then dominates.
 7. **Negligible.** Each of the following is below $`2^{-196}`$ per proof:
-   - a challenge derivation failing after 64 draws, taking the rate of draws above $`\eta`$ as
-     at most 0.02 (a statistical bound from the measured rates, which are below 1.2%, not a
-     proof; any rate up to 0.2 keeps this term below $`2^{-143}`$);
-   - reaching a 4096-attempt limit;
+   - a challenge decoding falling back to the constant 1, at most $`2^{-208}`$ per derivation
+     if at most a quarter of the draws exceed $`\eta`$ (the measured rates are below 1.2%), so
+     at most $`2^{-203}`$ per proof over the expected attempts (item 1),
+   - reaching a 4096-attempt limit,
    - a mask above $`q/2`$, which cannot occur for the shipped sets.
 
 The table's values are computed from the shipped sets and the integer constants that Rust
@@ -223,11 +232,43 @@ The integer constants meet the rejection lemmas' hypotheses
 ($`M_1`$ and $`M_2`$ at least their formula values) in interval arithmetic, not only in the
 `f64` of `Abdlop::rejection_constants`.
 
+## Fixed-width codes
+
+Since version 0.2 every response coefficient is written in $`t+4`$ bits, so its absolute value is
+at most $`2^{t+3}-1`$ (about $`5.16\sigma`$), and every hint in the hint width of the parameter
+set ([encodings](encodings.md#serializations)). The prover restarts every attempt with a
+coefficient or a hint beyond its width, after the rejection tests and the norm checks.
+
+- *Zero-knowledge.* Each restart is a test of the accepted response, and for the hints of the
+  accepted response and the public data: the hint is a function of $`r`$, which the verifier
+  computes from the proof, and of $`z_{22}`$, a part of the uncompressed response. Accepted
+  proofs therefore follow the ideal laws conditioned on further public events, as for the
+  [norm restarts](#deviations-from-lnp22), and a simulator draws its responses again until they
+  hold. The [whole-proof bounds](#statistical-distance-of-whole-proofs) compare with such an
+  ideal prover, so they are unchanged up to item 5's count. Against the unconditioned laws the
+  difference is the probability of a restart, which is not negligible: $`2Q(8/1.55)\approx
+  2.45\cdot10^{-7}`$ per Gaussian coefficient, about 0.08% to 0.13% per attempt of the opening
+  proof and 0.013% per range attempt for the shipped sets (a normal tail computation for the
+  ideal laws, not measured).
+- *Soundness.* The codes only bound what a prover can send, which the verifier's norm checks
+  already allowed, so every soundness argument holds as before.
+- *Completeness.* The restarts raise the expected number of attempts by the same small
+  fraction. The width of the hints comes from a model of the hints ([encodings](encodings.md#serializations)),
+  a heuristic: were it wrong, hints would restart more often, and no proof would be wrong.
+
 ## Fiat–Shamir and extraction
 
-The proofs are non-interactive through the Fiat–Shamir transform: every challenge is a SHAKE128
-hash of the transcript so far, application context included, and Jali keeps the paper's order of
-messages and challenges. Knowledge soundness rests on extraction by rewinding.
+The proofs are non-interactive through the Fiat–Shamir transform of draft-irtf-cfrg-fiat-shamir-04:
+one SHAKE128 duplex sponge per proof, whose session identifier binds the argument and the
+application context, absorbs the instance (parameters, public seed and statement) and then every
+prover message as it is sent, and squeezes every challenge ([encodings](encodings.md#io-patterns)).
+Jali keeps the paper's order of messages and challenges. The analysis below models the hash as a
+random oracle, and knowledge soundness rests on extraction by rewinding. The draft rests the
+security of its duplex-sponge transformation on Chiesa and Orrù, "A Fiat-Shamir Transformation
+From Duplex Sponges" (ePrint 2025/536, the draft's [CO25]): it preserves state-restoration
+knowledge soundness, with a loss quadratic in the number of oracle queries, and zero-knowledge
+(draft §8.4). That LNP22's protocol and Jali's toolbox are state-restoration knowledge sound is
+not established here.
 
 - LNP22 analyses the Fiat–Shamir version of its protocol in Appendix B.3. Theorem B.7 (p. 77)
   proves knowledge soundness in the random-oracle model, for a prover making $`Q`$ oracle
@@ -265,11 +306,11 @@ oracle queries of its own, which, after any adaptive sequence of simulated proof
 statements, outputs a witness for every accepted proof whose statement and context received no
 simulated proof, except with negligible probability. Simulator and extractor share the
 programming of the oracle: at the points that output LinHC keys they place keys with a trapdoor.
-The key is SHAKE128's output, entry by entry, on the transcript's challenge seed `linhc-key`, and
-the argument models it, like the transcript hash, as a random oracle with values in the key
-space (the usual idealization of an extendable-output function). A key expanded from a 32-byte
-seed by AES-256-CTR, as the public matrices are, could not be programmed to a key with a
-trapdoor, since a reduction controls only the seed.
+The key is the transcript's first verifier message, squeezed from the sponge right after the
+instance, each coefficient by `DecodeUint`, and the argument models it, like every challenge, as
+a random-oracle output with values in the key space (`DecodeUint` adds at most $`2^{-128}`$ per
+coefficient). A key expanded from a 32-byte seed by AES-256-CTR, as the public matrices are,
+could not be programmed to a key with a trapdoor, since a reduction controls only the seed.
 This is the guarantee of Katsumata's Lemma 4.6 (unforgeability of the derived signature under
 chosen messages, with a straight-line extractor), with the message taken to be the statement and
 the context. Extraction from a new proof of a statement that did receive a simulated proof, the
@@ -389,6 +430,8 @@ remain available for the opening, quadratic and evaluation proofs.
   $`\sqrt{258\ln2}\approx13.37`$ in place of the 14 of LNP22 Lemma 2.14(1), so that the tail is
   $`2^{-129}`$ at the formula value. The shipped values of $`M_1`$ also meet LNP22's own
   formula (computed in interval arithmetic).
+- **Fixed-width restarts.** The prover draws again when a response or a hint exceeds its
+  fixed-width code ([fixed-width codes](#fixed-width-codes)).
 - **Norm restarts.** The prover also draws again when $`z_1`$ or a range response exceeds the
   verifier's bound ($`\|z^{(e)}\|^2\le`$`z3_bound_squared`, that is
   $`\|z^{(e)}\|\le1.64\sqrt{256}s_3`$, and $`\|z^{(d)}\|_\infty\le`$`z4_bound`). LNP22's provers

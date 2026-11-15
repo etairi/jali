@@ -68,9 +68,9 @@ fn fork(
     seed: u8,
     c: &Poly,
 ) -> (QuadProof, First) {
-    let binding = prefix(scheme, commitment, equation, b"forks")
+    let binding = transcript(scheme, commitment, equation, b"forks")
         .unwrap()
-        .digest();
+        .binding();
     prove_core(
         scheme,
         commitment,

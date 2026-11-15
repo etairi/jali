@@ -109,7 +109,12 @@ fn approximate_range_rejection_is_exact_for_a_worst_case_witness() {
     .unwrap() as f64;
     let mut worst = 0f64;
     for seed in 0..8u8 {
-        let v = projections(&[seed; 32], false, &values).unwrap();
+        let v = projections(
+            &Projections::for_tests(&[seed; 32], values.len(), values.len()),
+            false,
+            &values,
+        )
+        .unwrap();
         let norm: f64 = v.iter().map(|x| (*x as f64).powi(2)).sum();
         let needed = (norm / (2.0 * variance)).exp();
         assert!(m >= needed, "M = {m} below exp(|v|^2/2s^2) = {needed}");
@@ -144,7 +149,12 @@ fn approximate_range_rejection_is_exact_at_every_accepted_width() {
         assert_eq!(m, alpha(t, squared).unwrap() as f64);
         let variance = (1.55 * 2f64.powi(t as i32)).powi(2);
         for seed in 0..8u8 {
-            let v = projections(&[seed; 32], false, &values).unwrap();
+            let v = projections(
+                &Projections::for_tests(&[seed; 32], values.len(), values.len()),
+                false,
+                &values,
+            )
+            .unwrap();
             let norm: f64 = v.iter().map(|x| (*x as f64).powi(2)).sum();
             let needed = (norm / (2.0 * variance)).exp();
             assert!(m >= needed, "t = {t}: M = {m} below {needed}");

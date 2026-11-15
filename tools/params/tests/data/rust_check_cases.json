@@ -1,22 +1,22 @@
 {
  "provenance": {
   "generated_by": "python3 tools/params/rust_reference.py",
-  "date_utc": "2026-10-03T07:59Z",
-  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "date_utc": "2026-11-15T13:22Z",
+  "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
   "platform": "Darwin arm64",
   "build": "cargo build --locked --release --features serde --example verify_sets",
   "crate_sources_sha256": {
-   "src/params/mod.rs": "617184cfdacf74544c96717f9de331bd33387284f61eef597a15a6143059f828",
-   "src/statement.rs": "e277e79b4733ceba7c0ea0994973cab5359f0bd1b915a77e8ac6bba01d119139",
+   "src/params/mod.rs": "fe0dab8d28e0abd33b287e3929b41dd3f1de8c784d4b7a5f4dd3988d891717e1",
+   "src/statement.rs": "50a3a5fb6bbeef9b47bdc0890342edebe0fcaa4401a76ef24d57c23246187c86",
    "src/lin.rs": "10feb78a97a0b1bc08f179d4e6a7730f9d74bcacee80ffb0dc2be536edee1451",
-   "src/lnp.rs": "c7ff971ec47548c7c2260308e519ad9fd62fd52f34479a39d53bcbfba848f54b",
-   "src/abdlop.rs": "ed0b44e3911014569dc091485a65805bfea971d780b8f95074f3d9570d859a98",
+   "src/lnp.rs": "e6a7b6999cdb1749ccd248a6bacb8466d3b8711b2ea3227e69d84c63b03829f0",
+   "src/abdlop.rs": "eb0e2f927d6386fcd791cd43f7234a42f5e399aa00329c67b3d29068f4110a18",
    "src/json.rs": "09d48678e206aacccc7315f98d9ca468f7dee2e4f956c4819dfafdf4ffa46e26",
    "src/dcompress.rs": "e99f2c83ccf7d26fb99de8b4c651ca88d6cf9d596b1dcf9f2cddb371aa55b94c",
    "src/math/int.rs": "a3d25fea3db37537984d04812381dedb7438f14462101f98b0d339a7fb9436d2",
    "src/math/ring.rs": "6e7365a4b2f90723f1ebd057c2aaae9b229a35da0079f93cfbcf4358e71eb1d9",
    "src/params/moduli.rs": "7b8029423a41367e890eb2e0884cf24bfeadf80ac5c7639d8e1d4eb7bb64e18f",
-   "src/rand/mod.rs": "5b9c5a836319bb253637ae5b8a66aa1d13ac627c224791b858cf1800b9cd58f3"
+   "src/rand/mod.rs": "b78352933607bd547e01d3a2b9c99a5fef59197020860ec4de17a051d4d5cf95"
   },
   "what": "TboxParams::from_json and lin::compile of the worst-case statement, per case; the case text is case_text(bases[base], case) of tools/params/rust_reference.py, whose SHA-256 is recorded"
  },
@@ -468,7 +468,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 17896
+     "estimated_proof_bytes": 17844,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -495,7 +496,8 @@
      "exact_alpha_squared": 320,
      "approx_alpha_squared": 21632,
      "approx_extraction_bound": 406322,
-     "estimated_proof_bytes": 19038
+     "estimated_proof_bytes": 18988,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -522,7 +524,8 @@
      "exact_alpha_squared": 10368,
      "approx_alpha_squared": 19629755080226304,
      "approx_extraction_bound": 426060755762,
-     "estimated_proof_bytes": 60624
+     "estimated_proof_bytes": 60568,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -549,7 +552,8 @@
      "exact_alpha_squared": 10304,
      "approx_alpha_squared": 16358129233521920,
      "approx_extraction_bound": 426060755762,
-     "estimated_proof_bytes": 54522
+     "estimated_proof_bytes": 54468,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -576,7 +580,8 @@
      "exact_alpha_squared": 704,
      "approx_alpha_squared": 4096,
      "approx_extraction_bound": 203160,
-     "estimated_proof_bytes": 24956
+     "estimated_proof_bytes": 24904,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -603,7 +608,8 @@
      "exact_alpha_squared": 0,
      "approx_alpha_squared": 70368744177664,
      "approx_extraction_bound": 26628797234,
-     "estimated_proof_bytes": 16508
+     "estimated_proof_bytes": 16444,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "15.952870896680441",
@@ -634,7 +640,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21058
+     "estimated_proof_bytes": 21004,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -666,7 +673,8 @@
      "exact_alpha_squared": 3078,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 22608
+     "estimated_proof_bytes": 22552,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -698,7 +706,8 @@
      "exact_alpha_squared": 2112,
      "approx_alpha_squared": 8594031616,
      "approx_extraction_bound": 208037478,
-     "estimated_proof_bytes": 24814
+     "estimated_proof_bytes": 24772,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -726,7 +735,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 25230
+     "estimated_proof_bytes": 25196,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -753,7 +763,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 29842
+     "estimated_proof_bytes": 29892,
+     "hint_width": 4
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -780,7 +791,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 48750
+     "estimated_proof_bytes": 48724,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -807,7 +819,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 51270
+     "estimated_proof_bytes": 51244,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -839,7 +852,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 17896
+     "estimated_proof_bytes": 17844,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -869,7 +883,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 17896
+     "estimated_proof_bytes": 17844,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -904,7 +919,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 17896
+     "estimated_proof_bytes": 17844,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -1026,7 +1042,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 17896
+     "estimated_proof_bytes": 17844,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -1169,7 +1186,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 17896
+     "estimated_proof_bytes": 17844,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -1292,7 +1310,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 17896
+     "estimated_proof_bytes": 17844,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -1333,7 +1352,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 17896
+     "estimated_proof_bytes": 17844,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -1793,7 +1813,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 17896
+     "estimated_proof_bytes": 17844,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -1921,7 +1942,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 18979
+     "estimated_proof_bytes": 18996,
+     "hint_width": 6
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -1952,7 +1974,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 20390
+     "estimated_proof_bytes": 19380,
+     "hint_width": 8
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -1983,7 +2006,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 22441
+     "estimated_proof_bytes": 19636,
+     "hint_width": 9
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -2018,7 +2042,8 @@
      "exact_alpha_squared": 2112,
      "approx_alpha_squared": 8594031616,
      "approx_extraction_bound": 208037478,
-     "estimated_proof_bytes": 25083
+     "estimated_proof_bytes": 25300,
+     "hint_width": 5
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -2054,7 +2079,8 @@
      "exact_alpha_squared": 2112,
      "approx_alpha_squared": 8594031616,
      "approx_extraction_bound": 208037478,
-     "estimated_proof_bytes": 27354
+     "estimated_proof_bytes": 26004,
+     "hint_width": 9
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -2086,7 +2112,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21058
+     "estimated_proof_bytes": 21004,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2118,7 +2145,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21058
+     "estimated_proof_bytes": 21004,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2161,7 +2189,8 @@
      "exact_alpha_squared": 6028,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21218
+     "estimated_proof_bytes": 21164,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2196,7 +2225,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 9279418368,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21058
+     "estimated_proof_bytes": 21004,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2231,7 +2261,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12365440000,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21058
+     "estimated_proof_bytes": 21004,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2271,7 +2302,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": "234229377550334402599320",
-     "estimated_proof_bytes": 22626
+     "estimated_proof_bytes": 22572,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2311,7 +2343,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": "58557344387583600649830",
-     "estimated_proof_bytes": 22562
+     "estimated_proof_bytes": 22508,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2351,7 +2384,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 832149912,
-     "estimated_proof_bytes": 21090
+     "estimated_proof_bytes": 21036,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2387,7 +2421,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21522
+     "estimated_proof_bytes": 21468,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2419,7 +2454,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21058
+     "estimated_proof_bytes": 21004,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2456,7 +2492,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21058
+     "estimated_proof_bytes": 21004,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2489,7 +2526,8 @@
      "exact_alpha_squared": 10304,
      "approx_alpha_squared": 17176035695198016,
      "approx_extraction_bound": 426060755762,
-     "estimated_proof_bytes": 54522
+     "estimated_proof_bytes": 54468,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2525,7 +2563,8 @@
      "exact_alpha_squared": 3078,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 22864
+     "estimated_proof_bytes": 22808,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2560,7 +2599,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21058
+     "estimated_proof_bytes": 21004,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2634,7 +2674,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 25230
+     "estimated_proof_bytes": 25196,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -2721,7 +2762,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 29074
+     "estimated_proof_bytes": 29124,
+     "hint_width": 4
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -2789,7 +2831,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 48750
+     "estimated_proof_bytes": 48724,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -2853,7 +2896,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 6348,
-     "estimated_proof_bytes": 17768
+     "estimated_proof_bytes": 17716,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -2898,7 +2942,8 @@
      "exact_alpha_squared": 10304,
      "approx_alpha_squared": 16358129233521920,
      "approx_extraction_bound": 426060755762,
-     "estimated_proof_bytes": 54522
+     "estimated_proof_bytes": 54468,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -2945,7 +2990,8 @@
      "exact_alpha_squared": 10368,
      "approx_alpha_squared": 19629755080226304,
      "approx_extraction_bound": 426060755762,
-     "estimated_proof_bytes": 60624
+     "estimated_proof_bytes": 60568,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -3003,7 +3049,8 @@
      "exact_alpha_squared": 704,
      "approx_alpha_squared": 4096,
      "approx_extraction_bound": 203160,
-     "estimated_proof_bytes": 24956
+     "estimated_proof_bytes": 24904,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -3035,7 +3082,8 @@
      "exact_alpha_squared": 10304,
      "approx_alpha_squared": 16358129233521920,
      "approx_extraction_bound": 426060755762,
-     "estimated_proof_bytes": 54522
+     "estimated_proof_bytes": 54468,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -3125,7 +3173,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 8192,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 16776
+     "estimated_proof_bytes": 16724,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -3162,7 +3211,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 25422
+     "estimated_proof_bytes": 25388,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "1045487.3470848494",
@@ -3276,7 +3326,8 @@
      "exact_alpha_squared": 704,
      "approx_alpha_squared": 4096,
      "approx_extraction_bound": 203160,
-     "estimated_proof_bytes": 25244
+     "estimated_proof_bytes": 25192,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -3311,7 +3362,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21466
+     "estimated_proof_bytes": 21412,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -3357,7 +3409,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 29842
+     "estimated_proof_bytes": 29892,
+     "hint_width": 4
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -3489,7 +3542,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 25230
+     "estimated_proof_bytes": 25196,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -3600,7 +3654,8 @@
      "exact_alpha_squared": 320,
      "approx_alpha_squared": 21632,
      "approx_extraction_bound": 406322,
-     "estimated_proof_bytes": 19038
+     "estimated_proof_bytes": 18988,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -3633,7 +3688,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 51166
+     "estimated_proof_bytes": 51140,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -3736,7 +3792,8 @@
      "exact_alpha_squared": 2112,
      "approx_alpha_squared": 8594031616,
      "approx_extraction_bound": 208037478,
-     "estimated_proof_bytes": 24814
+     "estimated_proof_bytes": 24772,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -3789,7 +3846,8 @@
      "exact_alpha_squared": 3078,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 22608
+     "estimated_proof_bytes": 22552,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -3834,7 +3892,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 25230
+     "estimated_proof_bytes": 25196,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -3869,7 +3928,8 @@
      "exact_alpha_squared": 2112,
      "approx_alpha_squared": 34376126464,
      "approx_extraction_bound": 208037478,
-     "estimated_proof_bytes": 24814
+     "estimated_proof_bytes": 24772,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -3959,7 +4019,8 @@
      "exact_alpha_squared": 320,
      "approx_alpha_squared": 21632,
      "approx_extraction_bound": 406322,
-     "estimated_proof_bytes": 19038
+     "estimated_proof_bytes": 18988,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -4033,7 +4094,8 @@
      "exact_alpha_squared": 9984,
      "approx_alpha_squared": 19629755080226304,
      "approx_extraction_bound": 426060755762,
-     "estimated_proof_bytes": 60944
+     "estimated_proof_bytes": 60888,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -4089,7 +4151,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 25230
+     "estimated_proof_bytes": 25196,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -4123,7 +4186,8 @@
      "exact_alpha_squared": 10304,
      "approx_alpha_squared": 16358129233521920,
      "approx_extraction_bound": 426060755762,
-     "estimated_proof_bytes": 54690
+     "estimated_proof_bytes": 54636,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -4209,7 +4273,8 @@
      "exact_alpha_squared": 2112,
      "approx_alpha_squared": 8594031616,
      "approx_extraction_bound": 208037478,
-     "estimated_proof_bytes": 24814
+     "estimated_proof_bytes": 24772,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -4256,7 +4321,8 @@
      "exact_alpha_squared": 2112,
      "approx_alpha_squared": 8594031616,
      "approx_extraction_bound": 208037478,
-     "estimated_proof_bytes": 24814
+     "estimated_proof_bytes": 24772,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -4291,7 +4357,8 @@
      "exact_alpha_squared": 2112,
      "approx_alpha_squared": 8594031616,
      "approx_extraction_bound": 208037478,
-     "estimated_proof_bytes": 24814
+     "estimated_proof_bytes": 24772,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -4346,7 +4413,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 17896
+     "estimated_proof_bytes": 17844,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -4376,7 +4444,8 @@
      "exact_alpha_squared": 704,
      "approx_alpha_squared": 4096,
      "approx_extraction_bound": 203160,
-     "estimated_proof_bytes": 24956
+     "estimated_proof_bytes": 24904,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -4406,7 +4475,8 @@
      "exact_alpha_squared": 0,
      "approx_alpha_squared": 70368744177664,
      "approx_extraction_bound": 26628797234,
-     "estimated_proof_bytes": 16508
+     "estimated_proof_bytes": 16444,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "15.952870896680441",
@@ -4457,7 +4527,8 @@
      "exact_alpha_squared": 128320,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 51270
+     "estimated_proof_bytes": 51244,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -4487,7 +4558,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 2048,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 18024
+     "estimated_proof_bytes": 17972,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -4615,7 +4687,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 29722
+     "estimated_proof_bytes": 29772,
+     "hint_width": 4
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -4649,7 +4722,8 @@
      "exact_alpha_squared": 3078,
      "approx_alpha_squared": 9279418368,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 22608
+     "estimated_proof_bytes": 22552,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -4722,7 +4796,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 20810
+     "estimated_proof_bytes": 20756,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -4840,7 +4915,8 @@
      "exact_alpha_squared": 3078,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 22608
+     "estimated_proof_bytes": 22552,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -4877,7 +4953,8 @@
      "exact_alpha_squared": 2112,
      "approx_alpha_squared": 8594031616,
      "approx_extraction_bound": 208037478,
-     "estimated_proof_bytes": 24814
+     "estimated_proof_bytes": 24772,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -4947,7 +5024,8 @@
      "exact_alpha_squared": 576,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 48750
+     "estimated_proof_bytes": 48724,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -4977,7 +5055,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 48750
+     "estimated_proof_bytes": 48724,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -5010,7 +5089,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 48646
+     "estimated_proof_bytes": 48620,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -5059,7 +5139,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 34006
+     "estimated_proof_bytes": 33980,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -5091,7 +5172,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 25094
+     "estimated_proof_bytes": 25060,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -5137,7 +5219,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 25230
+     "estimated_proof_bytes": 25196,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -5272,7 +5355,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 21632,
      "approx_extraction_bound": 406322,
-     "estimated_proof_bytes": 17910
+     "estimated_proof_bytes": 17860,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -5331,7 +5415,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 13919127552,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21058
+     "estimated_proof_bytes": 21004,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -5379,7 +5464,8 @@
      "exact_alpha_squared": 0,
      "approx_alpha_squared": 70368744177664,
      "approx_extraction_bound": 26628797234,
-     "estimated_proof_bytes": 16508
+     "estimated_proof_bytes": 16444,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "15.952870896680441",
@@ -5414,7 +5500,8 @@
      "exact_alpha_squared": 3078,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 22000
+     "estimated_proof_bytes": 21944,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -5447,7 +5534,8 @@
      "exact_alpha_squared": 10304,
      "approx_alpha_squared": 17176035695198016,
      "approx_extraction_bound": 426060755762,
-     "estimated_proof_bytes": 54522
+     "estimated_proof_bytes": 54468,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -5561,7 +5649,8 @@
      "exact_alpha_squared": 2112,
      "approx_alpha_squared": 1024,
      "approx_extraction_bound": 208037478,
-     "estimated_proof_bytes": 24814
+     "estimated_proof_bytes": 24772,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",
@@ -5605,7 +5694,8 @@
      "exact_alpha_squared": 640,
      "approx_alpha_squared": 128,
      "approx_extraction_bound": 101580,
-     "estimated_proof_bytes": 17896
+     "estimated_proof_bytes": 17844,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -5737,7 +5827,8 @@
      "exact_alpha_squared": 3014,
      "approx_alpha_squared": 12372557824,
      "approx_extraction_bound": 416074956,
-     "estimated_proof_bytes": 21058
+     "estimated_proof_bytes": 21004,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "65342.959192803086",
@@ -5812,7 +5903,8 @@
      "exact_alpha_squared": 448,
      "approx_alpha_squared": 0,
      "approx_extraction_bound": 48,
-     "estimated_proof_bytes": 51270
+     "estimated_proof_bytes": 51244,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "16335.739798200771",
@@ -5846,7 +5938,8 @@
      "exact_alpha_squared": 2112,
      "approx_alpha_squared": 8594031616,
      "approx_extraction_bound": 208037478,
-     "estimated_proof_bytes": 24814
+     "estimated_proof_bytes": 24772,
+     "hint_width": 2
     },
     "f64": {
      "arp_bound": "32671.479596401543",

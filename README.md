@@ -12,13 +12,19 @@ witness from a single proof, without rewinding.
 
 ## Status
 
-Jali is research code, version 0.1.
+Jali is research code, version 0.2.
 
 - **Not audited.** No independent review of the code or of its parameters has taken place.
 - **No constant-time guarantee.** Arithmetic, sampling and rejection run in variable time, so
   timing may depend on secret values.
 - **Unstable formats.** The API, the proof encoding and the transcripts may change between
   versions. Proofs are not interoperable with other implementations.
+- **Standard transcripts.** Since 0.2 every proof follows the CFRG draft
+  draft-irtf-cfrg-fiat-shamir-04: one SHAKE128 duplex sponge per proof, a session identifier
+  that binds the argument and the context, the instance absorbed first, every prover message
+  absorbed as it is sent and every challenge squeezed with a fixed length. The final round uses
+  the compact flavor of draft-irtf-cfrg-sigma-protocols-04. Proofs of 0.1 do not verify under
+  0.2.
 - **Randomness.** `commit`, `prove` and `prove_bytes` draw a fresh seed per call from a
   `rand_core` 0.10 `CryptoRng` (for example from `rand` 0.10); prefer them. The `_with_seed`
   variants take a 32-byte seed that must be secret and uniformly random. A seed may be reused:
@@ -47,7 +53,7 @@ Jali is on [crates.io](https://crates.io/crates/jali). It needs Rust 1.95 or lat
 
 ```toml
 [dependencies]
-jali = { version = "0.1", features = ["serde"] }
+jali = { version = "0.2", features = ["serde"] }
 ```
 
 The crate forbids `unsafe` code and has no C dependencies.
@@ -168,8 +174,8 @@ proves the Kyber-1024 shape above in both modes:
 cargo run --release --example extractable
 ```
 
-An extractable proof is about six times as long (118.7 kB instead of 20.3 kB for that shape), and
-proving takes 1.2 to 1.5 times the instructions. The plain mode is unchanged. The [protocol
+An extractable proof is about six times as long (121.0 kB instead of 21.0 kB for that shape),
+proving takes 1.3 to 1.5 times the instructions and verifying 1.2 times. The [protocol
 notes](https://github.com/etairi/jali/blob/main/docs/protocol.md#straight-line-extractable-mode)
 describe the construction and the [security
 notes](https://github.com/etairi/jali/blob/main/docs/security.md#straight-line-extraction) its
@@ -207,16 +213,17 @@ There are no default features.
 
 | Function | Relation | Proof degree | log<sub>2</sub> *q* | Proof size |
 | --- | --- | ---: | ---: | ---: |
-| `params::kyber1024_d64` | **Aw** + **t** = **0** over ℤ<sub>3329</sub>\[*X*\]/(*X*<sup>256</sup> + 1), **A** ∈ *R*<sup>4×8</sup>, ‖**w**‖<sup>2</sup> ≤ 2950 | 64 | 41.14 | about 20.3 kB |
-| `params::kyber1024_d128` | the same | 128 | 41.14 | about 21.8 kB |
-| `params::demo_d64` | the same shape with *p* = 2<sup>32</sup> − 4607 and ‖**w**‖<sup>2</sup> ≤ 2048, the size of the Module-LWE example of LNP22 §6.2 | 64 | 60.44 | about 24.0 kB |
-| `params::toy_d64` | a small statement with every kind of block, for tests and examples | 64 | 40.00 | about 17.3 kB |
+| `params::kyber1024_d64` | **Aw** + **t** = **0** over ℤ<sub>3329</sub>\[*X*\]/(*X*<sup>256</sup> + 1), **A** ∈ *R*<sup>4×8</sup>, ‖**w**‖<sup>2</sup> ≤ 2950 | 64 | 41.14 | 21,004 B |
+| `params::kyber1024_d128` | the same | 128 | 41.14 | 22,552 B |
+| `params::demo_d64` | the same shape with *p* = 2<sup>32</sup> − 4607 and ‖**w**‖<sup>2</sup> ≤ 2048, the size of the Module-LWE example of LNP22 §6.2 | 64 | 60.44 | 24,772 B |
+| `params::toy_d64` | a small statement with every kind of block, for tests and examples | 64 | 40.00 | 17,844 B |
 
 The first three were derived by the parameter tool for the worst case over public data, so they
 compile every instance of their shape. Their hardness criterion is *δ* ≤ 1.0044 for MLWE
 and MSIS, about 101 bits under core-SVP; the [parameter
 notes](https://github.com/etairi/jali/blob/main/docs/parameters.md) give the estimates and
-lattice-estimator cross-checks. Proof sizes vary by up to a few tens of bytes with the seed.
+lattice-estimator cross-checks. Every field of a proof has a fixed width, so every proof of a
+set has the size in the table (`CheckedParams::estimated_proof_bytes`).
 
 `params::kyber1024_d64_extraction`, `kyber1024_d128_extraction`, `demo_d64_extraction` and
 `toy_d64_extraction` are the extraction sets of these four, for the extractable mode.
@@ -228,8 +235,8 @@ package.
 
 ## Performance
 
-Indicative timings from one benchmark session on an Apple M4 (4 performance and 6 efficiency
-cores, 16 GiB), macOS 27.0.1, rustc 1.99.0, default release profile. Each figure is the median
+Indicative timings of version 0.1 from one benchmark session on an Apple M4 (4 performance and
+6 efficiency cores, 16 GiB), macOS 27.0.1, rustc 1.99.0, default release profile. Each figure is the median
 wall-clock time of one call over seeds 1 to 3 and five rounds (15 proofs and 45 verifications
 per row); `parallel` ran on two threads (`RAYON_NUM_THREADS=2`). The machine carried other load
 (median one-minute load average 5.15), and the number of rejection-sampling restarts varies with
@@ -249,11 +256,17 @@ of the example.
 Verification of the compiled statements includes decoding the proof and expanding the public
 matrices; that of the opening proof includes decoding only.
 
-In the extractable mode, over seeds 1 to 20 of the Kyber-1024 shape on the same machine (rustc
-1.100.0, one thread), proving took 1.49 (`kyber1024_d64`), 1.23 (`kyber1024_d128`) and 1.17
-(`demo_d64`) times the plain mode's retired instructions, and verifying 1.14, 1.17 and 1.15 times.
-Proving restarts a random number of times, and a run with other commitment keys gave ratios up
-to 0.14 away from these.
+Version 0.2, with the transcript of draft-irtf-cfrg-fiat-shamir-04, needs fewer instructions
+than version 0.1: over seeds 1 to 100 of the Kyber-1024 shape (rustc 1.100.0, one thread, retired
+instructions per call), proving took 0.73 (`kyber1024_d64`), 0.73 (`kyber1024_d128`) and 0.77
+(`demo_d64`) times those of 0.1 and verifying 0.74, 0.69 and 0.74 times, and in the extractable
+mode 0.79, 0.80 and 0.81 and 0.78, 0.72 and 0.79 times. Version 0.1 encoded and hashed the
+derived equations at every layer, which took about a quarter of its time.
+
+In the extractable mode of version 0.2, over the same seeds, proving took 1.49 (`kyber1024_d64`),
+1.30 (`kyber1024_d128`) and 1.31 (`demo_d64`) times the plain mode's retired instructions, and
+verifying 1.24, 1.18 and 1.24 times. Proving restarts a random number of times, so the prover's
+ratios move with the seeds.
 
 ## Documentation
 
@@ -283,7 +296,16 @@ docs.rs does.
   CRYPTO 2013. (Bimodal rejection sampling.)
 - L. Ducas, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler and D. Stehlé. CRYSTALS –
   Dilithium: Digital Signatures from Module Lattices. Cryptology ePrint Archive, Report
-  2017/633. (Compression with hints and the hint code, as LNP22 §6.1 uses them.)
+  2017/633. (Compression with hints, as LNP22 §6.1 uses it.)
+- M. Orrù and C. Yun. Fiat-Shamir Transformation. Internet-Draft
+  draft-irtf-cfrg-fiat-shamir-04, Crypto Forum Research Group, 2 November 2026. (The
+  transcript, its session identifiers, decodings and serializations.)
+- M. Orrù and C. Yun. Sigma Proofs for Linear Relations. Internet-Draft
+  draft-irtf-cfrg-sigma-protocols-04, Crypto Forum Research Group, 2 November 2026. (The compact
+  flavor of the final round.)
+- NIST. FIPS 203, Module-Lattice-Based Key-Encapsulation Mechanism Standard, and FIPS 204,
+  Module-Lattice-Based Digital Signature Standard, 2024. (The centred binomial decoding of the
+  projection matrices and the bit packing of codec C1.)
 
 ## License
 

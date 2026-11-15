@@ -1,16 +1,21 @@
 //! Vanishing constant-coefficient proofs, LNP22 Fig. 8 and §4.4.
-//! Both garbage coefficients are zero; independent Gamma rows follow the garbage
-//! commitments, and h is absorbed before ring-valued folding challenges are derived.
+//!
+//! Both garbage coefficients are zero. On its own the proof runs the transcript
+//! `JALI-V02-LNP22-QUAD-EVAL-C1-SHAKE128`, whose instance is the parameters, the public seed,
+//! the commitment and both equation lists. Inside the toolbox it continues the toolbox's
+//! transcript after the range responses. Either way the garbage commitments are its first
+//! prover message, $`\Gamma`$ its first verifier message, $`h`$ its second prover message,
+//! and the many-equation proof of the final equations follows (`docs/encodings.md`).
 use crate::{
     Error,
     abdlop::{self, Abdlop, Commitment, Opening},
-    codec::BitWriter,
+    codec::{BitWriter, fields},
     linhc,
-    math::{Poly, PolyVec, SparsePolyVec},
+    math::{Poly, PolyVec, SparsePolyVec, U256},
     quad::{self, QuadEq, QuadProof},
     quad_many,
     rand::{AesPrg, derive_key, domain, secret, take_seed, uniform_ring},
-    transcript::Transcript,
+    transcript::{Protocol, Transcript},
 };
 use zeroize::Zeroizing;
 
@@ -30,39 +35,64 @@ pub struct EvalProof {
     pub quadratic: QuadProof,
 }
 
-fn setup_prefix(
+/// The transcript of the proof on its own, after its instance: the scheme, the commitment's
+/// serialization, and both equation lists (`quad_many::absorb_equations`).
+fn transcript(
     scheme: &Abdlop,
     commitment: &Commitment,
     eqs: &[QuadEq],
     evals: &[QuadEq],
     context: &[u8],
 ) -> Result<Transcript, Error> {
-    let mut prefix = scheme.prefix(commitment, context)?;
-    quad_many::absorb_equations(&mut prefix, b"quadratic-inputs", eqs)?;
-    quad_many::absorb_equations(&mut prefix, b"evaluation-inputs", evals)?;
-    Ok(prefix)
+    let mut transcript = Transcript::new(Protocol::Evaluation, context)?;
+    scheme.absorb_scheme(&mut transcript)?;
+    transcript.absorb(&scheme.commitment_bytes(commitment)?);
+    quad_many::absorb_equations(&mut transcript, eqs)?;
+    quad_many::absorb_equations(&mut transcript, evals)?;
+    Ok(transcript)
 }
+/// The serialization of a vector modulo $`q`$: the garbage commitments, or $`h`$.
+fn vector_bytes(v: &PolyVec) -> Result<Vec<u8>, Error> {
+    let mut w = BitWriter::new();
+    fields::write_below(&mut w, v, &v.ring().modulus())?;
+    w.into_bytes()
+}
+/// Squeeze $`\Gamma`$, $`\lambda`$ rows of one scalar modulo $`q`$ per evaluation equation,
+/// row-major, each by `DecodeUint`.
+fn squeeze_gamma(
+    scheme: &Abdlop,
+    transcript: &mut Transcript,
+    evals: usize,
+) -> Result<Vec<U256>, Error> {
+    let count = scheme
+        .checked
+        .lambda
+        .checked_mul(evals)
+        .ok_or(Error::Dimension)?;
+    transcript.uints(&scheme.ring().modulus(), count)
+}
+/// The traces of the $`\lambda`$ combinations $`\sum_j\Gamma_{rj}f_j`$ of the evaluation
+/// equations $`f_j`$, for the rows $`r`$ of `gamma`.
 fn combined(
     scheme: &Abdlop,
-    prefix: &Transcript,
+    gamma: &[U256],
     evals: &[QuadEq],
     input_dim: usize,
 ) -> Result<Vec<QuadEq>, Error> {
     let ring = scheme.ring();
-    let seed = prefix.challenge_seed(b"Gamma");
-    // Each row reads its own stream: the rows are computed in parallel (`parallel`) and kept
-    // in order.
+    for eq in evals {
+        eq.check(ring, input_dim)?;
+    }
+    if gamma.len() != scheme.checked.lambda * evals.len() {
+        return Err(Error::Dimension);
+    }
+    // The rows are computed in parallel (`parallel`) and kept in order.
     crate::par::try_map(scheme.checked.lambda, |row| {
-        let weights = uniform_ring(
-            &mut AesPrg::new(&seed, domain(0x47414d4d, row as u32)),
-            ring,
-            evals.len(),
-        )?;
+        let weights = &gamma[row * evals.len()..(row + 1) * evals.len()];
         // In place: the keys and values of `equation.add(&eq.scale(&constant(weight)))`.
         let mut equation = QuadEq::zero(ring.clone(), input_dim)?;
         for (eq, weight) in evals.iter().zip(weights) {
-            eq.check(ring, input_dim)?;
-            equation.add_scaled_scalar_assign(eq, &weight)?;
+            equation.add_scaled_scalar_assign(eq, weight)?;
         }
         equation.into_trace()
     })
@@ -107,13 +137,6 @@ fn final_equations(
     }
     Ok(out)
 }
-fn bind_h(prefix: &mut Transcript, h: &PolyVec) -> Result<(), Error> {
-    let mut w = BitWriter::new();
-    abdlop::encode_vec(&mut w, h, &h.ring().modulus())?;
-    prefix.absorb(b"h-before-mu", &w.finish());
-    Ok(())
-}
-
 /// Prove full ring equations and vanishing constant coefficients simultaneously.
 ///
 /// The seed must be secret and uniformly random, and it may be reused, also for the commitment
@@ -156,18 +179,24 @@ pub(crate) fn prove_seeded(
     context: &[u8],
     seed: &Zeroizing<[u8; 32]>,
 ) -> Result<EvalProof, Error> {
-    Ok(prove_seeded_ext(scheme, commitment, opening, eqs, evals, context, seed, None)?.0)
+    let transcript = transcript(scheme, commitment, eqs, evals, context)?;
+    Ok(prove_in(
+        scheme, commitment, opening, eqs, evals, transcript, seed, None,
+    )?
+    .0)
 }
-/// [`prove_seeded`] with the extractable commitment beside the final opening when `ext` is
-/// given, returning the accepted attempt's LinHC opening too.
+/// The proof in `transcript`, positioned before the garbage commitments, with the extractable
+/// commitment beside the final opening when `ext` is given, returning the accepted attempt's
+/// LinHC opening too. The garbage polynomials' key binds the transcript through
+/// `Transcript::binding`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn prove_seeded_ext(
+pub(crate) fn prove_in(
     scheme: &Abdlop,
     commitment: &Commitment,
     opening: &Opening,
     eqs: &[QuadEq],
     evals: &[QuadEq],
-    context: &[u8],
+    mut transcript: Transcript,
     seed: &Zeroizing<[u8; 32]>,
     ext: Option<&linhc::ProverExt<'_>>,
 ) -> Result<(EvalProof, Option<linhc::LinhcOpening>), Error> {
@@ -179,11 +208,12 @@ pub(crate) fn prove_seeded_ext(
             false => Err(Error::Witness),
         }
     })?;
+    // "/v2" since the duplex-sponge transcript of version 0.2, which the binding comes from.
     let key = derive_key(
-        b"quad-eval/garbage",
+        b"quad-eval/garbage/v2",
         seed,
         &[
-            &setup_prefix(scheme, commitment, eqs, evals, context)?.digest(),
+            &transcript.binding(),
             &abdlop::secret_bytes(&opening.s1),
             &abdlop::secret_bytes(&opening.m),
             &abdlop::secret_bytes(&opening.s2),
@@ -215,8 +245,14 @@ pub(crate) fn prove_seeded_ext(
     {
         return Err(Error::Witness);
     }
-    let mut prefix = setup_prefix(&extended, &full_commitment, eqs, evals, context)?;
-    let combined = combined(&extended, &prefix, evals, witness.len())?;
+    let garbage_commitments = abdlop::part(
+        &full_commitment.t_b,
+        scheme.message_len(),
+        extended.message_len(),
+    )?;
+    transcript.absorb(&vector_bytes(&garbage_commitments)?);
+    let gamma = squeeze_gamma(&extended, &mut transcript, evals.len())?;
+    let combined = combined(&extended, &gamma, evals, witness.len())?;
     // The rows' values, in parallel (`parallel`) and in order.
     let values = crate::par::try_map(combined.len(), |k| combined[k].evaluate(&witness))?;
     let h = PolyVec::new(
@@ -231,23 +267,19 @@ pub(crate) fn prove_seeded_ext(
             .collect::<Result<_, _>>()?,
     )?;
     let equations = final_equations(&extended, eqs, combined, &h, witness.len())?;
-    bind_h(&mut prefix, &h)?;
-    let (quadratic, linhc_opening) = quad_many::prove_seeded_ext(
+    transcript.absorb(&vector_bytes(&h)?);
+    let (quadratic, linhc_opening) = quad_many::prove_in(
         &extended,
         &full_commitment,
         &full_opening,
         &equations,
-        &prefix.digest(),
+        transcript,
         seed,
         ext,
     )?;
     Ok((
         EvalProof {
-            garbage_commitments: abdlop::part(
-                &full_commitment.t_b,
-                scheme.message_len(),
-                extended.message_len(),
-            )?,
+            garbage_commitments,
             h,
             quadratic,
         },
@@ -284,16 +316,18 @@ pub fn verify(
     proof: &EvalProof,
     context: &[u8],
 ) -> Result<(), Error> {
-    verify_ext(scheme, commitment, eqs, evals, proof, context, None)
+    let transcript = transcript(scheme, commitment, eqs, evals, context)?;
+    verify_in(scheme, commitment, eqs, evals, proof, transcript, None)
 }
-/// [`verify`] with the extractable commitment's checks when `ext` is given.
-pub(crate) fn verify_ext(
+/// [`verify`] in `transcript`, as [`prove_in`] proves, with the extractable commitment's checks
+/// when `ext` is given.
+pub(crate) fn verify_in(
     scheme: &Abdlop,
     commitment: &Commitment,
     eqs: &[QuadEq],
     evals: &[QuadEq],
     proof: &EvalProof,
-    context: &[u8],
+    mut transcript: Transcript,
     ext: Option<&linhc::VerifierExt<'_>>,
 ) -> Result<(), Error> {
     check_responses(scheme, proof)?;
@@ -310,16 +344,17 @@ pub(crate) fn verify_ext(
         t_b: PolyVec::new(ring.clone(), tb)?,
     };
     let dim = 2 * (scheme.bounded_len() + scheme.message_len());
-    let mut prefix = setup_prefix(&extended, &full_commitment, eqs, evals, context)?;
-    let combined = combined(&extended, &prefix, evals, dim)?;
+    transcript.absorb(&vector_bytes(&proof.garbage_commitments)?);
+    let gamma = squeeze_gamma(&extended, &mut transcript, evals.len())?;
+    let combined = combined(&extended, &gamma, evals, dim)?;
     let equations = final_equations(&extended, eqs, combined, &proof.h, dim)?;
-    bind_h(&mut prefix, &proof.h)?;
-    quad_many::verify_ext(
+    transcript.absorb(&vector_bytes(&proof.h)?);
+    quad_many::verify_in(
         &extended,
         &full_commitment,
         &equations,
         &proof.quadratic,
-        &prefix.digest(),
+        transcript,
         ext,
     )
 }

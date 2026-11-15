@@ -3,7 +3,7 @@
 //! `verify_core` panics if it is reached. The bound eta on the challenge is enforced by the
 //! derivation of the challenge, which the last tests here check at both degrees.
 use super::*;
-use crate::rand::{autostable, within_eta};
+use crate::rand::{challenge::draws_from_bytes, within_eta};
 
 /// A commitment to $`s_1=1`$ and $`m=3`$ (all coefficients) under `params`.
 pub(crate) fn commitment_for(params: TboxParams) -> (Abdlop, Commitment, Opening) {
@@ -34,7 +34,7 @@ fn unreachable(_: &PolyVec) -> Result<Poly, Error> {
     panic!("challenge recomputed: a structural check did not fire")
 }
 /// Four integers whose squares sum to `n` (Lagrange), found greedily with backtracking.
-fn four_squares(n: u128) -> [i128; 4] {
+pub(crate) fn four_squares(n: u128) -> [i128; 4] {
     let root = |x: u128| {
         let mut r = (x as f64).sqrt() as u128;
         while r * r > x {
@@ -213,9 +213,13 @@ fn t_a_above_the_compressed_range_is_rejected() {
         c.t_a = PolyVec::new(scheme.ring.clone(), t).unwrap();
         c
     };
-    scheme.prefix(&with_t_a(high_max), b"ctx").unwrap();
+    scheme
+        .opening_transcript(&with_t_a(high_max), b"ctx")
+        .unwrap();
     assert_eq!(
-        scheme.prefix(&with_t_a(high_max + 1), b"ctx").err(),
+        scheme
+            .opening_transcript(&with_t_a(high_max + 1), b"ctx")
+            .err(),
         Some(Error::InvalidProof)
     );
     assert_eq!(
@@ -231,26 +235,85 @@ pub(crate) fn search_seed(i: u32) -> [u8; 32] {
     seed
 }
 
-/// Proofs of `commitment_for` under context `ctx` whose challenge stream starts with a draw
+/// Proofs of `commitment_for` under context `ctx` whose challenge bytes start with a draw
 /// above eta, at degrees 64 and 128: the first `i` for which both provers of the next test,
-/// with proof seed `search_seed(i)`, meet such a stream in the attempt they accept.
+/// with proof seed `search_seed(i)`, meet such bytes in the attempt they accept
+/// (`first_draw_above_eta` finds them).
 pub(crate) fn redrawn_challenge_cases() -> [(TboxParams, u32); 2] {
     [
-        (crate::params::toy_d64(), 42),
-        (crate::params::kyber1024_d128(), 146),
+        (crate::params::toy_d64(), REDRAWN[0]),
+        (crate::params::kyber1024_d128(), REDRAWN[1]),
     ]
 }
+/// The search indices of [`redrawn_challenge_cases`], as `first_draw_above_eta` finds them.
+const REDRAWN: [u32; 2] = [92, 66];
 
-/// The eta test of the challenge derivation, in the protocol. On a stream whose first draw
-/// exceeds eta the prover answers the second draw, and the proof verifies. A proof that answers
-/// the first draw, as a derivation without the eta test would, passes every other check but is
-/// refused. Dropping the eta test from the derivation, for the prover, the verifier or both,
+/// The first index from `from` on for which both provers of the next test meet challenge bytes
+/// that begin with a draw above eta in the attempt they accept: the honest prover, and the one
+/// that answers the first draw.
+fn first_draw_above_eta(params: TboxParams, from: u32) -> u32 {
+    let (scheme, commitment, opening) = commitment_for(params);
+    let transcript = scheme.opening_transcript(&commitment, b"ctx").unwrap();
+    let ring = scheme.ring().clone();
+    let (omega, eta) = (scheme.checked.omega, scheme.checked.eta);
+    let first_draw = |w1: &PolyVec| -> Result<Poly, Error> {
+        Ok(draws_from_bytes(
+            &scheme.challenge_bytes(&transcript, w1)?,
+            ring.clone(),
+            omega,
+        )
+        .swap_remove(0))
+    };
+    for i in from..from + 20_000 {
+        let proof = scheme
+            .prove_with_seed(&commitment, &opening, b"ctx", search_seed(i))
+            .unwrap();
+        let mut w1 = None;
+        scheme
+            .verify_core(&commitment, &proof, |x| {
+                w1 = Some(x.clone());
+                scheme.challenge(&transcript, x)
+            })
+            .unwrap();
+        if within_eta(&first_draw(&w1.unwrap()).unwrap(), eta).unwrap() {
+            continue;
+        }
+        let (unfiltered, ()) = scheme
+            .prove_core(
+                &commitment,
+                &opening,
+                Caller::Opening,
+                &transcript.binding(),
+                &Zeroizing::new(search_seed(i)),
+                |_, _, w1| Ok((first_draw(w1)?, ())),
+            )
+            .unwrap();
+        if !within_eta(&unfiltered.challenge, eta).unwrap() {
+            return i;
+        }
+    }
+    panic!("no index in 20000");
+}
+
+#[test]
+#[ignore = "search for the indices of `redrawn_challenge_cases`"]
+fn find_the_redrawn_challenge_cases() {
+    for (params, _) in redrawn_challenge_cases() {
+        let id = params.id.clone();
+        println!("{id}: {}", first_draw_above_eta(params, 0));
+    }
+}
+
+/// The eta test of the challenge decoding, in the protocol. On bytes whose first draw exceeds
+/// eta the prover answers the second draw, and the proof verifies. A proof that answers the
+/// first draw, as a decoding without the eta test would, passes every other check but is
+/// refused. Dropping the eta test from the decoding, for the prover, the verifier or both,
 /// fails this test.
 #[test]
 fn a_first_draw_above_eta_is_redrawn_by_the_prover_and_refused_by_the_verifier() {
     for (params, i) in redrawn_challenge_cases() {
         let (scheme, commitment, opening) = commitment_for(params);
-        let prefix = scheme.prefix(&commitment, b"ctx").unwrap();
+        let transcript = scheme.opening_transcript(&commitment, b"ctx").unwrap();
         let ring = scheme.ring().clone();
         let (d, omega, eta) = (ring.degree(), scheme.checked.omega, scheme.checked.eta);
         // The prover.
@@ -262,29 +325,29 @@ fn a_first_draw_above_eta_is_redrawn_by_the_prover_and_refused_by_the_verifier()
         scheme
             .verify_core(&commitment, &proof, |x| {
                 w1 = Some(x.clone());
-                scheme.challenge(&prefix, x)
+                scheme.challenge(&transcript, x)
             })
             .unwrap();
-        let mut stream = scheme.challenge_stream(&prefix, &w1.unwrap()).unwrap();
-        let first = autostable(&mut stream, ring.clone(), omega).unwrap();
-        let second = autostable(&mut stream, ring.clone(), omega).unwrap();
-        assert!(!within_eta(&first, eta).unwrap(), "{d}");
-        assert!(within_eta(&second, eta).unwrap(), "{d}");
-        assert_eq!(proof.challenge, second, "{d}");
-        // A proof that answers the first draw of its stream.
+        let bytes = scheme.challenge_bytes(&transcript, &w1.unwrap()).unwrap();
+        let draws = draws_from_bytes(&bytes, ring.clone(), omega);
+        assert!(!within_eta(&draws[0], eta).unwrap(), "{d}");
+        assert!(within_eta(&draws[1], eta).unwrap(), "{d}");
+        assert_eq!(proof.challenge, draws[1], "{d}");
+        // A proof that answers the first draw of its bytes.
         let first_draw = |w1: &PolyVec| -> Result<Poly, Error> {
-            autostable(
-                &mut scheme.challenge_stream(&prefix, w1)?,
+            Ok(draws_from_bytes(
+                &scheme.challenge_bytes(&transcript, w1)?,
                 ring.clone(),
                 omega,
             )
+            .swap_remove(0))
         };
         let (unfiltered, ()) = scheme
             .prove_core(
                 &commitment,
                 &opening,
                 Caller::Opening,
-                &prefix.digest(),
+                &transcript.binding(),
                 &Zeroizing::new(search_seed(i)),
                 |_, _, w1| Ok((first_draw(w1)?, ())),
             )

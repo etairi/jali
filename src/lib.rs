@@ -6,6 +6,8 @@ pub mod abdlop;
 pub mod codec;
 pub mod dcompress;
 mod error;
+// The duplex sponge and codecs of draft-irtf-cfrg-fiat-shamir-04, under the transcript.
+mod fiat_shamir;
 #[cfg(test)]
 mod golden_tests;
 #[cfg(feature = "serde")]
@@ -24,7 +26,7 @@ pub mod statement;
 pub mod tbox;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
-pub mod transcript;
+mod transcript;
 #[cfg(test)]
 mod wide_tests;
 

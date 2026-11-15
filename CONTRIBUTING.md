@@ -68,6 +68,12 @@ key labels `abdlop/opening-proof` and `tbox/proof`
 ([security notes](docs/security.md#randomness-and-seeds)). Every parameter field enters the
 transcript, the `estimator` string included, so parameter metadata changes the pins too.
 
+The transcripts follow draft-irtf-cfrg-fiat-shamir-04: `src/fiat_shamir/tests.rs` runs the
+draft's SHAKE128 vectors (`kat/ietf/`), and `src/tbox/io_pattern_tests.rs` records every
+verifier's calls on the sponge and checks them against the IO patterns of `docs/encodings.md`. A
+change to what a proof absorbs or squeezes, or to a codec, changes the transcript version or the
+codec version in the tags (`V02`, `C1`) and the IO pattern tests with it.
+
 ## Benchmarks
 
 ```sh

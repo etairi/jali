@@ -19,14 +19,14 @@ fn restarts_are_taken_and_the_attempt_limit_is_enforced() {
     )
     .unwrap();
     let (commitment, opening) = scheme.commit_with_seed(s1, m, [92; 32]).unwrap();
-    let prefix = scheme.prefix(&commitment, b"restarts").unwrap();
+    let prefix = scheme.opening_transcript(&commitment, b"restarts").unwrap();
     let prove = |seed: u8, attempts: u32| {
         scheme
             .prove_core_with_attempts(
                 &commitment,
                 &opening,
                 Caller::Opening,
-                &prefix.digest(),
+                &prefix.binding(),
                 &Zeroizing::new([seed; 32]),
                 attempts,
                 |_, _, w1| Ok((scheme.challenge(&prefix, w1)?, ())),
@@ -73,14 +73,16 @@ fn the_joint_norm_check_restarts_the_prover() {
     )
     .unwrap();
     let (commitment, opening) = scheme.commit_with_seed(s1, m, [92; 32]).unwrap();
-    let prefix = scheme.prefix(&commitment, b"joint-norm").unwrap();
+    let prefix = scheme
+        .opening_transcript(&commitment, b"joint-norm")
+        .unwrap();
     let prove = |opening: &Opening, attempts: u32| {
         scheme
             .prove_core_with_attempts(
                 &commitment,
                 opening,
                 Caller::Opening,
-                &prefix.digest(),
+                &prefix.binding(),
                 &Zeroizing::new([94; 32]),
                 attempts,
                 |_, _, w1| Ok((scheme.challenge(&prefix, w1)?, ())),

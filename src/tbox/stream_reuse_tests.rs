@@ -80,7 +80,7 @@ fn selector(ring: &Arc<Ring>, columns: usize, indices: &[usize]) -> PolyMat {
 }
 
 /// A toolbox statement with binary, Euclidean and approximate range blocks, and a witness.
-fn toolbox_instance(scheme: &Abdlop) -> (Statement, PolyVec, PolyVec) {
+pub(crate) fn toolbox_instance(scheme: &Abdlop) -> (Statement, PolyVec, PolyVec) {
     let ring = scheme.ring().clone();
     let select_s = |indices: &[usize]| AffineBlock {
         rows: indices.len(),

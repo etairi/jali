@@ -1,29 +1,29 @@
-//! `absorb_equations`, and `encode_equations` with `absorb_encoded`, against the transcript of
-//! the encodings before segments: the count, then each equation's bytes under `equation`. The
-//! same states for families of every length around the encoding chunk and the parallel
-//! threshold, the empty family included; for a family with equations that fail to encode, the
-//! same error as the first failure in order, after the same absorptions.
+//! `absorb_equations` against the absorption of the encodings before segments: the count as
+//! `LE32`, then each equation's bytes as `SerializeVarLenString`. The same states for families of
+//! every length around the encoding chunk and the parallel threshold, the empty family
+//! included; for a family with equations that fail to encode, the same error as the first
+//! failure in order, after the same absorptions.
 use super::*;
 use crate::{
-    math::{Ring, SparsePolyVec},
+    math::{Poly, Ring, SparsePolyVec},
     quad::encoding_tests::{Rng, random_equation, reference_to_bytes},
 };
 
-/// `absorb_equations` as it was before segments.
-fn reference_absorb(
-    transcript: &mut Transcript,
-    label: &[u8],
-    equations: &[QuadEq],
-) -> Result<(), Error> {
-    transcript.absorb(label, &(equations.len() as u64).to_le_bytes());
+/// `absorb_equations` from the bytes of each equation, without segments.
+fn reference_absorb(transcript: &mut Transcript, equations: &[QuadEq]) -> Result<(), Error> {
+    transcript.absorb(&(equations.len() as u32).to_le_bytes());
     for equation in equations {
-        transcript.absorb(b"equation", &reference_to_bytes(equation)?);
+        let bytes = reference_to_bytes(equation)?;
+        transcript.absorb(&(bytes.len() as u32).to_le_bytes());
+        transcript.absorb(&bytes);
     }
     Ok(())
 }
 
 fn start() -> Transcript {
-    Transcript::new(b"quad-many-tests", b"parameters", &[1; 32], b"statement")
+    let mut transcript = Transcript::new(Protocol::ManyQuadratic, b"quad-many-tests").unwrap();
+    transcript.absorb(b"instance");
+    transcript
 }
 
 #[test]
@@ -38,13 +38,11 @@ fn absorbed_families_equal_the_transcript_of_their_bytes() {
         .collect();
     for count in [0, 1, 7, 8, 9, 31, 32, 33, 64, 65, 70] {
         let family = &equations[..count];
-        let (mut reference, mut absorbed, mut encoded) = (start(), start(), start());
-        reference_absorb(&mut reference, b"family", family).unwrap();
-        absorb_equations(&mut absorbed, b"family", family).unwrap();
-        absorb_encoded(&mut encoded, b"family", &encode_equations(family).unwrap());
-        assert_eq!(absorbed, reference, "{count} equations");
-        assert_eq!(encoded, reference, "{count} equations");
-        assert_ne!(reference, start());
+        let (mut reference, mut absorbed) = (start(), start());
+        reference_absorb(&mut reference, family).unwrap();
+        absorb_equations(&mut absorbed, family).unwrap();
+        assert_eq!(absorbed.peek(), reference.peek(), "{count} equations");
+        assert_ne!(reference.peek(), start().peek());
     }
 }
 
@@ -69,16 +67,12 @@ fn a_family_stops_at_its_first_equation_that_fails_to_encode() {
             family[second] = b.clone();
             let (mut reference, mut absorbed) = (start(), start());
             assert_eq!(
-                reference_absorb(&mut reference, b"family", &family),
+                reference_absorb(&mut reference, &family),
                 Err(error.clone())
             );
-            assert_eq!(
-                absorb_equations(&mut absorbed, b"family", &family),
-                Err(error.clone())
-            );
+            assert_eq!(absorb_equations(&mut absorbed, &family), Err(error));
             // The count and the equations before the failure, and nothing more.
-            assert_eq!(absorbed, reference, "failure at {first}");
-            assert_eq!(encode_equations(&family).err(), Some(error));
+            assert_eq!(absorbed.peek(), reference.peek(), "failure at {first}");
         }
     }
 }

@@ -40,7 +40,8 @@ python3 $p/lnp_params.py check params.json --request request.json
 ```
 
 `derive` searches the modulus and, for the blocks the request calls movable, the placement, and
-keeps the set with the smallest proof-size estimate. The report is deterministic: request and
+keeps the set with the smallest proof size, `estimated_proof_bytes`, which is exact since the
+crate's fixed-width codec of version 0.2. The report is deterministic: request and
 tool hashes, the policy, the MLWE and MSIS block sizes and core-SVP exponents, the modulus
 search with every rejected prime and its reason, every checked inequality with its margin, the
 rejection constants, the result under the other policy, and the placements evaluated. `check`
@@ -124,7 +125,7 @@ $`\equiv5\pmod8`$ with $`\gamma\mid q-1`$, so no factoring is needed. For a few 
 the largest power of two that keeps MSIS hard, the tool takes the smallest prime of the class at
 which $`\gamma`$ keeps MSIS hard, derives the set there and requires the emulated Rust checks to
 pass with a relative margin of $`10^{-9}`$ on every `f64` comparison. Over a few bit lengths it
-keeps the smallest proof-size estimate. Primality is `sympy.isprime`: deterministic below
+keeps the smallest proof size. Primality is `sympy.isprime`: deterministic below
 $`2^{64}`$, a strong BPSW probable-prime test above. $`\lambda`$ follows Rust's `f64` rule.
 
 Known limitation: each attempt starts at the lower bound or at a power of two, so when the

@@ -1,6 +1,10 @@
-//! Canonical LSB-first integer codes; hints use the prefix-free code of LNP22 Table 3.
-//! Readers bound unary runs and reject noncanonical padding and trailing data.
+//! Canonical LSB-first integer codes. The proofs are serialized in the fixed-width fields of
+//! codec C1 (`docs/encodings.md`), message after message, each a
+//! whole number of bytes. The variable-length Gaussian and hint codes of LNP22 Table 3 remain
+//! available on [`BitWriter`] and [`BitReader`], which bound unary runs and reject
+//! noncanonical padding and trailing data, but no proof uses them since version 0.2.
 mod bits;
+pub(crate) mod fields;
 pub mod proof;
 mod segments;
 pub use bits::{BitReader, BitWriter};

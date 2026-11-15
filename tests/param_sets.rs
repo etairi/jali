@@ -56,11 +56,11 @@ const SETS: [Set; 3] = [
             208037478,
             3014,
             12372557824,
-            21058,
+            21004,
         ],
         lifting: (11570096, 3476),
         previous: 2423973072749,
-        proof_bytes: 20318,
+        proof_bytes: 21004,
     },
     Set {
         name: "kyber1024-d128",
@@ -78,11 +78,11 @@ const SETS: [Set; 3] = [
             208037478,
             3078,
             12372557824,
-            22608,
+            22552,
         ],
         lifting: (11570096, 3476),
         previous: 2423890569493,
-        proof_bytes: 21818,
+        proof_bytes: 22552,
     },
     Set {
         name: "demo",
@@ -100,11 +100,11 @@ const SETS: [Set; 3] = [
             104018739,
             2112,
             8594031616,
-            24814,
+            24772,
         ],
         lifting: (12441688183056, 2897),
         previous: 1563674726743538501,
-        proof_bytes: 23991,
+        proof_bytes: 24772,
     },
 ];
 
@@ -389,15 +389,15 @@ fn proves_extractably(set: &Set, extraction: fn() -> ExtractionParams) -> usize 
 
 #[test]
 fn kyber1024_d64_proves_extractably() {
-    assert_eq!(proves_extractably(&SETS[0], EXTRACTION[0]), 118_669);
+    assert_eq!(proves_extractably(&SETS[0], EXTRACTION[0]), 120_964);
 }
 #[test]
 fn kyber1024_d128_proves_extractably() {
-    assert_eq!(proves_extractably(&SETS[1], EXTRACTION[1]), 125_305);
+    assert_eq!(proves_extractably(&SETS[1], EXTRACTION[1]), 127_736);
 }
 #[test]
 fn demo_d64_proves_extractably() {
-    assert_eq!(proves_extractably(&SETS[2], EXTRACTION[2]), 141_032);
+    assert_eq!(proves_extractably(&SETS[2], EXTRACTION[2]), 143_620);
 }
 
 /// Wall times of one seeded proof and its verification in both modes, the median of five runs

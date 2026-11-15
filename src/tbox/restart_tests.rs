@@ -119,7 +119,16 @@ fn range_responses_restart_above_q_over_2_and_above_their_bounds() {
             variance: Variance::gaussian(t).unwrap(),
         };
         let mut random = coins(domain);
-        let z = range_response(&scheme, &seed, exact, values, &mask, 1, &mut random).unwrap();
+        let z = range_response(
+            &scheme,
+            &Projections::for_tests(&seed, values.len(), values.len()),
+            exact,
+            values,
+            &mask,
+            1,
+            &mut random,
+        )
+        .unwrap();
         let mut next = [0u8; 32];
         random.fill(&mut next).unwrap();
         (z, next)
@@ -133,22 +142,44 @@ fn range_responses_restart_above_q_over_2_and_above_their_bounds() {
             .find(|domain| respond(exact, &zeros, zero.clone(), *domain).0.is_some())
             .expect("an accepting coin among 64")
     };
-    // Exact block: squared norm z3_bound_squared is kept, one more restarts.
+    // The largest coefficient of each block's fixed-width code.
+    let width_max = |t: u32| (1i128 << (response_width(t) - 1)) - 1;
+    // Exact block: squared norm z3_bound_squared is kept, one more restarts, with every
+    // coefficient within the code's width. A coefficient beyond the width restarts although
+    // the norm is within z3_bound_squared.
     let z3 = scheme.checked.z3_bound_squared;
+    let exact_max = width_max(scheme.parameters.log_sigma[2]);
     let domain = accepting(true);
-    let at = with_norm(&ring, slots, z3);
+    let at = spread_norm(&ring, slots, z3, exact_max);
     assert_eq!(respond(true, &zeros, at.clone(), domain).0, Some(at));
-    let above = with_norm(&ring, slots, z3 + 1);
+    let above = spread_norm(&ring, slots, z3 + 1, exact_max);
     assert_eq!(respond(true, &zeros, above, domain).0, None);
-    // Approximate block: a coefficient of absolute value z4_bound is kept, one more restarts.
+    let wide = |value: i128| {
+        let mut entries = zero.entries().to_vec();
+        entries[0].set_coefficient(3, value).unwrap();
+        PolyVec::new(ring.clone(), entries).unwrap()
+    };
+    assert!(((exact_max + 1) * (exact_max + 1)) as u128 <= z3);
+    assert!(respond(true, &zeros, wide(exact_max), domain).0.is_some());
+    assert_eq!(respond(true, &zeros, wide(-exact_max - 1), domain).0, None);
+    // Approximate block: the code's width is below z4_bound, so the width decides: a
+    // coefficient at the width is kept, one more restarts, and so does one at z4_bound.
     let z4 = scheme.checked.z4_bound as i128;
+    let approx_max = width_max(scheme.parameters.log_sigma[3]);
+    assert!(approx_max < z4);
     let domain = accepting(false);
     let one = |value: i128| {
         let mut entries = zero.entries().to_vec();
         entries[slots - 1].set_coefficient(5, value).unwrap();
         PolyVec::new(ring.clone(), entries).unwrap()
     };
-    for (value, kept) in [(z4, true), (-z4, true), (z4 + 1, false), (-z4 - 1, false)] {
+    for (value, kept) in [
+        (approx_max, true),
+        (-approx_max, true),
+        (approx_max + 1, false),
+        (-approx_max - 1, false),
+        (z4, false),
+    ] {
         let z = respond(false, &zeros, one(value), domain).0;
         assert_eq!(z.is_some(), kept, "{value}");
     }
@@ -161,11 +192,15 @@ fn range_responses_restart_above_q_over_2_and_above_their_bounds() {
     coins(domain).fill(&mut fresh).unwrap();
     for (second, reads_a_coin) in [(1, false), (0, true)] {
         let values = [half, second];
-        let most = projections(&seed, false, &values)
-            .unwrap()
-            .iter()
-            .map(|v| v.unsigned_abs())
-            .max();
+        let most = projections(
+            &Projections::for_tests(&seed, values.len(), values.len()),
+            false,
+            &values,
+        )
+        .unwrap()
+        .iter()
+        .map(|v| v.unsigned_abs())
+        .max();
         assert_eq!(most, Some((half + second) as u128));
         let (z, next) = respond(false, &values, zero.clone(), domain);
         assert_eq!(z, None);
@@ -212,7 +247,15 @@ fn a_range_test_decides_with_one_whole_256_bit_coin() {
         let respond = |u: &U256| {
             let mut tape = Tape(u.to_le_bytes()[..].to_vec(), 0);
             tape.0.extend_from_slice(&[0xa5; 32]);
-            let z = range_response(&scheme, &[9; 32], exact, &[0; 2], &mask, 1, &mut tape);
+            let z = range_response(
+                &scheme,
+                &Projections::for_tests(&[9; 32], 2, 2),
+                exact,
+                &[0; 2],
+                &mask,
+                1,
+                &mut tape,
+            );
             (z.unwrap().is_some(), tape.1)
         };
         let one = U256::ONE;
@@ -255,4 +298,30 @@ fn the_witness_check_refuses_a_witness_above_the_norm_budget() {
             .err(),
         Some(Error::Witness)
     );
+}
+
+/// `len` polynomials of `ring` of squared norm exactly `n`, every coefficient at most `max` in
+/// absolute value: equal values in all but four coefficients, and the rest in the last four
+/// as a sum of four squares.
+fn spread_norm(ring: &Arc<Ring>, len: usize, n: u128, max: i128) -> PolyVec {
+    let total = len * ring.degree();
+    let a = ((n / total as u128) as f64).sqrt() as i128;
+    let a = (a - 1..=a + 1)
+        .rev()
+        .find(|a| *a >= 0 && (a * a) as u128 * total as u128 <= n)
+        .unwrap();
+    let mut values = vec![a; total - 4];
+    let rest = n - (a * a) as u128 * (total - 4) as u128;
+    values.extend(crate::abdlop::verifier_check_tests::four_squares(rest));
+    assert!(values.iter().all(|x| x.abs() <= max), "{a} {rest}");
+    let out = PolyVec::new(
+        ring.clone(),
+        values
+            .chunks_exact(ring.degree())
+            .map(|c| Poly::new(ring.clone(), c.to_vec()).unwrap())
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(out.norm_squared().unwrap(), U256::from(n));
+    out
 }
