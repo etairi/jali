@@ -13,6 +13,11 @@
                                                      for the positional form
     xcheck NAME [--full] [--output OUT]              lattice-estimator on a set (Sage)
            [--target BITS [--allow-unpinned-estimator]]
+    extraction PARAMS [--policy P] [--beta-min B] [--output OUT]
+                                                     the extraction set of the straight-line
+                                                     extractable mode for a parameter set
+    extraction --shipped [--check]                   those of the shipped sets and the toy set,
+                                                     next to them in both copies
 
 The target checks refuse an estimator checkout that is not at the pinned commit or has local
 changes, unless `--allow-unpinned-estimator` is given.
@@ -28,8 +33,8 @@ from pathlib import Path
 import mpmath as mp
 import sympy
 
-from . import ROOT, VERSION, derive, hardness, jsonio, modulus, partition, request, rustcheck, \
-    tool_sha256, xcheck
+from . import ROOT, VERSION, derive, extraction, hardness, jsonio, modulus, partition, request, \
+    rustcheck, tool_sha256, xcheck
 
 SETS = ROOT / "sets"
 # The crate ships every set of SETS under the same name; regenerate keeps both copies identical.
@@ -529,6 +534,53 @@ def cmd_rank(a):
                       "core_svp_bits": hardness.core_svp_bits(beta)}))
 
 
+# The sets whose extraction sets ship: those under SETS with the policy of their request, and the
+# toy set of the tests, whose MLWE report takes the delta policy.
+
+
+def _shipped_extraction():
+    out = [(name, SETS / f"{name}.json", request.read((SETS / f"{name}.request.json").read_text())[1])
+           for name in _set_names()]
+    out.append(("toy-d64", CRATE_SETS / "toy-d64.json", hardness.Policy("delta")))
+    return out
+
+
+def cmd_extraction(a):
+    if a.shipped:
+        if a.params or a.output or a.policy != "delta" or a.beta_min is not None:
+            raise SystemExit("--shipped takes no parameter set, output or policy")
+        bad = []
+        for name, path, policy in _shipped_extraction():
+            params, _, _ = rustcheck.from_json(path.read_text())
+            text = jsonio.dumps(extraction.extraction_set(params, policy))
+            tool, crate = SETS / f"{name}.extraction.json", CRATE_SETS / f"{name}.extraction.json"
+            if a.check:
+                ok = tool.exists() and crate.exists() and tool.read_text() == text \
+                    and crate.read_bytes() == tool.read_bytes()
+                print(f"{name}: extraction set {'identical' if ok else 'DIFFERS'}")
+                if not ok:
+                    bad.append(name)
+            else:
+                tool.write_text(text)
+                crate.write_text(text)
+                print(f"{name}: extraction set written, with the crate's copy")
+        if bad:
+            sys.exit(1)
+        return
+    if a.check or not a.params:
+        raise SystemExit("give a parameter set, or --shipped [--check]")
+    try:
+        pol = hardness.Policy(a.policy, a.beta_min)
+    except ValueError as e:
+        raise request.RequestError(str(e)) from None
+    params, _, _ = rustcheck.from_json(Path(a.params).read_text())
+    text = jsonio.dumps(extraction.extraction_set(params, pol))
+    if a.output:
+        Path(a.output).write_text(text)
+    else:
+        sys.stdout.write(text)
+
+
 def cmd_xcheck(a):
     rep = json.loads((SETS / f"{a.name}.report.json").read_text())
     inst = instances(rep)
@@ -597,14 +649,22 @@ def main(argv):
                    help="let --target run on an estimator checkout that is not at the pinned "
                         "commit or has local changes (the verdict records which)")
     p.set_defaults(fn=cmd_xcheck)
+    p = sub.add_parser("extraction")
+    p.add_argument("params", nargs="?")
+    p.add_argument("--policy", default="delta")
+    p.add_argument("--beta-min", type=int)
+    p.add_argument("--output")
+    p.add_argument("--shipped", action="store_true")
+    p.add_argument("--check", action="store_true")
+    p.set_defaults(fn=cmd_extraction)
     a = ap.parse_args(argv)
     try:
         a.fn(a)
     except (derive.DeriveError, request.RequestError, rustcheck.RustCheckError,
             hardness.HardnessError, modulus.ModulusError, xcheck.Unavailable,
-            xcheck.BelowTarget) as e:
+            xcheck.BelowTarget, extraction.ExtractionError) as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(2)
 
 
-SUBCOMMANDS = {"derive", "regenerate", "check", "prime", "rank", "xcheck"}
+SUBCOMMANDS = {"derive", "regenerate", "check", "prime", "rank", "xcheck", "extraction"}

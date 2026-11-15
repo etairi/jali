@@ -93,7 +93,7 @@ def derive(request,report):
 if __name__=='__main__':
     import sys
     if len(sys.argv)>1 and sys.argv[1] in ('derive','regenerate','check','prime','rank',
-                                           'xcheck'):
+                                           'xcheck','extraction'):
         from jali_params.cli import main
         main(sys.argv[1:])
         sys.exit(0)

@@ -95,9 +95,11 @@ fn an_attempt_decides_with_two_whole_256_bit_coins_in_order() {
     let (scheme, _, opening, prefix) = &f;
     let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.digest(), &[5; 32]);
     let constants = scheme.rejection_constants().unwrap();
-    let challenge = |_: &PolyVec, _: &PolyVec, w1: &PolyVec| -> Result<(Poly, ()), Error> {
-        Ok((scheme.challenge(prefix, w1)?, ()))
-    };
+    let challenge = |_: &PolyVec,
+                     _: &PolyVec,
+                     w1: &PolyVec,
+                     _: Option<crate::linhc::MaskCommitment<'_>>|
+     -> Result<(Poly, ()), Error> { Ok((scheme.challenge(prefix, w1)?, ())) };
     let run = |a: u32, bytes: &[u8; OPENING_COIN_BYTES]| {
         scheme
             .attempt(
@@ -106,11 +108,12 @@ fn an_attempt_decides_with_two_whole_256_bit_coins_in_order() {
                 &constants,
                 a,
                 bytes,
+                None,
                 &challenge,
                 &Abandon::never(),
             )
             .unwrap()
-            .map(|(proof, ())| proof)
+            .map(|(proof, _, ())| proof)
     };
     let low_half = U256::ONE.shl_vartime(128).wrapping_sub(&U256::ONE);
     let mut checked = 0;
@@ -163,6 +166,11 @@ fn attempt_a_reads_bytes_64a_to_64a_plus_63_of_the_coin_stream() {
         // The sequential loop, reading 64 coin bytes per attempt.
         let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.digest(), &[seed; 32]);
         let mut stream = AesPrg::new(&key, domain(secret::OPENING_COINS, 0));
+        let plain =
+            |y1: &PolyVec,
+             y21: &PolyVec,
+             w1: &PolyVec,
+             _: Option<crate::linhc::MaskCommitment<'_>>| { challenge(y1, y21, w1) };
         let accepted = (0..)
             .find_map(|a| {
                 let mut bytes = [0u8; OPENING_COIN_BYTES];
@@ -174,11 +182,12 @@ fn attempt_a_reads_bytes_64a_to_64a_plus_63_of_the_coin_stream() {
                         &constants,
                         a,
                         &bytes,
-                        &challenge,
+                        None,
+                        &plain,
                         &Abandon::never(),
                     )
                     .unwrap()
-                    .map(|(proof, ())| (a, proof))
+                    .map(|(proof, _, ())| (a, proof))
             })
             .unwrap();
         assert_eq!(accepted, (index, proof), "seed {seed}");

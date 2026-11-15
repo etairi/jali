@@ -3,6 +3,7 @@ use crate::{
     Error,
     abdlop::{Abdlop, Commitment, Opening},
     codec::Segments,
+    linhc,
     math::Poly,
     quad::{self, QuadEq, QuadProof},
     rand::{AesPrg, domain, take_seed, uniform_ring},
@@ -108,6 +109,19 @@ pub(crate) fn prove_seeded(
     context: &[u8],
     seed: &Zeroizing<[u8; 32]>,
 ) -> Result<QuadProof, Error> {
+    Ok(prove_seeded_ext(scheme, commitment, opening, equations, context, seed, None)?.0)
+}
+/// [`prove_seeded`] with the extractable commitment beside the final opening when `ext` is
+/// given, returning the accepted attempt's LinHC opening too.
+pub(crate) fn prove_seeded_ext(
+    scheme: &Abdlop,
+    commitment: &Commitment,
+    opening: &Opening,
+    equations: &[QuadEq],
+    context: &[u8],
+    seed: &Zeroizing<[u8; 32]>,
+    ext: Option<&linhc::ProverExt<'_>>,
+) -> Result<(QuadProof, Option<linhc::LinhcOpening>), Error> {
     let witness = quad::interleave(&opening.s1, &opening.m)?;
     // Evaluated in parallel (`parallel`); the first failure in order is returned.
     crate::par::try_map(equations.len(), |i| {
@@ -117,7 +131,7 @@ pub(crate) fn prove_seeded(
         }
     })?;
     let (equation, binding) = fold(scheme, commitment, equations, context)?;
-    quad::prove_seeded(scheme, commitment, opening, &equation, &binding, seed)
+    quad::prove_seeded_ext(scheme, commitment, opening, &equation, &binding, seed, ext)
 }
 /// Verify the folded proof, deriving fresh coefficients from the full public statement.
 pub fn verify(
@@ -127,6 +141,17 @@ pub fn verify(
     proof: &QuadProof,
     context: &[u8],
 ) -> Result<(), Error> {
+    verify_ext(scheme, commitment, equations, proof, context, None)
+}
+/// [`verify`] with the extractable commitment's checks when `ext` is given.
+pub(crate) fn verify_ext(
+    scheme: &Abdlop,
+    commitment: &Commitment,
+    equations: &[QuadEq],
+    proof: &QuadProof,
+    context: &[u8],
+    ext: Option<&linhc::VerifierExt<'_>>,
+) -> Result<(), Error> {
     let (equation, binding) = fold(scheme, commitment, equations, context)?;
-    quad::verify(scheme, commitment, &equation, proof, &binding)
+    quad::verify_ext(scheme, commitment, &equation, proof, &binding, ext)
 }

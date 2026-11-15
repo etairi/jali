@@ -35,6 +35,15 @@ pub(crate) mod secret {
     pub(crate) const TOOLBOX: u32 = 0x5442_4f58;
     /// Garbage polynomials of the evaluation proof ("GARB").
     pub(crate) const GARBAGE: u32 = 0x4741_5242;
+    /// Randomness $`s_1,s_2,s_3`$ of the extractable mode's LinHC commitment, under the
+    /// extractable toolbox key ("LCOM").
+    pub(crate) const LINHC_COMMITMENT: u32 = 0x4c43_4f4d;
+    /// LinHC masks of opening attempt `a`, words `base + 3a` to `base + 3a + 2`, under the
+    /// extractable opening key.
+    pub(crate) const LINHC_MASKS: u32 = 0x3000_0000;
+    /// LinHC rejection coin of opening attempt `a`, the first 32 bytes of the stream
+    /// `(LINHC_COINS, a)` under the extractable opening key.
+    pub(crate) const LINHC_COINS: u32 = 5;
 }
 
 /// AES-256-CTR keystream under the seed, with IV `LE64(domain) || 0^8` and a big-endian

@@ -6,7 +6,7 @@
   "tool": {
     "name": "jali-params",
     "version": "3",
-    "sha256": "840cc4c4c287f5db5e65be296f104faa3aa7077d166b672b622ccf9a4ce29cb7"
+    "sha256": "ef8f05043b835001d91e595d3aaafb439ef534c9cb1973b2c1e2d1b1ab4b3f14"
   },
   "environment": {
     "python": "3.12.13",

@@ -5,6 +5,7 @@ use crate::{
     Error,
     abdlop::{self, Abdlop, Commitment, Opening},
     codec::BitWriter,
+    linhc,
     math::{Poly, PolyVec, SparsePolyVec},
     quad::{self, QuadEq, QuadProof},
     quad_many,
@@ -155,6 +156,21 @@ pub(crate) fn prove_seeded(
     context: &[u8],
     seed: &Zeroizing<[u8; 32]>,
 ) -> Result<EvalProof, Error> {
+    Ok(prove_seeded_ext(scheme, commitment, opening, eqs, evals, context, seed, None)?.0)
+}
+/// [`prove_seeded`] with the extractable commitment beside the final opening when `ext` is
+/// given, returning the accepted attempt's LinHC opening too.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prove_seeded_ext(
+    scheme: &Abdlop,
+    commitment: &Commitment,
+    opening: &Opening,
+    eqs: &[QuadEq],
+    evals: &[QuadEq],
+    context: &[u8],
+    seed: &Zeroizing<[u8; 32]>,
+    ext: Option<&linhc::ProverExt<'_>>,
+) -> Result<(EvalProof, Option<linhc::LinhcOpening>), Error> {
     let witness = quad::interleave(&opening.s1, &opening.m)?;
     // Evaluated in parallel (`parallel`); the first failure in order is returned.
     crate::par::try_map(evals.len(), |i| {
@@ -216,23 +232,27 @@ pub(crate) fn prove_seeded(
     )?;
     let equations = final_equations(&extended, eqs, combined, &h, witness.len())?;
     bind_h(&mut prefix, &h)?;
-    let quadratic = quad_many::prove_seeded(
+    let (quadratic, linhc_opening) = quad_many::prove_seeded_ext(
         &extended,
         &full_commitment,
         &full_opening,
         &equations,
         &prefix.digest(),
         seed,
+        ext,
     )?;
-    Ok(EvalProof {
-        garbage_commitments: abdlop::part(
-            &full_commitment.t_b,
-            scheme.message_len(),
-            extended.message_len(),
-        )?,
-        h,
-        quadratic,
-    })
+    Ok((
+        EvalProof {
+            garbage_commitments: abdlop::part(
+                &full_commitment.t_b,
+                scheme.message_len(),
+                extended.message_len(),
+            )?,
+            h,
+            quadratic,
+        },
+        linhc_opening,
+    ))
 }
 
 /// The verifier's checks of the garbage rows and responses: lambda/2 of each, in the proof
@@ -264,6 +284,18 @@ pub fn verify(
     proof: &EvalProof,
     context: &[u8],
 ) -> Result<(), Error> {
+    verify_ext(scheme, commitment, eqs, evals, proof, context, None)
+}
+/// [`verify`] with the extractable commitment's checks when `ext` is given.
+pub(crate) fn verify_ext(
+    scheme: &Abdlop,
+    commitment: &Commitment,
+    eqs: &[QuadEq],
+    evals: &[QuadEq],
+    proof: &EvalProof,
+    context: &[u8],
+    ext: Option<&linhc::VerifierExt<'_>>,
+) -> Result<(), Error> {
     check_responses(scheme, proof)?;
     let count = scheme.checked.lambda / 2;
     let ring = scheme.ring();
@@ -282,11 +314,12 @@ pub fn verify(
     let combined = combined(&extended, &prefix, evals, dim)?;
     let equations = final_equations(&extended, eqs, combined, &proof.h, dim)?;
     bind_h(&mut prefix, &proof.h)?;
-    quad_many::verify(
+    quad_many::verify_ext(
         &extended,
         &full_commitment,
         &equations,
         &proof.quadratic,
         &prefix.digest(),
+        ext,
     )
 }

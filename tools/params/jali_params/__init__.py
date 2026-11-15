@@ -18,6 +18,7 @@ TOOL_FILES = [
     "jali_params/__init__.py",
     "jali_params/cli.py",
     "jali_params/derive.py",
+    "jali_params/extraction.py",
     "jali_params/hardness.py",
     "jali_params/jsonio.py",
     "jali_params/modulus.py",

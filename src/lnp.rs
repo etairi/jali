@@ -3,7 +3,7 @@ use crate::{
     Error,
     abdlop::Abdlop,
     math::{PolyMat, PolyVec, Ring, SparsePolyVec, U256},
-    params::TboxParams,
+    params::{ExtractionParams, TboxParams},
     quad::QuadEq,
     rand::take_seed,
     tbox,
@@ -399,6 +399,73 @@ impl Prover {
         let (s1, m) = self.witness.as_ref().ok_or(Error::Witness)?;
         tbox::prove_seeded(&self.scheme, &self.statement, s1, m, context, seed)
     }
+    /// Prove in the straight-line extractable mode (Katsumata's transform,
+    /// [`tbox::prove_extractable_with_seed`]) with caller-supplied cryptographic randomness,
+    /// under `context` and the extraction set `extraction`. Each call draws a fresh seed.
+    pub fn prove_extractable(
+        &self,
+        extraction: &ExtractionParams,
+        context: &[u8],
+        rng: &mut impl rand_core::CryptoRng,
+    ) -> Result<tbox::ExtractableProof, Error> {
+        let mut seed = Zeroizing::new([0; 32]);
+        rand_core::Rng::fill_bytes(rng, &mut *seed);
+        self.prove_extractable_seeded(extraction, context, &seed)
+    }
+    /// [`Prover::prove_extractable`] with explicit deterministic randomness. Seeds work as for
+    /// [`Prover::prove_with_seed`].
+    pub fn prove_extractable_with_seed(
+        &self,
+        extraction: &ExtractionParams,
+        context: &[u8],
+        mut seed: [u8; 32],
+    ) -> Result<tbox::ExtractableProof, Error> {
+        self.prove_extractable_seeded(extraction, context, &take_seed(&mut seed))
+    }
+    /// [`Prover::prove_extractable`], encoded ([`crate::codec::proof::encode_extractable`]).
+    pub fn prove_extractable_bytes(
+        &self,
+        extraction: &ExtractionParams,
+        context: &[u8],
+        rng: &mut impl rand_core::CryptoRng,
+    ) -> Result<Vec<u8>, Error> {
+        crate::codec::proof::encode_extractable(
+            &self.scheme,
+            extraction,
+            &self.prove_extractable(extraction, context, rng)?,
+        )
+    }
+    /// [`Prover::prove_extractable_with_seed`], encoded.
+    pub fn prove_extractable_bytes_with_seed(
+        &self,
+        extraction: &ExtractionParams,
+        context: &[u8],
+        mut seed: [u8; 32],
+    ) -> Result<Vec<u8>, Error> {
+        crate::codec::proof::encode_extractable(
+            &self.scheme,
+            extraction,
+            &self.prove_extractable_seeded(extraction, context, &take_seed(&mut seed))?,
+        )
+    }
+    fn prove_extractable_seeded(
+        &self,
+        extraction: &ExtractionParams,
+        context: &[u8],
+        seed: &Zeroizing<[u8; 32]>,
+    ) -> Result<tbox::ExtractableProof, Error> {
+        let (s1, m) = self.witness.as_ref().ok_or(Error::Witness)?;
+        tbox::prove_extractable_seeded(
+            &self.scheme,
+            extraction,
+            &self.statement,
+            s1,
+            m,
+            context,
+            seed,
+            None,
+        )
+    }
 }
 impl Verifier {
     /// Strictly decode and verify a wire-format proof made under `context`.
@@ -416,5 +483,29 @@ impl Verifier {
     /// Verify against this verifier's own public statement and the application `context`.
     pub fn verify(&self, proof: &tbox::Proof, context: &[u8]) -> Result<(), Error> {
         tbox::verify(&self.scheme, &self.statement, proof, context)
+    }
+    /// Verify a proof of the straight-line extractable mode against this verifier's statement,
+    /// `context` and `extraction` ([`tbox::verify_extractable`]).
+    pub fn verify_extractable(
+        &self,
+        extraction: &ExtractionParams,
+        proof: &tbox::ExtractableProof,
+        context: &[u8],
+    ) -> Result<(), Error> {
+        tbox::verify_extractable(&self.scheme, extraction, &self.statement, proof, context)
+    }
+    /// Strictly decode ([`crate::codec::proof::decode_extractable`]) and verify a wire-format
+    /// proof of the straight-line extractable mode.
+    pub fn verify_extractable_bytes(
+        &self,
+        extraction: &ExtractionParams,
+        bytes: &[u8],
+        context: &[u8],
+    ) -> Result<(), Error> {
+        self.verify_extractable(
+            extraction,
+            &crate::codec::proof::decode_extractable(&self.scheme, extraction, bytes)?,
+            context,
+        )
     }
 }

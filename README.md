@@ -6,7 +6,9 @@ proofs of quadratic relations with automorphisms, evaluation proofs, and the com
 with binary, exact Euclidean-norm and approximate range proofs. On top of it, a statement
 compiler turns relations over other polynomial rings and moduli into those proofs: named
 variables with norm bounds, degree lowering, modulus lifting with carries, constraints modulo
-several moduli, ℓ<sub>∞</sub> bounds and subring variables.
+several moduli, ℓ<sub>∞</sub> bounds and subring variables. An optional straight-line
+extractable mode adds Katsumata's transform, so that an extractor holding a trapdoor recovers the
+witness from a single proof, without rewinding.
 
 ## Status
 
@@ -31,6 +33,9 @@ Jali is research code, version 0.1.
 - **Parameters.** The shipped parameter sets meet a root-Hermite-factor criterion
   (*δ* ≤ 1.0044, about 101 bits under core-SVP), not 128 bits. Hardness figures are
   heuristic estimates.
+- **Straight-line extraction.** The extractable mode is new in 0.1.1. Its extraction argument for
+  the whole toolbox is an outline, in the classical random-oracle model only. The security notes
+  say which steps are proved.
 
 The [security notes](https://github.com/etairi/jali/blob/main/docs/security.md) give the
 details, including what the Fiat–Shamir proofs do and do not guarantee.
@@ -140,6 +145,36 @@ its own parameter set:
 cargo run --release --features serde --example possession
 ```
 
+## Straight-line extraction
+
+A plain proof is a Fiat–Shamir proof, whose knowledge extractor rewinds the prover. The
+extractable mode applies Katsumata's transform: beside the final opening proof it commits to the
+witness with an extractable linear homomorphic commitment, whose key is a random-oracle output on
+the statement and the context. An extractor that programs that oracle with a trapdoored key
+decrypts the responses to other challenges from one proof and recovers the witness without
+rewinding, as protocols that simulate provers straight-line need. Each parameter set takes an
+extraction set, which fixes the commitment's rank and modulus:
+
+```rust,ignore
+let extraction = jali::params::kyber1024_d64_extraction();
+let proof = compiled.prove_extractable_bytes_with_seed(public_seed, &extraction, &witness, context, seed)?;
+compiled.verify_extractable_bytes(public_seed, &extraction, &proof, context)?;
+```
+
+[`examples/extractable.rs`](https://github.com/etairi/jali/blob/main/examples/extractable.rs)
+proves the Kyber-1024 shape above in both modes:
+
+```sh
+cargo run --release --example extractable
+```
+
+An extractable proof is about six times as long (118.7 kB instead of 20.3 kB for that shape), and
+proving takes 1.2 to 1.5 times the instructions. The plain mode is unchanged. The [protocol
+notes](https://github.com/etairi/jali/blob/main/docs/protocol.md#straight-line-extractable-mode)
+describe the construction and the [security
+notes](https://github.com/etairi/jali/blob/main/docs/security.md#straight-line-extraction) its
+guarantee and status.
+
 ## Features
 
 | Feature | Purpose |
@@ -183,6 +218,9 @@ and MSIS, about 101 bits under core-SVP; the [parameter
 notes](https://github.com/etairi/jali/blob/main/docs/parameters.md) give the estimates and
 lattice-estimator cross-checks. Proof sizes vary by up to a few tens of bytes with the seed.
 
+`params::kyber1024_d64_extraction`, `kyber1024_d128_extraction`, `demo_d64_extraction` and
+`toy_d64_extraction` are the extraction sets of these four, for the extractable mode.
+
 For a new statement, export `Statement::requirements` (feature `serde`), derive a set with the
 Python [parameter tool](https://github.com/etairi/jali/blob/main/tools/README.md), load it with
 `TboxParams::from_json`, which checks it, and compile. The tool is not part of the crate
@@ -211,6 +249,12 @@ of the example.
 Verification of the compiled statements includes decoding the proof and expanding the public
 matrices; that of the opening proof includes decoding only.
 
+In the extractable mode, over seeds 1 to 20 of the Kyber-1024 shape on the same machine (rustc
+1.100.0, one thread), proving took 1.49 (`kyber1024_d64`), 1.23 (`kyber1024_d128`) and 1.17
+(`demo_d64`) times the plain mode's retired instructions, and verifying 1.14, 1.17 and 1.15 times.
+Proving restarts a random number of times, and a run with other commitment keys gave ratios up
+to 0.14 away from these.
+
 ## Documentation
 
 - [Protocol and statement compiler](https://github.com/etairi/jali/blob/main/docs/protocol.md)
@@ -232,6 +276,9 @@ docs.rs does.
   Applications: Shorter, Simpler, and More General. CRYPTO 2022. Full version: Cryptology ePrint
   Archive, Paper 2022/284, revision of 14 August 2022, to which the section, figure and equation
   numbers in this crate refer.
+- S. Katsumata. A New Simple Technique to Bootstrap Various Lattice Zero-Knowledge Proofs to QROM
+  Secure NIZKs. CRYPTO 2021. Full version: Cryptology ePrint Archive, Paper 2021/927. (The
+  extractable mode.)
 - L. Ducas, A. Durmus, T. Lepoint and V. Lyubashevsky. Lattice Signatures and Bimodal Gaussians.
   CRYPTO 2013. (Bimodal rejection sampling.)
 - L. Ducas, T. Lepoint, V. Lyubashevsky, P. Schwabe, G. Seiler and D. Stehlé. CRYSTALS –

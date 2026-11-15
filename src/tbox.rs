@@ -5,11 +5,13 @@ use crate::{
     Error,
     abdlop::{self, Abdlop, Commitment},
     codec::Segments,
+    linhc::{self, LinhcChecked, LinhcCommitment, LinhcKey, LinhcParams},
     lnp::Statement,
     math::{
         Poly, PolyNtt, PolyVec, Ring, SparsePolyVec, U256,
         terms::{Accumulator, Term},
     },
+    params::ExtractionParams,
     quad::{self, QuadEq},
     quad_eval::{self, EvalProof},
     quad_many,
@@ -25,6 +27,8 @@ use zeroize::Zeroizing;
 
 #[cfg(test)]
 mod encoding_reuse_tests;
+#[cfg(test)]
+mod extractable_tests;
 #[cfg(test)]
 mod lifting_soundness_tests;
 #[cfg(test)]
@@ -57,6 +61,106 @@ pub struct Proof {
     pub z_approx: PolyVec,
     /// Evaluation proof binding every equation family.
     pub evaluation: EvalProof,
+}
+
+/// A proof of the straight-line extractable mode: the toolbox proof with Katsumata's
+/// extractable linear homomorphic commitment (LinHC, ePrint 2021/927, Sec. 3.4) beside its final
+/// opening proof.
+///
+/// $`(t_1,t_2)`$ commits to the final opening's witness $`(s_1\|s_{21})`$ and
+/// $`(z'_1,z'_2,z'_3)`$ opens the commitment of $`c(s_1\|s_{21})+(y_1\|y_{21})`$ to the
+/// response $`(z_1\|z_{21})`$. They are over the LinHC ring
+/// $`\mathbb Z_{q'}[X]/(X^d+1)`$ of the [`ExtractionParams`]. The toolbox proof's transcript
+/// binds them, so it does not verify without them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExtractableProof {
+    /// The toolbox proof, under the extractable mode's transcript.
+    pub proof: Proof,
+    /// LinHC commitment $`t_1=p(As_1'+s_2')`$, of length $`m'`$.
+    pub t1: PolyVec,
+    /// LinHC commitment $`t_2=p(Bs_1'+s_3')+(s_1\|s_{21})`$, of length $`m'`$.
+    pub t2: PolyVec,
+    /// LinHC opening $`z'_1`$, of length the LinHC rank $`n`$.
+    pub z1: PolyVec,
+    /// LinHC opening $`z'_2`$, of length $`m'`$.
+    pub z2: PolyVec,
+    /// LinHC opening $`z'_3`$, of length $`m'`$.
+    pub z3: PolyVec,
+}
+
+/// The extractable mode's version tag, the statement field of its toolbox transcripts.
+const TOOLBOX_EXTRACTABLE_TAG: &[u8] = b"LNP22-toolbox-sl-v1";
+
+/// The prover's two modes: plain Fiat–Shamir, or straight-line extractable with Katsumata's
+/// transform, with the LinHC key derived from the transcript unless one is given.
+#[derive(Clone, Copy)]
+enum Mode<'a> {
+    Plain,
+    Extractable {
+        extraction: &'a ExtractionParams,
+        key: Option<&'a LinhcKey>,
+    },
+}
+
+/// What prover and verifier of the extractable mode share: the LinHC parameters, its key, and
+/// the transcript after the parameters, the extraction set, the context and the statement.
+struct Extractable {
+    params: LinhcParams,
+    checked: LinhcChecked,
+    key: LinhcKey,
+    base: Transcript,
+}
+
+/// Start the extractable mode's transcript: the toolbox parameters, public seed and extractable
+/// tag, then the extraction set, the application context and the statement (`absorb`). Its
+/// challenge seed `linhc-key` expands the LinHC key, unless `key` is given, so the key is a
+/// random-oracle output on the statement and context.
+fn extractable_setup(
+    extended: &Abdlop,
+    extraction: &ExtractionParams,
+    context: &[u8],
+    absorb: impl FnOnce(&mut Transcript) -> Result<(), Error>,
+    key: Option<&LinhcKey>,
+) -> Result<Extractable, Error> {
+    let (params, checked) = extraction.linhc(&extended.parameters, &extended.checked)?;
+    let mut base = Transcript::new(
+        b"abdlop-opening",
+        &extended.parameter_bytes(),
+        &extended.seed,
+        TOOLBOX_EXTRACTABLE_TAG,
+    );
+    base.absorb(b"extraction-parameters", &extraction.transcript_bytes());
+    base.absorb(b"application-context", context);
+    absorb(&mut base)?;
+    let key = match key {
+        Some(key) => key.clone(),
+        None => LinhcKey::expand(&params.ring()?, &params, &base.challenge_seed(b"linhc-key"))?,
+    };
+    Ok(Extractable {
+        params,
+        checked,
+        key,
+        base,
+    })
+}
+
+/// The extractable mode's transcript before the projection challenge: the setup's transcript,
+/// then the toolbox commitment and the LinHC commitment.
+fn extractable_prefix(
+    extended: &Abdlop,
+    setup: &Extractable,
+    commitment: &Commitment,
+    linhc_commitment: &LinhcCommitment,
+) -> Result<Transcript, Error> {
+    let mut prefix = setup.base.clone();
+    extended.absorb_commitment(&mut prefix, commitment)?;
+    linhc::absorb_pair(
+        &mut prefix,
+        b"linhc-commitment",
+        &linhc_commitment.t1,
+        &linhc_commitment.t2,
+    )?;
+    Ok(prefix)
 }
 struct Forms {
     eqs: Vec<QuadEq>,
@@ -286,6 +390,34 @@ fn toolbox_key(
     m: &PolyVec,
     seed: &[u8; 32],
 ) -> Result<Zeroizing<[u8; 32]>, Error> {
+    // "/v2" since the 256-bit sampler, the 256-bit rejection coins and the challenges
+    // within eta. The earlier version read these streams differently: masks that two
+    // samplers read from one stream are correlated, and two proofs with correlated masks can
+    // reveal the witness.
+    toolbox_key_labeled(
+        b"tbox/proof/v2",
+        scheme,
+        extended,
+        encoded,
+        context,
+        s1,
+        m,
+        seed,
+    )
+}
+/// [`toolbox_key`] under another label. The extractable mode reads more streams (its LinHC
+/// commitment's randomness), so it takes its own label, `tbox/proof-sl/v1`.
+#[allow(clippy::too_many_arguments)]
+fn toolbox_key_labeled(
+    label: &[u8],
+    scheme: &Abdlop,
+    extended: &Abdlop,
+    encoded: &EncodedForms,
+    context: &[u8],
+    s1: &PolyVec,
+    m: &PolyVec,
+    seed: &[u8; 32],
+) -> Result<Zeroizing<[u8; 32]>, Error> {
     let mut statement = Transcript::new(
         b"LNP22-toolbox-statement",
         &extended.parameter_bytes(),
@@ -293,12 +425,8 @@ fn toolbox_key(
         b"",
     );
     absorb_encoded_statement(&mut statement, extended, encoded);
-    // "/v2" since the 256-bit sampler, the 256-bit rejection coins and the challenges
-    // within eta. The earlier version read these streams differently: masks that two
-    // samplers read from one stream are correlated, and two proofs with correlated masks can
-    // reveal the witness.
     Ok(derive_key(
-        b"tbox/proof/v2",
+        label,
         seed,
         &[
             &scheme.fingerprint(),
@@ -615,6 +743,31 @@ fn prove_rounds(
     seed: &Zeroizing<[u8; 32]>,
     max_attempts: u32,
 ) -> Result<Proof, Error> {
+    Ok(prove_rounds_mode(
+        scheme,
+        statement,
+        s1,
+        m,
+        context,
+        seed,
+        max_attempts,
+        Mode::Plain,
+    )?
+    .0)
+}
+/// [`prove_rounds`] in either mode: in the extractable mode it also returns the LinHC
+/// commitment and the accepted attempt's LinHC opening.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn prove_rounds_mode(
+    scheme: &Abdlop,
+    statement: &Statement,
+    s1: &PolyVec,
+    m: &PolyVec,
+    context: &[u8],
+    seed: &Zeroizing<[u8; 32]>,
+    max_attempts: u32,
+    mode: Mode<'_>,
+) -> Result<(Proof, Option<(LinhcCommitment, linhc::LinhcOpening)>), Error> {
     let p = &scheme.parameters;
     let ring = scheme.ring();
     let mut bounded = s1.entries().to_vec();
@@ -639,9 +792,54 @@ fn prove_rounds(
     let extended = scheme.extend_messages(e_slots + d_slots + 1)?;
     let forms = forms(scheme, &extended, statement)?;
     let encoded = EncodedForms::new(&forms)?;
-    let key = toolbox_key(scheme, &extended, &encoded, context, s1, m, seed)?;
+    let key = match mode {
+        Mode::Plain => toolbox_key(scheme, &extended, &encoded, context, s1, m, seed)?,
+        Mode::Extractable { .. } => toolbox_key_labeled(
+            b"tbox/proof-sl/v1",
+            scheme,
+            &extended,
+            &encoded,
+            context,
+            s1,
+            m,
+            seed,
+        )?,
+    };
     let (_, opening) =
         scheme.commit_in_domain(bounded.clone(), m.clone(), &key, secret::TOOLBOX_COMMITMENT)?;
+    // The extractable mode commits, once, to the final opening's witness (s1 || s21) with the
+    // LinHC, whose key the statement and context determine.
+    let extractable = match mode {
+        Mode::Plain => None,
+        Mode::Extractable {
+            extraction,
+            key: given,
+        } => {
+            let setup = extractable_setup(
+                &extended,
+                extraction,
+                context,
+                |t| {
+                    absorb_encoded_statement(t, &extended, &encoded);
+                    Ok(())
+                },
+                given,
+            )?;
+            let witness = linhc::message(
+                setup.key.a.ring(),
+                &bounded,
+                &abdlop::part(&opening.s2, 0, scheme.a2.cols())?,
+            )?;
+            let (commitment, secret) = linhc::commit(
+                &setup.key,
+                &setup.params,
+                &witness,
+                &key,
+                secret::LINHC_COMMITMENT,
+            )?;
+            Some((setup, commitment, secret))
+        }
+    };
     let mut random = AesPrg::new(&key, domain(secret::TOOLBOX, 0));
     for attempt in 0..max_attempts.min(secret::MAX_ATTEMPTS) {
         let ye = abdlop::sample_gaussian(
@@ -672,7 +870,12 @@ fn prove_rounds(
         let witness = quad::interleave(&bounded, &messages)?;
         let (commitment, full_opening) =
             extended.commit_with_randomness(bounded.clone(), messages, opening.s2.clone())?;
-        let mut prefix = round_prefix_encoded(&extended, &commitment, &encoded, context)?;
+        let mut prefix = match &extractable {
+            None => round_prefix_encoded(&extended, &commitment, &encoded, context)?,
+            Some((setup, linhc_commitment, _)) => {
+                extractable_prefix(&extended, setup, &commitment, linhc_commitment)?
+            }
+        };
         let projection_seed = prefix.challenge_seed(b"range-matrices");
         // Evaluated in parallel (`parallel`) and in order.
         let exact = PolyVec::new(
@@ -715,7 +918,15 @@ fn prove_rounds(
         crate::rand::stream_log::child(&key, &proof_seed);
         // The encodings are not needed past the last range attempt.
         drop(encoded);
-        let evaluation = quad_eval::prove_seeded(
+        let ext = extractable
+            .as_ref()
+            .map(|(setup, _, secret)| linhc::ProverExt {
+                key: &setup.key,
+                params: &setup.params,
+                checked: &setup.checked,
+                secret,
+            });
+        let (evaluation, linhc_opening) = quad_eval::prove_seeded_ext(
             &extended,
             &commitment,
             &full_opening,
@@ -723,15 +934,92 @@ fn prove_rounds(
             &evals,
             &prefix.digest(),
             &proof_seed,
+            ext.as_ref(),
         )?;
-        return Ok(Proof {
+        let proof = Proof {
             commitment,
             z_exact: ze,
             z_approx: zd,
             evaluation,
+        };
+        return Ok(match (extractable, linhc_opening) {
+            (None, _) => (proof, None),
+            (Some((_, linhc_commitment, _)), Some(linhc_opening)) => {
+                (proof, Some((linhc_commitment, linhc_opening)))
+            }
+            (Some(_), None) => return Err(Error::Parameter("extractable mode")),
         });
     }
     Err(Error::RestartLimit)
+}
+
+/// Prove a full statement in the straight-line extractable mode (Katsumata's transform), under
+/// the application `context`, with the extraction set `extraction` for the scheme's parameters.
+///
+/// The proof is a toolbox proof under the extractable mode's own transcript, with the LinHC
+/// commitment to the final opening's witness and the LinHC opening beside it
+/// ([`ExtractableProof`]). An extractor that holds the LinHC key's trapdoor recovers the
+/// committed witness from one proof, without rewinding: it decrypts the responses for other
+/// challenges. In the random-oracle model the key is the oracle's output on the statement and
+/// the context, so the extractor programs it. `docs/security.md` gives the argument and its
+/// status.
+///
+/// Seeds work as for [`prove_with_seed`], with keys under labels of this mode
+/// (`tbox/proof-sl/v1`, `abdlop/opening-proof-sl/v1`).
+pub fn prove_extractable_with_seed(
+    scheme: &Abdlop,
+    extraction: &ExtractionParams,
+    statement: &Statement,
+    s1: &PolyVec,
+    m: &PolyVec,
+    context: &[u8],
+    mut seed: [u8; 32],
+) -> Result<ExtractableProof, Error> {
+    prove_extractable_seeded(
+        scheme,
+        extraction,
+        statement,
+        s1,
+        m,
+        context,
+        &take_seed(&mut seed),
+        None,
+    )
+}
+/// [`prove_extractable_with_seed`] from a seed in a wiping buffer, with a given LinHC key in
+/// place of the derived one when `key` is given (tests use a trapdoored key).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prove_extractable_seeded(
+    scheme: &Abdlop,
+    extraction: &ExtractionParams,
+    statement: &Statement,
+    s1: &PolyVec,
+    m: &PolyVec,
+    context: &[u8],
+    seed: &Zeroizing<[u8; 32]>,
+    key: Option<&LinhcKey>,
+) -> Result<ExtractableProof, Error> {
+    statement.check_witness(scheme, s1, m)?;
+    let (proof, linhc) = prove_rounds_mode(
+        scheme,
+        statement,
+        s1,
+        m,
+        context,
+        seed,
+        secret::MAX_ATTEMPTS,
+        Mode::Extractable { extraction, key },
+    )?;
+    let (commitment, opening) = linhc.ok_or(Error::Parameter("extractable mode"))?;
+    let [z1, z2, z3] = opening.z;
+    Ok(ExtractableProof {
+        proof,
+        t1: commitment.t1,
+        t2: commitment.t2,
+        z1,
+        z2,
+        z3,
+    })
 }
 
 /// The verifier's checks of the range responses: one exact and one approximate slot per 256
@@ -791,5 +1079,94 @@ pub fn verify(
         &evals,
         &proof.evaluation,
         &prefix.digest(),
+    )
+}
+
+/// Verify a proof of the straight-line extractable mode under the application `context` and
+/// the extraction set `extraction`: the toolbox checks under the extractable mode's transcript,
+/// the LinHC opening's block bounds, and the challenge derived after the LinHC mask commitment
+/// that the verifier recomputes from the opening.
+pub fn verify_extractable(
+    scheme: &Abdlop,
+    extraction: &ExtractionParams,
+    statement: &Statement,
+    proof: &ExtractableProof,
+    context: &[u8],
+) -> Result<(), Error> {
+    verify_extractable_with_key(scheme, extraction, statement, proof, context, None)
+}
+/// [`verify_extractable`] with a given LinHC key in place of the derived one when `key` is
+/// given.
+pub(crate) fn verify_extractable_with_key(
+    scheme: &Abdlop,
+    extraction: &ExtractionParams,
+    statement: &Statement,
+    proof: &ExtractableProof,
+    context: &[u8],
+    key: Option<&LinhcKey>,
+) -> Result<(), Error> {
+    statement.check(scheme)?;
+    let (e_slots, d_slots) = response_shape_and_bounds(scheme, &proof.proof)?;
+    let extended = scheme.extend_messages(e_slots + d_slots + 1)?;
+    let forms = forms(scheme, &extended, statement)?;
+    let setup = extractable_setup(
+        &extended,
+        extraction,
+        context,
+        |t| absorb_statement(t, &extended, &forms),
+        key,
+    )?;
+    let ring = setup.key.a.ring();
+    let p = &setup.params;
+    for (v, len) in [
+        (&proof.t1, p.len),
+        (&proof.t2, p.len),
+        (&proof.z1, p.rank),
+        (&proof.z2, p.len),
+        (&proof.z3, p.len),
+    ] {
+        if v.len() != len {
+            return Err(Error::Dimension);
+        }
+        if v.ring() != ring {
+            return Err(Error::RingMismatch);
+        }
+    }
+    let linhc_commitment = LinhcCommitment {
+        t1: proof.t1.clone(),
+        t2: proof.t2.clone(),
+    };
+    let linhc_opening = linhc::LinhcOpening {
+        z: [proof.z1.clone(), proof.z2.clone(), proof.z3.clone()],
+    };
+    let mut prefix = extractable_prefix(
+        &extended,
+        &setup,
+        &proof.proof.commitment,
+        &linhc_commitment,
+    )?;
+    let evals = projection_equations(
+        &extended,
+        &forms,
+        &prefix.challenge_seed(b"range-matrices"),
+        &proof.proof.z_exact,
+        &proof.proof.z_approx,
+    )?;
+    bind_responses(&mut prefix, &proof.proof.z_exact, &proof.proof.z_approx)?;
+    let ext = linhc::VerifierExt {
+        key: &setup.key,
+        params: &setup.params,
+        checked: &setup.checked,
+        commitment: &linhc_commitment,
+        opening: &linhc_opening,
+    };
+    quad_eval::verify_ext(
+        &extended,
+        &proof.proof.commitment,
+        &forms.eqs,
+        &evals,
+        &proof.proof.evaluation,
+        &prefix.digest(),
+        Some(&ext),
     )
 }

@@ -1,0 +1,7 @@
+{
+  "model": "rom",
+  "rank": 38,
+  "modulus": 954081289135591699,
+  "mlwe_delta": 1.004322885318349,
+  "estimator": "jali-params 3 extraction, policy delta, LinHC MLWE uSVP (ADPS16) rank 38 beta 355 delta 1.004322885318349"
+}

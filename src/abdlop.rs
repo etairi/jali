@@ -6,10 +6,11 @@ use crate::{
     Error,
     codec::{BitReader, BitWriter},
     dcompress::Compression,
+    linhc,
     math::{I256, Poly, PolyMat, PolyVec, Ring, U256, int},
     params::{CheckedParams, TboxParams},
     rand::{
-        AesPrg, bounded, derive_key, domain, gaussian,
+        AesPrg, ByteStream, bounded, derive_key, domain, gaussian,
         reject::{self, Policy, Variance},
         secret, take_seed, uniform_ring,
     },
@@ -672,6 +673,18 @@ impl Abdlop {
         commitment: &Commitment,
         context: &[u8],
     ) -> Result<Transcript, Error> {
+        self.check_commitment(commitment)?;
+        let mut t = Transcript::new(
+            b"abdlop-opening",
+            &self.parameter_bytes(),
+            &self.seed,
+            context,
+        );
+        self.absorb_commitment(&mut t, commitment)?;
+        Ok(t)
+    }
+    /// The commitment's shape, and its compressed part within the high-part range.
+    fn check_commitment(&self, commitment: &Commitment) -> Result<(), Error> {
         self.shape(&commitment.t_a, self.parameters.n_msis)?;
         self.shape(&commitment.t_b, self.parameters.l)?;
         let max_high = self.max_high();
@@ -683,17 +696,21 @@ impl Abdlop {
         {
             return Err(Error::InvalidProof);
         }
-        let mut t = Transcript::new(
-            b"abdlop-opening",
-            &self.parameter_bytes(),
-            &self.seed,
-            context,
-        );
+        Ok(())
+    }
+    /// Check the commitment as [`Self::prefix`] does and absorb it into `transcript` under
+    /// the label `commitment`.
+    pub(crate) fn absorb_commitment(
+        &self,
+        transcript: &mut Transcript,
+        commitment: &Commitment,
+    ) -> Result<(), Error> {
+        self.check_commitment(commitment)?;
         let mut w = BitWriter::new();
         encode_vec(&mut w, &commitment.t_a, &self.ring.q)?;
         encode_vec(&mut w, &commitment.t_b, &self.ring.q)?;
-        t.absorb(b"commitment", &w.finish());
-        Ok(t)
+        transcript.absorb(b"commitment", &w.finish());
+        Ok(())
     }
     /// The challenge after `w1`: drawn from the challenge set (`rand::challenge`, LNP22 §2.7,
     /// with this set's $`\omega`$ and $`\eta`$) with the stream of [`Self::challenge_stream`];
@@ -793,8 +810,20 @@ impl Abdlop {
         // within eta. The earlier version read these streams differently: masks that two
         // samplers read from one stream are correlated, and two proofs with correlated masks can
         // reveal the witness.
+        Self::opening_key_labeled(b"abdlop/opening-proof/v2", opening, caller, binding, seed)
+    }
+    /// The key of [`Self::opening_key`] under another label. The extractable mode reads more
+    /// streams per attempt (the LinHC masks and coin), so it takes its own label,
+    /// `abdlop/opening-proof-sl/v1`.
+    pub(crate) fn opening_key_labeled(
+        label: &[u8],
+        opening: &Opening,
+        caller: Caller,
+        binding: &[u8; 32],
+        seed: &[u8; 32],
+    ) -> Zeroizing<[u8; 32]> {
         derive_key(
-            b"abdlop/opening-proof/v2",
+            label,
             seed,
             &[
                 caller.tag(),
@@ -880,25 +909,76 @@ impl Abdlop {
         width: u32,
         challenge: impl Fn(&PolyVec, &PolyVec, &PolyVec) -> Result<(Poly, T), Error> + Sync,
     ) -> Result<(u32, OpeningProof, T), Error> {
+        let (attempt, proof, _, side) = self.prove_core_ext(
+            commitment,
+            opening,
+            caller,
+            binding,
+            seed,
+            max_attempts,
+            width,
+            None,
+            |y1, y21, w1, _| challenge(y1, y21, w1),
+        )?;
+        Ok((attempt, proof, side))
+    }
+    /// [`Self::prove_core_speculative`] with Katsumata's extractable commitment beside the
+    /// opening when `ext` is given.
+    ///
+    /// The challenge function then also receives each attempt's LinHC mask commitment
+    /// $`(w'_1,w'_2)`$ to $`(y_1\|y_{21})`$, which it must absorb before deriving the challenge,
+    /// and an attempt is kept only if the LinHC opening passes its own rejection test too. The
+    /// attempt reads its LinHC masks from the words `LINHC_MASKS` $`+3a`$ to $`+3a+2`$ and its
+    /// LinHC coin from the stream `(LINHC_COINS, a)`, under a key with the label
+    /// `abdlop/opening-proof-sl/v1`, so its outcome is still a function of the key and $`a`$.
+    /// Without `ext` this is the plain opening proof, with its own key, streams and challenges.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    pub(crate) fn prove_core_ext<T: Send>(
+        &self,
+        commitment: &Commitment,
+        opening: &Opening,
+        caller: Caller,
+        binding: &[u8; 32],
+        seed: &Zeroizing<[u8; 32]>,
+        max_attempts: u32,
+        width: u32,
+        ext: Option<&linhc::ProverExt<'_>>,
+        challenge: impl Fn(
+            &PolyVec,
+            &PolyVec,
+            &PolyVec,
+            Option<linhc::MaskCommitment<'_>>,
+        ) -> Result<(Poly, T), Error>
+        + Sync,
+    ) -> Result<(u32, OpeningProof, Option<linhc::LinhcOpening>, T), Error> {
         let (expected, _) =
             self.commit_with_randomness(opening.s1.clone(), opening.m.clone(), opening.s2.clone())?;
         if expected != *commitment {
             return Err(Error::Witness);
         }
         let constants = self.rejection_constants()?;
-        let key = Self::opening_key(opening, caller, binding, seed);
+        let key = match ext {
+            None => Self::opening_key(opening, caller, binding, seed),
+            Some(_) => Self::opening_key_labeled(
+                b"abdlop/opening-proof-sl/v1",
+                opening,
+                caller,
+                binding,
+                seed,
+            ),
+        };
         let mut random = AesPrg::new(&key, domain(secret::OPENING_COINS, 0));
         let limit = max_attempts.min(secret::MAX_ATTEMPTS);
         let mut attempts =
             crate::par::Attempts::new(width, limit, &mut random, |attempt, coins, abandon| {
                 self.attempt(
-                    opening, &key, &constants, attempt, coins, &challenge, abandon,
+                    opening, &key, &constants, attempt, coins, ext, &challenge, abandon,
                 )
             });
         // The outcomes in order: the first that is not a rejection decides.
         for attempt in 0..max_attempts.min(secret::MAX_ATTEMPTS) {
-            if let Some((proof, side)) = attempts.outcome(attempt)? {
-                return Ok((attempt, proof, side));
+            if let Some((proof, linhc, side)) = attempts.outcome(attempt)? {
+                return Ok((attempt, proof, linhc, side));
             }
         }
         Err(Error::RestartLimit)
@@ -906,7 +986,7 @@ impl Abdlop {
     /// One attempt of the opening proof, with its coin bytes, the coins of Rej_1 and Rej_2 in
     /// that order: `Ok(None)` if it is rejected, or abandoned because an earlier attempt of its
     /// batch has decided (`par::Attempts`).
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn attempt<T>(
         &self,
         opening: &Opening,
@@ -914,9 +994,15 @@ impl Abdlop {
         constants: &[U256; 2],
         attempt: u32,
         coins: &[u8; OPENING_COIN_BYTES],
-        challenge: &impl Fn(&PolyVec, &PolyVec, &PolyVec) -> Result<(Poly, T), Error>,
+        ext: Option<&linhc::ProverExt<'_>>,
+        challenge: &impl Fn(
+            &PolyVec,
+            &PolyVec,
+            &PolyVec,
+            Option<linhc::MaskCommitment<'_>>,
+        ) -> Result<(Poly, T), Error>,
         abandon: &crate::par::Abandon<'_>,
-    ) -> Result<Option<(OpeningProof, T)>, Error> {
+    ) -> Result<Option<(OpeningProof, Option<linhc::LinhcOpening>, T)>, Error> {
         if abandon.requested() {
             return Ok(None);
         }
@@ -953,7 +1039,19 @@ impl Abdlop {
         if abandon.requested() {
             return Ok(None);
         }
-        let (c, side) = challenge(&y1, &y21, &w1)?;
+        // The LinHC mask commitment to (y1 || y21), part of this attempt's first message.
+        let linhc_mask = match ext {
+            Some(ext) => {
+                let r = linhc::message(ext.key.a.ring(), &y1, &y21)?;
+                let dom = attempt
+                    .checked_mul(3)
+                    .and_then(|x| x.checked_add(secret::LINHC_MASKS))
+                    .ok_or(Error::Overflow)?;
+                Some(linhc::mask(ext.key, ext.params, &r, key, dom)?)
+            }
+            None => None,
+        };
+        let (c, side) = challenge(&y1, &y21, &w1, linhc_mask.as_ref().map(|m| (&m.w1, &m.w2)))?;
         if abandon.requested() {
             return Ok(None);
         }
@@ -986,6 +1084,19 @@ impl Abdlop {
         if !self.joint_within_bound(&z21, &z22)? {
             return Ok(None);
         }
+        // The LinHC opening of c (s1 || s21) + (y1 || y21), with its own rejection coin.
+        let linhc_opening = match (ext, &linhc_mask) {
+            (Some(ext), Some(mask)) => {
+                let c_lifted = linhc::lift_poly(ext.key.a.ring(), &c)?;
+                let mut coin = [0u8; reject::COIN_BYTES];
+                AesPrg::new(key, domain(secret::LINHC_COINS, attempt)).fill(&mut coin)?;
+                match linhc::open(ext.checked, &c_lifted, ext.secret, mask, &coin)? {
+                    Some(opening) => Some(opening),
+                    None => return Ok(None),
+                }
+            }
+            _ => None,
+        };
         let r = sub(&scale_scalar(&w1, &self.gamma())?, &z22)?;
         let hints = r
             .entries()
@@ -1009,6 +1120,7 @@ impl Abdlop {
                 z21,
                 hint: PolyVec::new(self.ring.clone(), hints)?,
             },
+            linhc_opening,
             side,
         )))
     }
@@ -1069,6 +1181,20 @@ impl Abdlop {
         proof: &OpeningProof,
         challenge: impl FnOnce(&PolyVec) -> Result<Poly, Error>,
     ) -> Result<(), Error> {
+        self.verify_core_ext(commitment, proof, None, |w1, _| challenge(w1))
+    }
+    /// [`Self::verify_core`] with Katsumata's extractable commitment when `ext` is given: after
+    /// the joint bound, the verifier recomputes the LinHC mask commitment $`(w'_1,w'_2)`$ from
+    /// the proof's challenge, the response $`(z_1\|z_{21})`$ and the LinHC opening (checking
+    /// the opening's block bounds), and the challenge function must absorb it before deriving
+    /// the challenge it compares with the proof's.
+    pub(crate) fn verify_core_ext(
+        &self,
+        commitment: &Commitment,
+        proof: &OpeningProof,
+        ext: Option<&linhc::VerifierExt<'_>>,
+        challenge: impl FnOnce(&PolyVec, Option<linhc::MaskCommitment<'_>>) -> Result<Poly, Error>,
+    ) -> Result<(), Error> {
         self.shape(&proof.z1, self.bounded_len())?;
         self.shape(&proof.z21, self.a2.cols())?;
         self.shape(&proof.hint, self.parameters.n_msis)?;
@@ -1085,7 +1211,25 @@ impl Abdlop {
         )?;
         let w1 = self.use_hints(&proof.hint, &r)?;
         let z22 = sub(&r, &scale_scalar(&w1, &self.gamma())?)?;
-        if !self.joint_within_bound(&proof.z21, &z22)? || challenge(&w1)? != *c {
+        if !self.joint_within_bound(&proof.z21, &z22)? {
+            return Err(Error::InvalidProof);
+        }
+        let mask = match ext {
+            Some(ext) => {
+                let ring = ext.key.a.ring();
+                Some(linhc::recompute(
+                    ext.key,
+                    ext.params,
+                    ext.checked,
+                    &linhc::lift_poly(ring, c)?,
+                    ext.commitment,
+                    &linhc::message(ring, &proof.z1, &proof.z21)?,
+                    ext.opening,
+                )?)
+            }
+            None => None,
+        };
+        if challenge(&w1, mask.as_ref().map(|(u, v)| (u, v)))? != *c {
             return Err(Error::InvalidProof);
         }
         Ok(())

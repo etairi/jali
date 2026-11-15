@@ -100,6 +100,8 @@ jobs:
           t=tools/params
           derive() { python $t/lnp_params.py "$1" "$2" --output "$3"; }
           python $t/lnp_params.py regenerate --check
+          # The extraction sets of the straight-line extractable mode, next to those sets.
+          python $t/lnp_params.py extraction --shipped --check
           # The toy set and the possession fixture take the tool's MLWE report for their ring.
           python $t/lnp_params.py rank --degree 64 --q 1099511627917 --mlwe-report \
             > "$out/toy-d64.report.json"

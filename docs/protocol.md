@@ -376,3 +376,77 @@ use fresh seeds, for instance `commit` and `prove` with a `rand_core::CryptoRng`
 per call. Where faults can be injected, use fresh seeds as well: a fault that changes a
 challenge but not the key can yield two accepted responses with the same masks, and
 $`z_1-z_1'=(c-c')s_1`$ gives the witness once $`c-c'`$ is invertible.
+
+## Straight-line extractable mode
+
+`tbox::prove_extractable_with_seed` and `tbox::verify_extractable`, and the `prove_extractable`
+and `verify_extractable` methods of `lnp::Prover`, `lnp::Verifier` and `statement::Compiled`,
+with their seeded and byte variants, run the toolbox with Katsumata's transform (CRYPTO 2021,
+full version ePrint 2021/927). An extractable linear homomorphic commitment (LinHC, the MLWE
+construction of its Sec. 3.4) sits beside the final opening proof, so that an extractor that
+holds a trapdoor of the LinHC key recovers the committed witness from one proof, without
+rewinding. The plain mode is unchanged and its proofs are the same bytes as before. Each call
+takes an `ExtractionParams` for the parameter set ([parameters](parameters.md#extraction-sets)).
+
+**What is committed.** The final opening proof (Fig. 18, inside the quadratic proof that ends
+the evaluation proof) answers its challenge $`c`$ with $`z_1=y_1+cs_1`$ and $`z_{21}=y_{21}+cs_{21}`$.
+The LinHC commits once per proof to the witness $`e=(s_1\|s_{21})`$, the bounded part with its
+slack polynomials and the first $`m_2-n`$ polynomials of the randomness, that is
+$`m'=m_1+|\text{l2\_rows}|+m_2-n`$ polynomials. Over $`R_{q'}=\mathbb Z_{q'}[X]/(X^d+1)`$, with
+the proof degree $`d`$ so that $`c`$ acts on it, and with uniform ternary $`s'_1\in R^{n'}`$,
+$`s'_2,s'_3\in R^{m'}`$, it is $`t_1=p(As'_1+s'_2)`$, $`t_2=p(Bs'_1+s'_3)+e`$. Each opening
+attempt commits to its masks $`r=(y_1\|y_{21})`$ as $`w'_1=p(Ay'_1+y'_2)`$,
+$`w'_2=p(By'_1+y'_3)+r`$ with Gaussian $`y'_\ell`$ of width $`\sigma'`$, and, after the
+challenge, sends $`z'_\ell=cs'_\ell+y'_\ell`$, which passes a rejection test of its own. The
+verifier checks each $`z'_\ell`$ against $`2\dim_\ell\sigma'^2`$ and recomputes
+$`w'_1=p(Az'_1+z'_2)-ct_1`$ and $`w'_2=p(Bz'_1+z'_3)+(z_1\|z_{21})-ct_2`$. $`z_{22}`$ needs no
+commitment: an extractor rebuilds it from the fixed $`w_1`$ as the verifier does.
+
+**Transcript.** The extractable toolbox transcript starts as `Transcript::new` with the
+parameters, the public seed and the tag `LNP22-toolbox-sl-v1`, then absorbs the extraction set
+(`extraction-parameters`), the application context and the statement. Its challenge seed
+`linhc-key` expands $`A`$ and $`B`$ with SHAKE128, each entry from its own domain, so the LinHC
+key is a random-oracle output on the parameters, the extraction set, the context and the
+statement. The expansion is an extendable-output function, not AES-256-CTR as for the public
+matrices, because the extraction argument programs this oracle to a key with a trapdoor, which an
+expansion of a 32-byte seed by a PRG would not allow. Each range attempt then absorbs
+the toolbox commitment and $`(t_1,t_2)`$ (`linhc-commitment`) before the projection challenge,
+and continues as the plain mode does. The quadratic proof absorbs $`(w'_1,w'_2)`$
+(`linhc-mask-commitment`) after its first message $`(t,v)`$ and before $`w_1`$, so the challenge
+$`c`$ depends on it. Both LinHC pairs are absorbed in the uniform code modulo $`q'`$.
+
+**Randomness.** The mode reads its streams under keys of its own labels, so that no stream of the
+plain mode is read otherwise:
+
+| Randomness | Key label | Streams |
+| --- | --- | --- |
+| Toolbox commitment, range masks, signs, coins, evaluation seed | `tbox/proof-sl/v1` | as in the plain mode |
+| LinHC randomness $`s'_\ell`$ | `tbox/proof-sl/v1` | `(LINHC_COMMITMENT, i)` |
+| Opening masks and coins | `abdlop/opening-proof-sl/v1` | as in the plain mode |
+| LinHC masks of attempt $`a`$ | `abdlop/opening-proof-sl/v1` | words `LINHC_MASKS` $`+3a`$ to $`+3a+2`$ |
+| LinHC coin of attempt $`a`$ | `abdlop/opening-proof-sl/v1` | first 32 bytes of `(LINHC_COINS, a)` |
+
+An attempt's outcome is still a function of its key and index, so the `parallel` feature leaves
+the proof unchanged. The LinHC test is the standard one (`reject::accept`, `Policy::Standard`)
+with a fractional constant $`M'`$, an upper bound on $`\exp(\sqrt{384\ln2}/\gamma+1/(2\gamma^2))`$
+for $`\gamma=\sigma'/T`$, about 1.2 to 1.4 for the shipped sets.
+
+**Proof and encoding.** `tbox::ExtractableProof` holds the toolbox proof and
+$`t_1,t_2,z'_1,z'_2,z'_3`$. `codec::proof::encode_extractable` writes the toolbox proof's fields
+as `encode` does, then $`t_1,t_2`$ in the uniform code modulo $`q'`$ and the openings in the
+Gaussian code of width $`1.55\cdot2^{t'}`$, with every length from the parameters and the
+extraction set. `decode_extractable` is strict as `decode` is. An extractable proof does not
+verify in the plain mode, nor a plain proof in the extractable mode.
+
+**Extraction.** An extractor that knows $`D_1`$ for a key $`B=D_1A+D_2`$ with ternary $`D_1`$,
+$`D_2`$ decrypts the combination for any challenge $`\tilde c`$:
+$`(\tilde ct_2+w'_2)-D_1(\tilde ct_1+w'_1)`$, centred modulo $`q'`$ and then modulo $`p`$. When a
+valid LinHC opening of that combination exists, the result is the response $`\tilde z`$ to
+$`\tilde c`$ ([parameters](parameters.md#extraction-sets) give the inequality that makes this
+exact). The extractor draws challenges from the challenge set until two of them give responses
+that pass the verifier's checks for the fixed first message, then applies LNP22's
+three-transcript extractor of Fig. 6 to them and the proof's own transcript.
+`src/tbox/extractable_tests.rs` runs this on a proof made with a trapdoored key: the decrypted
+responses pass the checks, $`(c-\tilde c)^{-1}`$ of their differences opens the compressed
+commitment, both pairs give the same opening, and it is the committed witness. The
+[security notes](security.md#straight-line-extraction) say what this establishes.
