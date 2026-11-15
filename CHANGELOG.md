@@ -3,6 +3,68 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
+## [0.2.0] - 2026-11-15
+
+The Fiat–Shamir transcripts and the proof encoding follow the CFRG drafts
+draft-irtf-cfrg-fiat-shamir-04 and, for the final round, the compact flavor of
+draft-irtf-cfrg-sigma-protocols-04. Every proof changes, in both modes: proofs of 0.1 do not
+verify under 0.2, nor the reverse. The parameter sets, the extraction sets, the commitments of
+`commit_with_seed` and the scheme fingerprints are unchanged.
+
+### Changed
+
+- **Transcript.** One SHAKE128 duplex sponge per proof (FS draft §4), started from
+  `DeriveSessionID` of a tag that names the argument, the codec and the hash suite
+  (`JALI-V02-LNP22-TBOX-C1-SHAKE128` and five others) followed by the caller's context. The
+  instance (parameters, public seed, statement, and the extraction set in the extractable mode)
+  is absorbed once, first, and then each prover message as its serialization, and each verifier
+  message is squeezed with a length that its type fixes. The inner layers continue the toolbox's
+  transcript instead of starting their own, and data that the instance and the messages
+  determine, such as the folded and projected equations, is no longer absorbed.
+- **Decodings.** $`\Gamma`$, $`\mu`$ and the LinHC key by `DecodeUint` ($`N_s+16`$ squeezed
+  bytes per value), the projection matrices by the centred binomial decoding of FIPS 203 from 2
+  bits per entry, and the challenge by `rand::challenge_from_bytes` from a fixed 4032 bytes, with
+  a fallback to the constant 1 of probability at most $`2^{-208}`$. The projection matrices, the
+  folding weights and the LinHC key are no longer expanded from seeds with AES-256-CTR or
+  SHAKE128.
+- **Codec C1.** Every field of a proof has a fixed width, in FIPS 204's bit packing: Gaussian
+  responses in $`t+4`$ bits, hints in `CheckedParams::hint_width` bits (2 for every shipped
+  set), the challenge as its first $`d/2`$ coefficients. A proof is the concatenation of its
+  messages, each a whole number of bytes, then the challenge and the response, with no end bit.
+  Every proof of a parameter set has the same length, about 3.3% more than 0.1's measured plain
+  proofs and 1.9% more for extractable ones (`kyber1024_d64`: 21,004 bytes, was 20,318, and
+  120,964 extractable, was 118,669). The prover restarts an attempt whose responses or hints do
+  not fit their widths, about 0.1% of the opening proof's attempts and 0.01% of the range
+  attempts (computed from the Gaussian tails, not measured).
+- **Cost.** Proving takes 0.73 to 0.81 and verifying 0.69 to 0.79 times the retired
+  instructions of 0.1.1 for the shipped sets' Kyber-shape instance, plain and extractable
+  (means over seeds 1 to 100, one thread, Apple M4). The derived equations are no longer encoded
+  and hashed at every layer: in 0.1.1, SHAKE128, the equation encoder and the AES expansion of
+  the projection rows took about a quarter of the sampled time, in 0.2 about 1.5%.
+- `CheckedParams::estimated_proof_bytes` is the exact proof length, and the parameter tool's
+  mirror computes it exactly.
+- Key labels `abdlop/opening-proof/v3`, `tbox/proof/v3`, `quad-eval/garbage/v2`,
+  `tbox/proof-sl/v2` and `abdlop/opening-proof-sl/v2`. The keys bind the transcript through 32
+  bytes squeezed from a copy of the sponge.
+- `BitReader` reads fields of up to 128 bits at once.
+
+### Added
+
+- `rand::challenge_from_bytes` and `rand::CHALLENGE_BYTES`, `ExtractionParams::proof_bytes`, and
+  `CheckedParams::hint_width`. `BitWriter::signed`, `BitWriter::into_bytes`, `BitReader::signed`
+  and `BitReader::finish_bytes` for fixed-width messages.
+- Tests: the draft's SHAKE128 vectors and its sumcheck example (`src/fiat_shamir.rs`), the IO
+  pattern and the NARG layout of every verifier as recorded call by call
+  (`tbox::io_pattern_tests`), and a Python oracle of the challenge decoding
+  (`tools/kat/generate.py`). The draft's vectors are vendored as JSON in `kat/ietf/`.
+
+### Removed
+
+- The public module `transcript` and its chained 32-byte `Transcript`. The transcript is
+  internal, and its format is specified in `docs/encodings.md`.
+- The variable-length Gaussian and hint codes are no longer used by any proof. They remain on
+  `BitWriter` and `BitReader`.
+
 ## [0.1.1] - 2026-11-14
 
 A straight-line extractable proof mode, with Katsumata's transform (CRYPTO 2021, full version
