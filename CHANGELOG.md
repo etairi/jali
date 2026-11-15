@@ -3,7 +3,9 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
-## [Unreleased]
+## [0.3.0] - Unreleased
+
+Not published yet. So far the proofs of the LNP22 modules are those of 0.2.0.
 
 ### Added
 
