@@ -11,6 +11,7 @@ mod golden_tests;
 #[cfg(feature = "serde")]
 mod json;
 pub mod lin;
+mod linhc;
 pub mod lnp;
 pub mod math;
 mod par;

@@ -175,6 +175,8 @@ python3 tools/params/rust_reference.py           # record again after a change t
 p=tools/params
 # The shipped sets and their copies in src/params/sets/, byte for byte.
 python3 $p/lnp_params.py regenerate --check
+# Their extraction sets and the toy set's, with their copies, byte for byte.
+python3 $p/lnp_params.py extraction --shipped --check
 # The toy set: its MLWE report, then the set (compare with src/params/sets/toy-d64.json).
 python3 $p/lnp_params.py rank --degree 64 --q 1099511627917 --mlwe-report
 python3 $p/lnp_params.py $p/toy-d64.request.json $p/toy-d64.report.json --output toy.json
@@ -194,6 +196,29 @@ does. The positional form of `lnp_params.py` (request, MLWE report, `--output`) 
 the request's modulus from an external MLWE report; the toy set, the possession example's set
 and the test fixtures under `tests/fixtures/params/` are its outputs. The CI workflow
 (`.github/workflows/ci.yml`, job `tools`) runs all of these checks.
+
+## Extraction sets
+
+The straight-line extractable mode takes an extraction set per parameter set: the rank and
+modulus of its LinHC commitment, the estimate behind the rank and its provenance
+([parameters](../docs/parameters.md#extraction-sets)).
+
+```sh
+p=tools/params
+python3 $p/lnp_params.py extraction params.json [--policy delta|beta --beta-min B] [--output out.json]
+python3 $p/lnp_params.py extraction --shipped [--check]
+```
+
+`extraction` derives the LinHC parameters exactly as `ExtractionParams::check` does
+(`jali_params/extraction.py`): the message length and bound from the parameter set, $`p=4B+1`$,
+the mask exponent, the noise bound and the least prime $`q'`$ above $`2(pN+B)`$, all in integers.
+It then takes the least rank $`n'`$ that the policy accepts at the modulus $`q'(n')`$ that rank
+gives: the sequence $`n'\leftarrow\text{rank}(q'(n'))`$ from 1 never decreases and stops at that
+least fixed point, with the MLWE estimate of the [hardness estimates](#hardness-estimates). The
+crate derives $`q'`$ again from the parameter set and the rank and refuses a set whose modulus
+differs, so a set that loads agrees with the Rust derivation. `--shipped` writes or checks the
+extraction sets of the sets under `params/sets/`, each under its request's policy, and of the toy
+set, under `params/sets/` and in the crate's `src/params/sets/`.
 
 ## Cross-checks with lattice-estimator
 

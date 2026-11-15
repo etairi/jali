@@ -383,3 +383,47 @@ fn two_opening_proofs_under_two_contexts_and_two_commitments_from_one_seed_share
     });
     assert_no_stream_opened_twice("two contexts, two commitments", seed, &streams);
 }
+
+#[test]
+fn an_extractable_proof_reads_each_stream_of_its_seed_once() {
+    let scheme = Abdlop::new([1; 32], crate::params::toy_d64()).unwrap();
+    let (statement, s1, m) = toolbox_instance(&scheme);
+    let extraction = crate::params::toy_d64_extraction();
+    let seed = [216; 32];
+    let streams = opened_with(seed, || {
+        prove_extractable_with_seed(&scheme, &extraction, &statement, &s1, &m, b"", seed).unwrap();
+    });
+    assert_no_stream_opened_twice("extractable toolbox", seed, &streams);
+    // The LinHC's commitment randomness, masks and coins are read under the seed's keys too.
+    for word in [
+        secret::TOOLBOX_COMMITMENT,
+        secret::TOOLBOX,
+        secret::RANGE_MASKS,
+        secret::GARBAGE,
+        secret::OPENING_COINS,
+        secret::OPENING_MASKS,
+        secret::LINHC_COMMITMENT,
+        secret::LINHC_MASKS,
+        secret::LINHC_COINS,
+    ] {
+        assert!(
+            words(&streams).contains(&word),
+            "word {word:#x} not recorded"
+        );
+    }
+}
+
+#[test]
+fn a_plain_and_an_extractable_proof_from_one_seed_share_no_stream() {
+    // The extractable mode reads more streams per attempt, so it reads all of them under keys
+    // of its own labels: no stream of a plain proof from the same seed is read again.
+    let scheme = Abdlop::new([1; 32], crate::params::toy_d64()).unwrap();
+    let (statement, s1, m) = toolbox_instance(&scheme);
+    let extraction = crate::params::toy_d64_extraction();
+    let seed = [217; 32];
+    let streams = opened_with(seed, || {
+        prove_with_seed(&scheme, &statement, &s1, &m, b"", seed).unwrap();
+        prove_extractable_with_seed(&scheme, &extraction, &statement, &s1, &m, b"", seed).unwrap();
+    });
+    assert_no_stream_opened_twice("plain and extractable toolbox", seed, &streams);
+}

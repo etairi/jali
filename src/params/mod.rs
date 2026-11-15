@@ -1,5 +1,8 @@
 //! Public parameter validation and derivation.
+mod extraction;
 pub mod moduli;
+
+pub use extraction::{ExtractionParams, OracleModel};
 
 /// Bimodal rejection constant $`M=\exp(337\alpha^2/(2\sigma^2))`$ of a range proof, rounded up
 /// to an integer, for the width $`\sigma=1.55\cdot2^t`$ and a Euclidean bound
@@ -604,6 +607,72 @@ pub fn demo_d64() -> TboxParams {
             "policy delta; ",
             "MLWE uSVP (ADPS16) beta 349 delta 1.004373402767646; ",
             "MSIS closed form beta 347 delta 1.004398692",
+        )
+        .into(),
+    }
+}
+
+/// The extraction set of [`toy_d64`] for the straight-line extractable mode: the least LinHC
+/// rank that the parameter tool's `delta` policy accepts at the modulus that rank gives
+/// (`tools/params/lnp_params.py extraction --shipped`, uSVP block size 346). The same set as
+/// `src/params/sets/toy-d64.extraction.json`.
+pub fn toy_d64_extraction() -> ExtractionParams {
+    ExtractionParams {
+        model: OracleModel::Rom,
+        rank: 36,
+        modulus: 208915457569039051,
+        mlwe_delta: 1.0043991660143143,
+        estimator: concat!(
+            "jali-params 3 extraction, policy delta, ",
+            "LinHC MLWE uSVP (ADPS16) rank 36 beta 346 delta 1.0043991660143143",
+        )
+        .into(),
+    }
+}
+
+/// The extraction set of [`kyber1024_d64`]: rank 37, uSVP block size 351 under the `delta`
+/// policy of the set's request. The same set as `src/params/sets/kyber1024-d64.extraction.json`.
+pub fn kyber1024_d64_extraction() -> ExtractionParams {
+    ExtractionParams {
+        model: OracleModel::Rom,
+        rank: 37,
+        modulus: 427057311222472241,
+        mlwe_delta: 1.0043564158420335,
+        estimator: concat!(
+            "jali-params 3 extraction, policy delta, ",
+            "LinHC MLWE uSVP (ADPS16) rank 37 beta 351 delta 1.0043564158420335",
+        )
+        .into(),
+    }
+}
+
+/// The extraction set of [`kyber1024_d128`]: rank 19, uSVP block size 366 under the `delta`
+/// policy. The same set as `src/params/sets/kyber1024-d128.extraction.json`.
+pub fn kyber1024_d128_extraction() -> ExtractionParams {
+    ExtractionParams {
+        model: OracleModel::Rom,
+        rank: 19,
+        modulus: 361285207383035423,
+        mlwe_delta: 1.0042336096043671,
+        estimator: concat!(
+            "jali-params 3 extraction, policy delta, ",
+            "LinHC MLWE uSVP (ADPS16) rank 19 beta 366 delta 1.0042336096043671",
+        )
+        .into(),
+    }
+}
+
+/// The extraction set of [`demo_d64`]: rank 38, uSVP block size 355 under the `delta` policy.
+/// The same set as `src/params/sets/demo.extraction.json`.
+pub fn demo_d64_extraction() -> ExtractionParams {
+    ExtractionParams {
+        model: OracleModel::Rom,
+        rank: 38,
+        modulus: 954081289135591699,
+        mlwe_delta: 1.004322885318349,
+        estimator: concat!(
+            "jali-params 3 extraction, policy delta, ",
+            "LinHC MLWE uSVP (ADPS16) rank 38 beta 355 delta 1.004322885318349",
         )
         .into(),
     }

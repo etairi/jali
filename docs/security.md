@@ -243,14 +243,129 @@ messages and challenges. Knowledge soundness rests on extraction by rewinding.
 - LNP22 obtains non-interactive zero-knowledge from the (non-abort) honest-verifier
   zero-knowledge of the interactive protocol (Appendix B). Jali relies on the same argument,
   which has not been written out for its full toolbox either.
-- Jali claims no straight-line (online) extraction, implements no transform that would provide
-  it, and claims no extraction in the presence of simulated proofs, nor consistent extraction of
-  a witness shared by separately proved relations.
+- The plain mode claims no straight-line (online) extraction, no extraction in the presence of
+  simulated proofs, and no consistent extraction of a witness shared by separately proved
+  relations. The extractable mode implements Katsumata's transform for straight-line extraction,
+  with the status that [straight-line extraction](#straight-line-extraction) sets out.
 - Security against quantum adversaries in the quantum random-oracle model has not been analysed.
 
 The extraction tests in `src/abdlop.rs` and `src/quad/extraction_tests.rs` fork proofs at
 injected challenges and check the algebra these arguments rely on; they do not establish the
 theorems.
+
+## Straight-line extraction
+
+The extractable mode ([protocol](protocol.md#straight-line-extractable-mode)) implements
+Katsumata's transform (CRYPTO 2021, full version ePrint 2021/927, whose numbering this section
+uses). This section states what the mode is meant to give and how much of it is established. The
+label of each step says how it is known.
+
+**Target.** In the classical random-oracle model, an extractor that never rewinds and makes no
+oracle queries of its own, which, after any adaptive sequence of simulated proofs of true or false
+statements, outputs a witness for every accepted proof whose statement and context received no
+simulated proof, except with negligible probability. Simulator and extractor share the
+programming of the oracle: at the points that output LinHC keys they place keys with a trapdoor.
+The key is SHAKE128's output, entry by entry, on the transcript's challenge seed `linhc-key`, and
+the argument models it, like the transcript hash, as a random oracle with values in the key
+space (the usual idealization of an extendable-output function). A key expanded from a 32-byte
+seed by AES-256-CTR, as the public matrices are, could not be programmed to a key with a
+trapdoor, since a reduction controls only the seed.
+This is the guarantee of Katsumata's Lemma 4.6 (unforgeability of the derived signature under
+chosen messages, with a straight-line extractor), with the message taken to be the statement and
+the context. Extraction from a new proof of a statement that did receive a simulated proof, the
+pair-based notion of simulation extractability, is not claimed.
+
+**The steps and their status.**
+
+1. *Decryption* [proved, [parameters](parameters.md#extraction-sets)]. Under a trapdoored key,
+   every combination $`\tilde ct+w'`$ with an opening within the verifier's block bounds decrypts
+   to that opening's message, and therefore to at most one message, when $`q'>2(pN+B)`$, which
+   `ExtractionParams::check` verifies in exact integers. It is tested at an opening aligned with
+   a row of the trapdoor and at the failure boundary [measured].
+2. *Trapdoored keys look uniform* [standard reduction: Katsumata's Lemma 3.13, item 1, in its
+   classical form]. A key $`(A,D_1A+D_2)`$ with ternary $`D_1,D_2`$ is indistinguishable from a
+   uniform one under MLWE with the rows of $`D_1`$ as secrets, of rank $`m'\ge n'`$. The hardness
+   of that instance is a cost-model estimate.
+3. *Further transcripts* [algorithm implemented and run on honest proofs, analysis Katsumata's
+   Definition 3.4 and Lemma 3.13]. The extractor decrypts at challenges drawn from the challenge
+   set and keeps those whose response passes the verifier's checks for the proof's fixed first
+   message: the norm bounds, $`\tilde z_{22}=\gamma w_1-\tilde r`$ within the joint bound, and
+   Fig. 6's equation with the fixed $`(t,v)`$. If a fraction $`\epsilon`$ of the challenges admits
+   a valid response for that first message, two are found after about $`2\kappa/\epsilon`$ draws,
+   except with probability about $`2^{1-\kappa}`$. A prover that succeeds with non-negligible
+   probability makes such a fraction non-negligible with non-negligible probability (Katsumata's
+   Lemma 4.3, and Lemma 4.8 with Remark 4.9 for the random oracle, where the loss is linear in
+   the number $`Q`$ of oracle queries).
+4. *From three transcripts to a witness* [LNP22, and Jali's tests]. The proof's transcript and the
+   two decrypted ones share every message before $`c`$. LNP22's extractor for Fig. 6 (proof of
+   Theorem 4.2, p. 25) turns three such transcripts into an opening $`(\bar s_1,\bar s_2,\bar m)`$
+   of the commitment with the quadratic relation, or an MSIS solution.
+   `src/tbox/extractable_tests.rs` runs steps 3 and 4 on a proof made with a trapdoored key and
+   recovers the committed witness [measured].
+5. *Earlier rounds without rewinding* [reasoning, not written out]. LNP22's proof for the toolbox
+   (Theorem 5.3, p. 46) runs its inner extractor a second time with fresh projection challenges,
+   to show that the committed range masks were fixed before the projection challenge. Here
+   binding (MSIS) makes the extracted opening a function of the commitment, which the transcript
+   fixes before that challenge, and a union bound over the prover's oracle queries for the
+   projection challenge, $`\Gamma`$ and $`\mu`$ replaces the second run. The errors per query are
+   about $`2^{-256}`$ for the projection (LNP22 Lemma 2.7 as applied on p. 46) and $`q^{-\lambda}`$
+   for $`\Gamma`$, so $`Q`$ queries multiply them by $`Q`$.
+6. *Zero knowledge with the LinHC* [reasoning on standard results]. The LinHC part of an honest
+   proof is simulated from $`(c,z_1,z_{21})`$ alone: $`(t_1,t_2)`$ uniform (MLWE of rank $`n'`$
+   with $`2m'`$ samples, a cost-model estimate), $`z'`$ Gaussian (the rejection test, below), and
+   $`w'`$ recomputed. It adds no dependence on the witness beyond the response that the plain
+   proof already contains, and LNP22's simulator does the rest, as in the plain mode.
+7. *Simulated proofs* [reasoning, not written out]. The simulator programs the challenge oracle
+   and simulates the LinHC part as in step 6. A combination $`\tilde ct+w'`$ with a uniform
+   $`(t_1,t_2)`$ has a valid opening for at most one challenge, except with negligible
+   probability, so reusing a simulated $`(t_1,t_2)`$ does not let a prover answer a fresh
+   challenge, and a statement and context without a simulated proof have a key whose trapdoor
+   the extractor holds.
+
+**Not established.**
+
+- The theorem for Jali's toolbox as a whole is not written down. Steps 5 to 7 are outlines, as
+  the plain mode's Fiat–Shamir argument is ([Fiat–Shamir and extraction](#fiatshamir-and-extraction)).
+- No security in the quantum random-oracle model is claimed. Katsumata's QROM argument (Lemmas
+  4.7 and 4.8) extracts only from adversaries whose success exceeds about $`16k(Q+1)^2/|C|`$,
+  here with $`k=3`$. With the final challenge sets of about $`2^{148.6}`$ elements at degree 64
+  and $`2^{130.8}`$ at degree 128 ([challenges](parameters.md#challenges)) and $`Q=2^{64}`$, that
+  is about $`2^{-15}`$ and more than 1 [computed]. A QROM mode needs final challenge sets of about
+  $`2^{262}`$ elements, a larger $`\lambda`$ and smaller rejection errors, and so parameter sets
+  of its own. `OracleModel` has only `Rom` for now.
+- The pair-based notion of simulation extractability would also need proofs that cannot be mauled
+  into other valid proofs: unique responses after the challenge, given the transcript, and strict
+  decoding of every field. It is not argued.
+- The LinHC hardness figures are cost-model estimates under the shipped sets' `delta` policy,
+  about 101 bits under core-SVP.
+
+**Statistical distance.** The LinHC test is a standard rejection test at the error $`2^{-192}`$
+(constant $`M'=\exp(\sqrt{384\ln2}/\gamma+1/(2\gamma^2))`$, rounded up) with its own 256-bit coin.
+Its tail, its coin and cutoff, and the $`(n'+2m')d`$ more mask coefficients of an attempt add per
+proof terms of the size of the table's coins-and-cutoffs and masks columns, about $`2^{-170}`$
+[estimate, not computed in interval arithmetic]. The [whole-proof
+table](#statistical-distance-of-whole-proofs) is not recomputed for the extractable mode.
+
+**Deviations from Katsumata's paper.**
+
+- The shift bound $`T`$ uses the challenges' operator norm $`\eta`$. The paper's
+  $`T=\eta\sum_i\|\beta_i\|_\infty\sqrt{(n+2m)d}`$ (Sec. 3.4, where $`\eta`$ bounds the randomness)
+  bounds $`\|\beta s\|`$ only for monomial challenges, which its Sec. 5 uses.
+- Each block of the opening has its own bound $`2\dim_\ell\sigma'^2`$. The paper checks every block
+  against $`\sqrt{2nd}\,\phi T`$ (Fig. 4 and 6), which honest openings of the blocks of dimension
+  $`md`$ exceed once $`m>2n`$, as in every shipped set.
+- The rejection constant is fractional, rounded up at $`2^{-128}`$ precision after a relative
+  margin of $`2^{-40}`$, at the error $`2^{-192}`$.
+- Only the MLWE construction (Sec. 3.4) is implemented, not the one with a DSMR key (Sec. 3.5). At
+  moduli near $`2^{60}`$ an NTRU-type key with ternary $`F`$ and $`G`$ lies far above the threshold
+  $`q\approx0.004\,n^{2.484}`$ from which Ducas and van Woerden (ePrint 2021/999) find ternary NTRU
+  overstretched, about $`2^{19.4}`$ for $`n=2048`$. That this carries over to the matrix variant
+  DSMR is our inference. The paper's own DSMR parameters ($`q^*=2^{50}`$ at $`d=2^{11}`$, Appendix
+  B.2) were assessed against the primal attack only.
+- The key is derived from the statement and the context in the classical model too, the
+  structure of the paper's QROM signature (Fig. 10), so that a QROM mode can keep the protocol.
+- As the paper's Sec. 5 does for the protocol of Bootle, Lyubashevsky and Seiler, the LinHC wraps
+  only the final opening of a multi-round protocol.
 
 ## Two-prime moduli
 

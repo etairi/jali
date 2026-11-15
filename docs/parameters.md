@@ -150,3 +150,66 @@ sets, the toy set and the test fixtures have $`s<0.1`$. The allowance bounds the
 length, not each proof: at $`s=12.45`$, where $`H=19.48`$ and the allowance is 20.62, ten
 measured proofs had 18.5 to 19.7 bits per hint. The estimate is not a proven bound on the length
 of a proof.
+
+## Extraction sets
+
+The straight-line extractable mode ([protocol](protocol.md#straight-line-extractable-mode)) needs
+an `ExtractionParams` for the parameter set: the oracle model (`rom`), the LinHC rank $`n'`$, the
+LinHC modulus $`q'`$, the root Hermite factor of the estimate behind the rank, and the estimator's
+provenance. Everything else is derived, by `ExtractionParams::check` from the parameter set and the
+rank, exactly as by the parameter tool:
+
+- $`m'=m_1+|\text{l2\_rows}|+m_2-n`$, the length of the committed witness $`(s_1\|s_{21})`$.
+- $`B=\max(\lceil\sqrt{\text{z1\_bound\_squared}}\rceil,\lceil\sqrt{\text{b\_squared}}\rceil)`$,
+  a bound on every coefficient of a response $`(z_1\|z_{21})`$ that the verifier accepts, as a
+  coefficient is at most the Euclidean norm of its vector and the joint bound covers $`z_{21}`$.
+- $`p=4B+1`$, odd, and $`T^2=\eta^2(n'+2m')d`$, a bound on $`\|cs'\|^2`$ for every challenge
+  (operator norm $`\eta`$, [challenges](#challenges)) and ternary LinHC randomness.
+- $`t'`$, the least exponent with $`\sigma'=1.55\cdot2^{t'}\ge53T`$, and the verifier's bounds
+  $`\lfloor2\dim_\ell\sigma'^2\rfloor`$ on $`\|z'_\ell\|^2`$ for the dimensions $`n'd`$, $`m'd`$,
+  $`m'd`$.
+- $`N=\lceil\sqrt{n'd}\rceil\beta_1+\lceil\sqrt{m'd}\rceil\beta_2+\beta_3`$ with
+  $`\beta_\ell=\lceil\sqrt{2\dim_\ell\sigma'^2}\rceil`$, and $`q'`$, the least prime above
+  $`2(pN+B)`$.
+
+**Why $`q'>2(pN+B)`$ suffices.** Let $`(\tilde v_1,\tilde v_2)=\tilde ct+w'`$ have an opening
+$`\tilde z'`$ within the block bounds to a message $`\tilde z`$ with $`\|\tilde z\|_\infty\le B`$.
+Under a key $`B_{\text{key}}=D_1A+D_2`$ with ternary $`D_1`$ and $`D_2`$,
+$`\tilde v_2-D_1\tilde v_1=p(D_2\tilde z'_1-D_1\tilde z'_2+\tilde z'_3)+\tilde z`$ in $`R_{q'}`$. A
+coefficient of $`D_2\tilde z'_1`$ is the inner product of $`n'd`$ values in $`\{-1,0,1\}`$ (a row of
+$`D_2`$, signed by the negacyclic wraparound) with the coefficients of $`\tilde z'_1`$, so at most
+$`\sqrt{n'd}\,\|\tilde z'_1\|`$ (Cauchy–Schwarz), and likewise for $`D_1\tilde z'_2`$, while
+$`\|\tilde z'_3\|_\infty\le\|\tilde z'_3\|`$. The right side is therefore at most $`pN+B<q'/2`$ in
+absolute value, so it is the centred representative of the left side, and reducing it modulo $`p`$
+gives $`\tilde z`$, as $`B<p/2`$ [proved]. `src/linhc/tests.rs` checks it at an opening aligned with
+a row of the trapdoor, which reaches about 0.8 of $`N`$, and shows that decryption fails once
+$`q'`$ is below $`2(p\cdot\text{noise}+B)`$ for that opening [measured].
+
+**Hardness.** Two MLWE instances over the proof degree modulo $`q'`$ with ternary secret and
+error matter. Hiding of $`(t_1,t_2)`$ is MLWE of rank $`n'`$ with $`2m'`$ samples. Indistinguishability
+of a trapdoored key from a uniform one, which the extractor needs, is MLWE with secret
+$`D_1`$'s rows, of rank $`m'\ge n'`$, and $`n'`$ samples per row. `check` requires
+$`n'\le m'`$, so the second instance has at least the first one's secret dimension and fewer
+samples. The parameter tool estimates the first with the toolbox's own MLWE model (uSVP of
+ADPS16 with Kannan's embedding, secret and error uniform on $`\{-1,0,1\}`$, any number of samples)
+and takes the least rank that the set's policy accepts at the modulus that rank gives. Those are
+cost-model heuristics, as for the toolbox [estimate].
+
+| Set | $`n'`$ | $`n'd`$ | $`m'`$ | $`\log_2p`$ | $`\log_2q'`$ | $`t'`$ | $`M'`$ | uSVP block size | Extractable proof | Plain proof |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `toy_d64_extraction` | 36 | 2304 | 52 | 23.92 | 57.54 | 19 | 1.305 | 346 | | |
+| `kyber1024_d64_extraction` | 37 | 2368 | 71 | 24.65 | 58.57 | 19 | 1.351 | 351 | 118,695 B | 20,319 B |
+| `kyber1024_d128_extraction` | 19 | 2432 | 38 | 25.34 | 58.33 | 18 | 1.299 | 366 | 125,316 B | 21,826 B |
+| `demo_d64_extraction` | 38 | 2432 | 83 | 24.65 | 59.73 | 20 | 1.174 | 355 | 141,024 B | 23,980 B |
+
+The sets come from `tools/params/lnp_params.py extraction --shipped`, under the `delta` policy of
+the shipped sets, about 101 bits under core-SVP and not 128. `src/params/sets/*.extraction.json`
+are copies of the tool's output. The proof sizes are means over seeds 1 to 20 of the README's
+Kyber-shape instance [measured], about 5.7 to 5.9 times the plain proof's. Over the same 20 seeds,
+proving took 1.17 to 1.49 times the plain mode's retired instructions and verifying 1.14 to 1.17
+times (one thread, release build, rustc 1.100.0, Apple M4, `/usr/bin/time -l`) [measured].
+Proving restarts a random number of times, and a run with other commitment keys gave ratios up to
+0.14 away from these [measured].
+`cargo run --release --example extractable` proves one seed in both modes. A set for another
+parameter set comes from `lnp_params.py extraction PARAMS.json`, with `--policy beta --beta-min
+439`, for example, for a 128-bit policy.

@@ -3,6 +3,7 @@ use crate::{
     Error,
     abdlop::{self, Abdlop, Caller, Commitment, Opening, OpeningProof},
     codec::{BitWriter, CodeWriter, SegmentWriter, Segments},
+    linhc,
     math::{Poly, PolyVec, Ring, SparsePolyMat, SparsePolyVec, U256, int, terms::Shape},
     rand::take_seed,
     transcript::Transcript,
@@ -577,18 +578,24 @@ fn prefix(
     prefix.absorb_segments(b"quadratic-equation", &equation.to_segments()?);
     Ok(prefix)
 }
-fn challenge(
+/// The challenge after the first message `(t, v, w1)`, absorbing the LinHC mask commitment of
+/// the extractable mode, when given, after `(t, v)` and before `w1`.
+fn challenge_ext(
     scheme: &Abdlop,
     prefix: &Transcript,
     t: &Poly,
     v: &Poly,
     w1: &PolyVec,
+    mask: Option<linhc::MaskCommitment<'_>>,
 ) -> Result<Poly, Error> {
     let mut writer = BitWriter::new();
     encode_poly(&mut writer, t)?;
     encode_poly(&mut writer, v)?;
     let mut prefix = prefix.clone();
     prefix.absorb(b"quadratic-first-message", &writer.finish());
+    if let Some((w1_mask, w2_mask)) = mask {
+        linhc::absorb_pair(&mut prefix, b"linhc-mask-commitment", w1_mask, w2_mask)?;
+    }
     scheme.challenge(&prefix, w1)
 }
 /// Row $`\ell`$ of the matrix $`B`$ with one more row, the row of the commitment to $`t`$.
@@ -640,27 +647,42 @@ pub(crate) fn prove_seeded(
     context: &[u8],
     seed: &Zeroizing<[u8; 32]>,
 ) -> Result<QuadProof, Error> {
+    Ok(prove_seeded_ext(scheme, commitment, opening, equation, context, seed, None)?.0)
+}
+/// [`prove_seeded`] with the extractable commitment beside the opening when `ext` is given,
+/// returning the accepted attempt's LinHC opening too.
+pub(crate) fn prove_seeded_ext(
+    scheme: &Abdlop,
+    commitment: &Commitment,
+    opening: &Opening,
+    equation: &QuadEq,
+    context: &[u8],
+    seed: &Zeroizing<[u8; 32]>,
+    ext: Option<&linhc::ProverExt<'_>>,
+) -> Result<(QuadProof, Option<linhc::LinhcOpening>), Error> {
     let prefix = prefix(scheme, commitment, equation, context)?;
     let s = interleave(&opening.s1, &opening.m)?;
     if !equation.evaluate(&s)?.is_zero() {
         return Err(Error::Witness);
     }
-    let (proof, ()) = prove_core(
+    let (proof, linhc_opening, ()) = prove_core_ext(
         scheme,
         commitment,
         opening,
         equation,
         &prefix.digest(),
         seed,
-        |t, v, w1| Ok((challenge(scheme, &prefix, t, v, w1)?, ())),
+        ext,
+        |t, v, w1, mask| Ok((challenge_ext(scheme, &prefix, t, v, w1, mask)?, ())),
     )?;
-    Ok(proof)
+    Ok((proof, linhc_opening))
 }
 /// The quadratic proof with a caller-defined challenge of the first message `(t, v, w1)`. It
 /// does not check the witness against the equation; `binding` is as in `Abdlop::prove_core`.
 /// The challenge function returns side data with the challenge, and the proof is returned
 /// with that of its accepted attempt; the function may be called for further attempts, in no
 /// particular order (`Abdlop::prove_core`).
+#[cfg(test)]
 pub(crate) fn prove_core<U: Send>(
     scheme: &Abdlop,
     commitment: &Commitment,
@@ -670,18 +692,52 @@ pub(crate) fn prove_core<U: Send>(
     seed: &Zeroizing<[u8; 32]>,
     challenge: impl Fn(&Poly, &Poly, &PolyVec) -> Result<(Poly, U), Error> + Sync,
 ) -> Result<(QuadProof, U), Error> {
+    let (proof, _, side) = prove_core_ext(
+        scheme,
+        commitment,
+        opening,
+        equation,
+        binding,
+        seed,
+        None,
+        |t, v, w1, _| challenge(t, v, w1),
+    )?;
+    Ok((proof, side))
+}
+/// [`prove_core`] with the extractable commitment when `ext` is given: the challenge function
+/// also receives each attempt's LinHC mask commitment, and must absorb it.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(crate) fn prove_core_ext<U: Send>(
+    scheme: &Abdlop,
+    commitment: &Commitment,
+    opening: &Opening,
+    equation: &QuadEq,
+    binding: &[u8; 32],
+    seed: &Zeroizing<[u8; 32]>,
+    ext: Option<&linhc::ProverExt<'_>>,
+    challenge: impl Fn(
+        &Poly,
+        &Poly,
+        &PolyVec,
+        Option<linhc::MaskCommitment<'_>>,
+    ) -> Result<(Poly, U), Error>
+    + Sync,
+) -> Result<(QuadProof, Option<linhc::LinhcOpening>, U), Error> {
     let s = interleave(&opening.s1, &opening.m)?;
     let b = extra_row(scheme)?;
     let s21 = abdlop::part(&opening.s2, 0, scheme.a2.cols())?;
     let bs = b.dot(&s21)?;
     // Each attempt's t is its side data, so that the proof takes the accepted attempt's.
-    let (proof, (t, side)) = scheme.prove_core(
+    let (_, proof, linhc_opening, (t, side)) = scheme.prove_core_ext(
         commitment,
         opening,
         Caller::Quadratic,
         binding,
         seed,
-        |y1, y21, w1| {
+        crate::rand::secret::MAX_ATTEMPTS,
+        crate::par::speculation_width(),
+        ext,
+        |y1, y21, w1, mask| {
             let by = scheme.b.mul(y21)?;
             let minus_by = PolyVec::new(
                 by.ring().clone(),
@@ -695,11 +751,11 @@ pub(crate) fn prove_core<U: Send>(
                 .add(&equation.r1.dot(&y)?)?;
             let t = bs.add(&g1)?;
             let v = equation.r2.bilinear(&y, &y)?.add(&b.dot(y21)?)?;
-            let (c, side) = challenge(&t, &v, w1)?;
+            let (c, side) = challenge(&t, &v, w1, mask)?;
             Ok((c, (t, side)))
         },
     )?;
-    Ok((QuadProof { t, opening: proof }, side))
+    Ok((QuadProof { t, opening: proof }, linhc_opening, side))
 }
 
 /// Verify the check of Fig. 6 (Eq. (31), rewritten) and both response norms, rebuilding the
@@ -711,20 +767,46 @@ pub fn verify(
     proof: &QuadProof,
     context: &[u8],
 ) -> Result<(), Error> {
+    verify_ext(scheme, commitment, equation, proof, context, None)
+}
+/// [`verify`] with the extractable commitment's checks when `ext` is given.
+pub(crate) fn verify_ext(
+    scheme: &Abdlop,
+    commitment: &Commitment,
+    equation: &QuadEq,
+    proof: &QuadProof,
+    context: &[u8],
+    ext: Option<&linhc::VerifierExt<'_>>,
+) -> Result<(), Error> {
     let prefix = prefix(scheme, commitment, equation, context)?;
-    verify_core(scheme, commitment, equation, proof, |v, w1| {
-        challenge(scheme, &prefix, &proof.t, v, w1)
+    verify_core_ext(scheme, commitment, equation, proof, ext, |v, w1, mask| {
+        challenge_ext(scheme, &prefix, &proof.t, v, w1, mask)
     })
 }
 /// The check of Fig. 6 (Eq. (31), rewritten) with a caller-defined challenge of the
 /// reconstructed `(v, w1)`; the caller must have checked the equation's shape, as `prefix`
 /// does.
+#[cfg(test)]
 pub(crate) fn verify_core(
     scheme: &Abdlop,
     commitment: &Commitment,
     equation: &QuadEq,
     proof: &QuadProof,
     challenge: impl FnOnce(&Poly, &PolyVec) -> Result<Poly, Error>,
+) -> Result<(), Error> {
+    verify_core_ext(scheme, commitment, equation, proof, None, |v, w1, _| {
+        challenge(v, w1)
+    })
+}
+/// [`verify_core`] with the extractable commitment's checks when `ext` is given: the challenge
+/// function also receives the recomputed LinHC mask commitment.
+pub(crate) fn verify_core_ext(
+    scheme: &Abdlop,
+    commitment: &Commitment,
+    equation: &QuadEq,
+    proof: &QuadProof,
+    ext: Option<&linhc::VerifierExt<'_>>,
+    challenge: impl FnOnce(&Poly, &PolyVec, Option<linhc::MaskCommitment<'_>>) -> Result<Poly, Error>,
 ) -> Result<(), Error> {
     if proof.t.ring() != scheme.ring() {
         return Err(Error::RingMismatch);
@@ -743,5 +825,7 @@ pub(crate) fn verify_core(
         .add(&c.mul(&equation.r1.dot(&z)?)?)?
         .add(&c.mul(c)?.mul(&equation.r0)?)?
         .sub(&f)?;
-    scheme.verify_core(commitment, &proof.opening, |w1| challenge(&v, w1))
+    scheme.verify_core_ext(commitment, &proof.opening, ext, |w1, mask| {
+        challenge(&v, w1, mask)
+    })
 }

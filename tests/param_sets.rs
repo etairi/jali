@@ -10,7 +10,10 @@ use jali::{
     Error,
     lin::{self, Block},
     math::{Poly, PolyMat, PolyVec, Ring, U256, int::is_prime},
-    params::{TboxParams, demo_d64, kyber1024_d64, kyber1024_d128},
+    params::{
+        ExtractionParams, TboxParams, demo_d64, demo_d64_extraction, kyber1024_d64,
+        kyber1024_d64_extraction, kyber1024_d128, kyber1024_d128_extraction,
+    },
     statement::Norm,
 };
 use std::{collections::BTreeMap, sync::Arc};
@@ -298,6 +301,163 @@ fn each_set_is_its_json_file() {
             (set.params)(),
             "{}",
             set.name
+        );
+    }
+}
+
+/// The extraction sets of the shipped sets, in the order of `SETS`
+/// (`tools/params/lnp_params.py extraction --shipped`).
+const EXTRACTION: [fn() -> ExtractionParams; 3] = [
+    kyber1024_d64_extraction,
+    kyber1024_d128_extraction,
+    demo_d64_extraction,
+];
+
+/// Each extraction set passes its check against its parameter set: the modulus is the one its
+/// rank gives there, so the tool's derivation agrees with the crate's.
+#[test]
+fn each_extraction_set_checks_against_its_set() {
+    for (set, extraction) in SETS.iter().zip(EXTRACTION) {
+        let params = (set.params)();
+        let extraction = extraction();
+        extraction.check(&params).unwrap();
+        assert_eq!(
+            ExtractionParams::modulus_for(&params, extraction.rank).unwrap(),
+            extraction.modulus,
+            "{}",
+            set.name
+        );
+        // Another rank gives another modulus, which the set does not name.
+        let other = ExtractionParams {
+            rank: extraction.rank - 1,
+            ..extraction.clone()
+        };
+        assert_eq!(
+            other.check(&params),
+            Err(Error::Parameter("extraction modulus")),
+            "{}",
+            set.name
+        );
+    }
+}
+
+/// Each extraction set's JSON file loads as its loader function. (`extraction --shipped
+/// --check` of the parameter tool checks that the file is the tool's output, byte for byte.)
+#[cfg(feature = "serde")]
+#[test]
+fn each_extraction_set_is_its_json_file() {
+    let files = [
+        include_str!("../src/params/sets/kyber1024-d64.extraction.json"),
+        include_str!("../src/params/sets/kyber1024-d128.extraction.json"),
+        include_str!("../src/params/sets/demo.extraction.json"),
+    ];
+    for ((set, extraction), file) in SETS.iter().zip(EXTRACTION).zip(files) {
+        assert_eq!(
+            ExtractionParams::from_json(file, &(set.params)()).unwrap(),
+            extraction(),
+            "{}",
+            set.name
+        );
+    }
+}
+
+/// Prove the seeded instance in the straight-line extractable mode, verify it, and return the
+/// proof's length, which the tests pin: about 5.8 times the plain proof's.
+fn proves_extractably(set: &Set, extraction: fn() -> ExtractionParams) -> usize {
+    const CONTEXT: &[u8] = b"jali extractable mode";
+    let (a, t, witness) = instance(set);
+    let compiled = lin::compile(&a, &t, &blocks(set), (set.params)()).unwrap();
+    let extraction = extraction();
+    let bytes = compiled
+        .prove_extractable_bytes_with_seed([7; 32], &extraction, &witness, CONTEXT, [9; 32])
+        .unwrap();
+    compiled
+        .verify_extractable_bytes([7; 32], &extraction, &bytes, CONTEXT)
+        .unwrap();
+    // A flipped bit in the toolbox part and one in the LinHC part.
+    for at in [bytes.len() / 4, bytes.len() - 9] {
+        let mut tampered = bytes.clone();
+        tampered[at] ^= 1;
+        assert!(
+            compiled
+                .verify_extractable_bytes([7; 32], &extraction, &tampered, CONTEXT)
+                .is_err()
+        );
+    }
+    bytes.len()
+}
+
+#[test]
+fn kyber1024_d64_proves_extractably() {
+    assert_eq!(proves_extractably(&SETS[0], EXTRACTION[0]), 118_669);
+}
+#[test]
+fn kyber1024_d128_proves_extractably() {
+    assert_eq!(proves_extractably(&SETS[1], EXTRACTION[1]), 125_305);
+}
+#[test]
+fn demo_d64_proves_extractably() {
+    assert_eq!(proves_extractably(&SETS[2], EXTRACTION[2]), 141_032);
+}
+
+/// Wall times of one seeded proof and its verification in both modes, the median of five runs
+/// per set (`cargo test --release --test param_sets -- --ignored --nocapture`). The machine's
+/// load moves these figures: record it with them.
+#[test]
+#[ignore = "timing output"]
+fn timings_of_both_modes() {
+    use std::time::Instant;
+    for (set, extraction) in SETS.iter().zip(EXTRACTION) {
+        let (a, t, witness) = instance(set);
+        let compiled = lin::compile(&a, &t, &blocks(set), (set.params)()).unwrap();
+        let extraction = extraction();
+        let median = |mut f: Box<dyn FnMut()>| -> f64 {
+            let mut times: Vec<f64> = (0..5)
+                .map(|_| {
+                    let start = Instant::now();
+                    f();
+                    start.elapsed().as_secs_f64() * 1e3
+                })
+                .collect();
+            times.sort_by(f64::total_cmp);
+            times[2]
+        };
+        let plain = compiled
+            .prove_bytes_with_seed([7; 32], &witness, b"timing", [9; 32])
+            .unwrap();
+        let bytes = compiled
+            .prove_extractable_bytes_with_seed([7; 32], &extraction, &witness, b"timing", [9; 32])
+            .unwrap();
+        let prove_plain = median(Box::new(|| {
+            compiled
+                .prove_bytes_with_seed([7; 32], &witness, b"timing", [9; 32])
+                .unwrap();
+        }));
+        let verify_plain = median(Box::new(|| {
+            compiled.verify_bytes([7; 32], &plain, b"timing").unwrap();
+        }));
+        let prove_ext = median(Box::new(|| {
+            compiled
+                .prove_extractable_bytes_with_seed(
+                    [7; 32],
+                    &extraction,
+                    &witness,
+                    b"timing",
+                    [9; 32],
+                )
+                .unwrap();
+        }));
+        let verify_ext = median(Box::new(|| {
+            compiled
+                .verify_extractable_bytes([7; 32], &extraction, &bytes, b"timing")
+                .unwrap();
+        }));
+        eprintln!(
+            "{}: plain {} B, prove {prove_plain:.1} ms, verify {verify_plain:.1} ms | \
+             extractable {} B, prove {prove_ext:.1} ms, verify {verify_ext:.1} ms",
+            set.name,
+            plain.len(),
+            bytes.len()
         );
     }
 }

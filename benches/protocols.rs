@@ -192,6 +192,50 @@ fn protocols(c: &mut Criterion) {
     group.bench_function("toolbox/verify", |b| {
         b.iter(|| tbox::verify(&scheme, &statement, black_box(&proof), b"benchmark").unwrap())
     });
+    // The same statement in the straight-line extractable mode (Katsumata's transform).
+    let extraction = jali::params::toy_d64_extraction();
+    let extractable = tbox::prove_extractable_with_seed(
+        &scheme,
+        &extraction,
+        &statement,
+        &bounded,
+        &m,
+        b"benchmark",
+        [3; 32],
+    )
+    .unwrap();
+    eprintln!(
+        "toolbox extractable: actual={} bytes",
+        jali::codec::proof::encode_extractable(&scheme, &extraction, &extractable)
+            .unwrap()
+            .len()
+    );
+    group.bench_function("toolbox-extractable/prove", |b| {
+        b.iter(|| {
+            tbox::prove_extractable_with_seed(
+                &scheme,
+                &extraction,
+                &statement,
+                &bounded,
+                &m,
+                b"benchmark",
+                black_box([3; 32]),
+            )
+            .unwrap()
+        })
+    });
+    group.bench_function("toolbox-extractable/verify", |b| {
+        b.iter(|| {
+            tbox::verify_extractable(
+                &scheme,
+                &extraction,
+                &statement,
+                black_box(&extractable),
+                b"benchmark",
+            )
+            .unwrap()
+        })
+    });
     group.finish();
 }
 criterion_group!(benches, protocols);

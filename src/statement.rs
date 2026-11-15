@@ -15,7 +15,7 @@ use crate::{
     abdlop::Abdlop,
     lnp::{self, AffineBlock, L2Block},
     math::{I256, Poly, PolyMat, PolyVec, Ring, SparsePolyMat, SparsePolyVec, U256, int, iso},
-    params::TboxParams,
+    params::{ExtractionParams, TboxParams},
     quad::{Affine, QuadEq},
     rand::take_seed,
     tbox,
@@ -2157,6 +2157,128 @@ impl Compiled {
             &Abdlop::new(pp_seed, self.params.clone())?,
             &self.statement,
             proof,
+            context,
+        )
+    }
+    /// Prove in the straight-line extractable mode (Katsumata's transform,
+    /// [`tbox::prove_extractable_with_seed`]) with fresh randomness from `rng`, under `context`
+    /// and the extraction set `extraction` for this statement's parameters. Each call draws a
+    /// fresh seed.
+    pub fn prove_extractable(
+        &self,
+        pp_seed: [u8; 32],
+        extraction: &ExtractionParams,
+        witness: &BTreeMap<String, Vec<Poly>>,
+        context: &[u8],
+        rng: &mut impl rand_core::CryptoRng,
+    ) -> Result<tbox::ExtractableProof, Error> {
+        let mut seed = Zeroizing::new([0; 32]);
+        rand_core::Rng::fill_bytes(rng, &mut *seed);
+        Ok(self
+            .prove_extractable_seeded(pp_seed, extraction, witness, context, &seed)?
+            .1)
+    }
+    /// [`Compiled::prove_extractable`] with explicit deterministic randomness. Seeds work as for
+    /// [`Compiled::prove_with_seed`].
+    pub fn prove_extractable_with_seed(
+        &self,
+        pp_seed: [u8; 32],
+        extraction: &ExtractionParams,
+        witness: &BTreeMap<String, Vec<Poly>>,
+        context: &[u8],
+        mut seed: [u8; 32],
+    ) -> Result<tbox::ExtractableProof, Error> {
+        Ok(self
+            .prove_extractable_seeded(pp_seed, extraction, witness, context, &take_seed(&mut seed))?
+            .1)
+    }
+    /// [`Compiled::prove_extractable`], encoded ([`crate::codec::proof::encode_extractable`]).
+    pub fn prove_extractable_bytes(
+        &self,
+        pp_seed: [u8; 32],
+        extraction: &ExtractionParams,
+        witness: &BTreeMap<String, Vec<Poly>>,
+        context: &[u8],
+        rng: &mut impl rand_core::CryptoRng,
+    ) -> Result<Vec<u8>, Error> {
+        let mut seed = Zeroizing::new([0; 32]);
+        rand_core::Rng::fill_bytes(rng, &mut *seed);
+        let (scheme, proof) =
+            self.prove_extractable_seeded(pp_seed, extraction, witness, context, &seed)?;
+        crate::codec::proof::encode_extractable(&scheme, extraction, &proof)
+    }
+    /// [`Compiled::prove_extractable_with_seed`], encoded.
+    pub fn prove_extractable_bytes_with_seed(
+        &self,
+        pp_seed: [u8; 32],
+        extraction: &ExtractionParams,
+        witness: &BTreeMap<String, Vec<Poly>>,
+        context: &[u8],
+        mut seed: [u8; 32],
+    ) -> Result<Vec<u8>, Error> {
+        let (scheme, proof) = self.prove_extractable_seeded(
+            pp_seed,
+            extraction,
+            witness,
+            context,
+            &take_seed(&mut seed),
+        )?;
+        crate::codec::proof::encode_extractable(&scheme, extraction, &proof)
+    }
+    fn prove_extractable_seeded(
+        &self,
+        pp_seed: [u8; 32],
+        extraction: &ExtractionParams,
+        witness: &BTreeMap<String, Vec<Poly>>,
+        context: &[u8],
+        seed: &Zeroizing<[u8; 32]>,
+    ) -> Result<(Abdlop, tbox::ExtractableProof), Error> {
+        let (s1, m) = self.map_witness(witness)?;
+        let scheme = Abdlop::new(pp_seed, self.params.clone())?;
+        let proof = tbox::prove_extractable_seeded(
+            &scheme,
+            extraction,
+            &self.statement,
+            &s1,
+            &m,
+            context,
+            seed,
+            None,
+        )?;
+        Ok((scheme, proof))
+    }
+    /// Verify a proof of the straight-line extractable mode against the compiled statement,
+    /// `context` and `extraction` ([`tbox::verify_extractable`]).
+    pub fn verify_extractable(
+        &self,
+        pp_seed: [u8; 32],
+        extraction: &ExtractionParams,
+        proof: &tbox::ExtractableProof,
+        context: &[u8],
+    ) -> Result<(), Error> {
+        tbox::verify_extractable(
+            &Abdlop::new(pp_seed, self.params.clone())?,
+            extraction,
+            &self.statement,
+            proof,
+            context,
+        )
+    }
+    /// Strictly decode ([`crate::codec::proof::decode_extractable`]) and verify a proof of the
+    /// straight-line extractable mode.
+    pub fn verify_extractable_bytes(
+        &self,
+        pp_seed: [u8; 32],
+        extraction: &ExtractionParams,
+        bytes: &[u8],
+        context: &[u8],
+    ) -> Result<(), Error> {
+        let scheme = Abdlop::new(pp_seed, self.params.clone())?;
+        tbox::verify_extractable(
+            &scheme,
+            extraction,
+            &self.statement,
+            &crate::codec::proof::decode_extractable(&scheme, extraction, bytes)?,
             context,
         )
     }
