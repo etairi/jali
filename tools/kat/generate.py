@@ -4,7 +4,9 @@
 The Gaussian vectors use the base tables that half_gaussian_cdf.py computes from their
 definition. The challenge vectors are draws of `rand::autostable` with the exact operator-norm
 test of LNP22 section 2.7 (`rand::challenge`): the l1 norm of every draw, so that the rejected
-ones are checked too.
+ones are checked too. The vectors of `rand::challenge_from_bytes` (the challenges of the proofs
+since version 0.2, decoded from 4032 squeezed bytes) do the same on byte strings that SHAKE128
+derives from the seed, with the fallback to the constant 1 when no draw is within eta.
 
 Usage: python3 tools/kat/generate.py [--count 100000] [--output primitives.json]
 """
@@ -140,6 +142,57 @@ def challenges(seed):
         out.extend(picked)
     return out
 
+CHALLENGE_BYTES = 4032
+
+def challenge_from_bytes(buf, d, omega, eta):
+    """`rand::challenge_from_bytes`: the k-bit words of buf (k = bitlen(2 omega)), least
+    significant bit first; the words below 2 omega + 1 kept as w - omega; each d/2 kept ones a
+    draw (coefficient d/2 zero, coefficient d - i minus coefficient i); the first draw whose
+    eta_l1 is at most eta^64, or the constant 1. Returns the challenge and the l1 norms of the
+    draws it decided."""
+    k = (2 * omega).bit_length()
+    bits = int.from_bytes(buf, 'little')
+    first, norms = [], []
+    for i in range(len(buf) * 8 // k):
+        w = (bits >> (i * k)) & ((1 << k) - 1)
+        if w > 2 * omega:
+            continue
+        first.append(w - omega)
+        if len(first) == d // 2:
+            c = [0] * d
+            c[: d // 2] = first
+            for j in range(1, d // 2):
+                c[d - j] = -first[j]
+            n = eta_l1(c, d)
+            norms.append(n)
+            if n <= eta ** 64:
+                return c, norms
+            first = []
+    return [1] + [0] * (d - 1), norms
+
+def challenge_bytes(seed, index):
+    """The byte string of vector `index`: SHAKE128(b"jali challenge kat" || seed ||
+    LE32(index)), 4032 bytes."""
+    return hashlib.shake_128(b'jali challenge kat' + seed + index.to_bytes(4, 'little')).digest(CHALLENGE_BYTES)
+
+def challenges_from_bytes(seed):
+    """For both proof degrees: indices 0 and 1 and the first two indices whose first draw is
+    rejected, then the fallback on 4032 bytes 0xff, whose words are never kept."""
+    out = []
+    for d, omega, eta in ((64, 8, 140), (128, 2, 59)):
+        index, rejected = 0, 0
+        while rejected < 2 or index < 2:
+            c, norms = challenge_from_bytes(challenge_bytes(seed, index), d, omega, eta)
+            if index < 2 or (len(norms) > 1 and rejected < 2):
+                out.append(dict(degree=d, omega=omega, eta=eta, index=index,
+                                norms=[str(n) for n in norms], challenge=c))
+                rejected += len(norms) > 1
+            index += 1
+        c, norms = challenge_from_bytes(b'\xff' * CHALLENGE_BYTES, d, omega, eta)
+        assert c == [1] + [0] * (d - 1) and norms == []
+        out.append(dict(degree=d, omega=omega, eta=eta, index=None, norms=[], challenge=c))
+    return out
+
 def codec_vector():
     bits = []
     def put(n, width):
@@ -242,7 +295,7 @@ def generate(count):
         exps.append(dict(n=str(n),d=str(d),scaled=str(int(mp.exp(-mp.mpf(n)/d)*2**192))))
     gaussians=[dict(t=t,values=gaussian(Stream(seed,7),t,64)) for t in [0,1,2,6,24,29,60,100]]
     return dict(seed=seed.hex(),prgs=prgs,samplers=samplers,binomial=binomial(Stream(seed,7),3,137),gaussians=gaussians,
-                codec=codec_vector(),challenges=challenges(seed),rejection=rejection,rational_rejection=rational_rejection(count),
+                codec=codec_vector(),challenges=challenges(seed),challenges_from_bytes=challenges_from_bytes(seed),rejection=rejection,rational_rejection=rational_rejection(count),
                 exponentials=exps)
 
 if __name__ == '__main__':

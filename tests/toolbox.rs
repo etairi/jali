@@ -99,13 +99,9 @@ fn full_toolbox_and_stateful_api_reject_false_blocks_and_altered_responses() {
     tbox::verify(&scheme, &statement, &proof, context).unwrap();
     let bytes = jali::codec::proof::encode(&scheme, &proof).unwrap();
     assert_eq!(jali::codec::proof::decode(&scheme, &bytes).unwrap(), proof);
-    // Gaussian quotients and hints are variable length, so the encoded length varies with the
-    // seed; the test checks a range below the set's size estimate of 17,896 bytes.
-    assert!(
-        bytes.len() <= 17800 && bytes.len() > 16000,
-        "proof bytes: {}",
-        bytes.len()
-    );
+    // Every field has a fixed width, so every proof of the set has its exact size.
+    assert_eq!(bytes.len(), params.check().unwrap().estimated_proof_bytes);
+    assert_eq!(bytes.len(), 17844);
     for n in [0, 1, bytes.len() / 2, bytes.len() - 1] {
         assert!(jali::codec::proof::decode(&scheme, &bytes[..n]).is_err());
     }

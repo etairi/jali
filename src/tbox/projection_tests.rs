@@ -84,7 +84,7 @@ fn projection_by_copies(ring: &Arc<Ring>, dim: usize, affines: &[QuadEq], rows: 
 fn projection_equations_by_copies(
     scheme: &Abdlop,
     forms: &Forms,
-    seed: &[u8; 32],
+    matrices: &Projections,
     ze: &PolyVec,
     zd: &PolyVec,
 ) -> Result<Vec<QuadEq>, Error> {
@@ -106,11 +106,12 @@ fn projection_equations_by_copies(
         }
         let response = abdlop::flatten(z)?;
         for i in 0..256 {
-            let r = row(seed, exact, i, affines.len() * ring.degree())?;
+            let r = matrices.row(exact, i);
             let mut projection = QuadEq::zero(ring.clone(), dim)?;
             for (affine, coeffs) in affines.iter().zip(r.chunks_exact(ring.degree())) {
-                projection = projection
-                    .add(&affine.scale(&Poly::new(ring.clone(), coeffs.to_vec())?.auto())?)?;
+                let coeffs = coeffs.iter().map(|x| i128::from(*x)).collect();
+                projection =
+                    projection.add(&affine.scale(&Poly::new(ring.clone(), coeffs)?.auto())?)?;
             }
             let mask = variable(scheme, dim, offset + i / ring.degree())?
                 .scale(&Poly::constant(ring.clone(), 1).rotate(-((i % ring.degree()) as i64)))?;
@@ -311,9 +312,11 @@ fn projection_equations_equal_the_reference() {
             }
             _ => {}
         }
+        let d = ring.degree();
+        let matrices = Projections::for_tests(&seed, forms.exact.len() * d, forms.approx.len() * d);
         assert_eq!(
-            projection_equations(&extended, &forms, &seed, &ze, &zd).unwrap(),
-            projection_equations_by_copies(&extended, &forms, &seed, &ze, &zd).unwrap(),
+            projection_equations(&extended, &forms, &matrices, &ze, &zd).unwrap(),
+            projection_equations_by_copies(&extended, &forms, &matrices, &ze, &zd).unwrap(),
             "case {case}"
         );
         // Responses of the wrong shape: refused alike.
@@ -324,8 +327,8 @@ fn projection_equations_equal_the_reference() {
             (short, empty.clone()),
         ] {
             assert_eq!(
-                projection_equations(&extended, &forms, &seed, &ze, &zd),
-                projection_equations_by_copies(&extended, &forms, &seed, &ze, &zd)
+                projection_equations(&extended, &forms, &matrices, &ze, &zd),
+                projection_equations_by_copies(&extended, &forms, &matrices, &ze, &zd)
             );
         }
     }

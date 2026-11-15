@@ -67,6 +67,27 @@ impl ExtractionParams {
         Ok(derive(params, &params.check()?, rank)?.modulus)
     }
 
+    /// The length of every proof's encoding in the straight-line extractable mode
+    /// (`codec::proof::encode_extractable`) for the toolbox parameters `params`, exact: that of
+    /// the toolbox proof ([`CheckedParams::estimated_proof_bytes`]), then the LinHC commitment,
+    /// $`2m'd`$ coefficients of $`\mathrm{bitlen}(q'-1)`$ bits, and the LinHC opening,
+    /// $`(n+2m')d`$ coefficients of $`t'+4`$ bits. Fails as [`ExtractionParams::check`] does.
+    pub fn proof_bytes(&self, params: &TboxParams) -> Result<usize, Error> {
+        let checked = params.check()?;
+        let (linhc, _) = self.linhc(params, &checked)?;
+        let d = linhc.degree as u128;
+        let k = u128::from(128 - (linhc.modulus - 1).leading_zeros());
+        let bits = 2 * linhc.len as u128 * d * k
+            + (linhc.rank + 2 * linhc.len) as u128
+                * d
+                * u128::from(super::response_width(linhc.log_sigma));
+        let extra = usize::try_from(bits / 8).map_err(|_| Error::Parameter("proof size"))?;
+        checked
+            .estimated_proof_bytes
+            .checked_add(extra)
+            .ok_or(Error::Parameter("proof size"))
+    }
+
     /// The LinHC parameters this set gives for `params`, whose checked values are `checked`.
     pub(crate) fn linhc(
         &self,

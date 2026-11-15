@@ -312,7 +312,7 @@ fn pinned_reference_parameters_and_mutations() {
             c.z4_bound,
             c.estimated_proof_bytes
         ),
-        (3487433255883, 1734566565, 50790, 17896)
+        (3487433255883, 1734566565, 50790, 17844)
     );
     // Euclidean bounds of the range vectors: 128 + 64 + (2 + 2) * 64 and 2 * 64 * 4^2. Sized
     // from the second, sigma4 = 1.55 * 2^11 has a rejection constant of 2; sized from the bound

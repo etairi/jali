@@ -1,20 +1,22 @@
 //! ABDLOP commitment and compressed opening proof (LNP22 Fig. 4 and Fig. 18).
 //!
-//! The verifier checks the joint norm of both randomness-response components. Transcript
-//! prefixes bind all public parameters, the matrix seed, caller context and commitment.
+//! The verifier checks the joint norm of both randomness-response components. The opening
+//! proof on its own runs the transcript `JALI-V02-ABDLOP-OPENING-C1-SHAKE128`: its instance is
+//! the parameters, the public seed and the commitment, its one prover message $`w_1`$ and its
+//! verifier message the challenge (`docs/encodings.md`).
 use crate::{
     Error,
-    codec::{BitReader, BitWriter},
+    codec::{BitReader, BitWriter, fields},
     dcompress::Compression,
     linhc,
     math::{I256, Poly, PolyMat, PolyVec, Ring, U256, int},
-    params::{CheckedParams, TboxParams},
+    params::{CheckedParams, TboxParams, response_width},
     rand::{
         AesPrg, ByteStream, bounded, derive_key, domain, gaussian,
         reject::{self, Policy, Variance},
         secret, take_seed, uniform_ring,
     },
-    transcript::Transcript,
+    transcript::{Protocol, Transcript},
 };
 use std::sync::Arc;
 use zeroize::Zeroizing;
@@ -95,7 +97,10 @@ mod extraction_tests {
         let c1 = Poly::constant(ring.clone(), 1);
         let c2 = Poly::constant(ring.clone(), 2);
         // Rewinding: one transcript prefix, and so one key, answered with two challenges.
-        let binding = scheme.prefix(&commitment, b"").unwrap().digest();
+        let binding = scheme
+            .opening_transcript(&commitment, b"")
+            .unwrap()
+            .binding();
         let mut forks = None;
         for seed in 0..32 {
             let seed = Zeroizing::new([seed; 32]);
@@ -351,35 +356,6 @@ pub(crate) fn scale_scalar(a: &PolyVec, scalar: &U256) -> Result<PolyVec, Error>
             .collect::<Result<_, _>>()?,
     )
 }
-/// Encode each coefficient's centred representative modulo `modulus` with the uniform code.
-/// With `modulus` equal to q that is the canonical representative.
-pub(crate) fn encode_vec(w: &mut BitWriter, a: &PolyVec, modulus: &U256) -> Result<(), Error> {
-    let ring = a.ring();
-    let narrow = int::to_u128(modulus);
-    let nonzero = crypto_bigint::NonZero::new(*modulus)
-        .into_option()
-        .ok_or(Error::Encoding)?;
-    for p in a.entries() {
-        for x in p.coefficients() {
-            let value = if *modulus == ring.q {
-                *x
-            } else {
-                // The only such caller encodes high parts in [0, m), m < q/2: never negative.
-                let r = ring.magnitude(x).rem_vartime(&nonzero);
-                if ring.is_negative(x) && r != U256::ZERO {
-                    modulus.wrapping_sub(&r)
-                } else {
-                    r
-                }
-            };
-            match narrow {
-                Some(m) => w.uniform(int::low_u128(&value), m)?,
-                None => w.uniform_u256(&value, modulus)?,
-            }
-        }
-    }
-    Ok(())
-}
 /// Centred coefficients of short vectors as `i128`. Fails with [`Error::Overflow`] if one does
 /// not fit.
 pub(crate) fn flatten(a: &PolyVec) -> Result<Zeroizing<Vec<i128>>, Error> {
@@ -388,16 +364,6 @@ pub(crate) fn flatten(a: &PolyVec) -> Result<Zeroizing<Vec<i128>>, Error> {
         out.extend_from_slice(&p.coefficients_i128()?);
     }
     Ok(out)
-}
-/// Gaussian codes of every centred coefficient; a coefficient outside `i128` cannot be one.
-pub(crate) fn write_gaussians(w: &mut BitWriter, v: &PolyVec, t: u32) -> Result<(), Error> {
-    for p in v.entries() {
-        for x in p.coefficients() {
-            let x = p.ring().centred_i128(x).ok_or(Error::Encoding)?;
-            w.gaussian(x, t, 1 << 20)?;
-        }
-    }
-    Ok(())
 }
 /// The proof that runs the opening-proof core. Its tag is a part of the core's key, so the two
 /// callers never share a key, even if their transcript digests were ever equal.
@@ -664,24 +630,37 @@ impl Abdlop {
         }
         params
     }
-    /// Digest of the parameters and the public seed.
+    /// Digest of the parameters and the public seed, which the keys of `commit_with_seed` and of
+    /// the toolbox bind. Unchanged since version 0.1: the 32-byte state of that version's
+    /// transcript chain after the protocol `abdlop-scheme`, the parameter bytes, the seed and an
+    /// empty statement, each length-framed (`legacy_chain`). It is a key-derivation input, not
+    /// part of any Fiat–Shamir transcript.
     pub(crate) fn fingerprint(&self) -> [u8; 32] {
-        Transcript::new(b"abdlop-scheme", &self.parameter_bytes(), &self.seed, b"").digest()
+        legacy_chain(&[
+            (b"protocol", b"abdlop-scheme"),
+            (b"parameters", &self.parameter_bytes()),
+            (b"pp-seed", &self.seed),
+            (b"statement", b""),
+        ])
     }
-    pub(crate) fn prefix(
+    /// Absorb the scheme, the first part of every instance: `SerializeVarLenString` of the
+    /// parameter bytes, then the 32-byte public seed, which determines the public matrices.
+    pub(crate) fn absorb_scheme(&self, transcript: &mut Transcript) -> Result<(), Error> {
+        transcript.absorb_varlen(&self.parameter_bytes())?;
+        transcript.absorb(&self.seed);
+        Ok(())
+    }
+    /// The transcript of the opening proof on its own, after its instance: the scheme, then the
+    /// commitment's serialization ([`Self::commitment_bytes`]).
+    pub(crate) fn opening_transcript(
         &self,
         commitment: &Commitment,
         context: &[u8],
     ) -> Result<Transcript, Error> {
-        self.check_commitment(commitment)?;
-        let mut t = Transcript::new(
-            b"abdlop-opening",
-            &self.parameter_bytes(),
-            &self.seed,
-            context,
-        );
-        self.absorb_commitment(&mut t, commitment)?;
-        Ok(t)
+        let mut transcript = Transcript::new(Protocol::Opening, context)?;
+        self.absorb_scheme(&mut transcript)?;
+        transcript.absorb(&self.commitment_bytes(commitment)?);
+        Ok(transcript)
     }
     /// The commitment's shape, and its compressed part within the high-part range.
     fn check_commitment(&self, commitment: &Commitment) -> Result<(), Error> {
@@ -698,44 +677,96 @@ impl Abdlop {
         }
         Ok(())
     }
-    /// Check the commitment as [`Self::prefix`] does and absorb it into `transcript` under
-    /// the label `commitment`.
-    pub(crate) fn absorb_commitment(
-        &self,
-        transcript: &mut Transcript,
-        commitment: &Commitment,
-    ) -> Result<(), Error> {
+    /// The serialization of a commitment, after the checks of [`Self::check_commitment`]: the
+    /// high parts $`t_{A,1}`$ in $`\mathrm{bitlen}(q-1)-D`$ bits each, then $`t_B`$ modulo
+    /// $`q`$.
+    pub(crate) fn commitment_bytes(&self, commitment: &Commitment) -> Result<Vec<u8>, Error> {
         self.check_commitment(commitment)?;
         let mut w = BitWriter::new();
-        encode_vec(&mut w, &commitment.t_a, &self.ring.q)?;
-        encode_vec(&mut w, &commitment.t_b, &self.ring.q)?;
-        transcript.absorb(b"commitment", &w.finish());
-        Ok(())
+        self.write_commitment(&mut w, commitment)?;
+        w.into_bytes()
     }
-    /// The challenge after `w1`: drawn from the challenge set (`rand::challenge`, LNP22 §2.7,
-    /// with this set's $`\omega`$ and $`\eta`$) with the stream of [`Self::challenge_stream`];
-    /// the draws that exceed $`\eta`$ are rejected and the next continues the stream. Prover and
-    /// verifier call this same function, and it never returns a challenge above $`\eta`$.
-    pub(crate) fn challenge(&self, prefix: &Transcript, w1: &PolyVec) -> Result<Poly, Error> {
-        crate::rand::challenge(
-            &mut self.challenge_stream(prefix, w1)?,
-            self.ring.clone(),
-            self.checked.omega,
-            self.checked.eta,
-        )
+    /// The width of a compressed high part: $`\mathrm{bitlen}(q-1)-D`$.
+    pub(crate) fn high_bits(&self) -> u32 {
+        self.ring.coefficient_bits() - self.parameters.d_bits
     }
-    /// The stream the challenge after `w1` is drawn from: AES-256-CTR under the challenge seed
-    /// `c` of the transcript after `w1`, in domain 0.
-    pub(crate) fn challenge_stream(
+    /// Write the fields of [`Self::commitment_bytes`], refusing a high part above
+    /// [`Self::max_high`].
+    pub(crate) fn write_commitment(
         &self,
-        prefix: &Transcript,
+        w: &mut BitWriter,
+        commitment: &Commitment,
+    ) -> Result<(), Error> {
+        let (bits, max_high) = (self.high_bits(), self.max_high());
+        for p in commitment.t_a.entries() {
+            for x in p.coefficients() {
+                if *x > max_high {
+                    return Err(Error::Encoding);
+                }
+                w.unsigned_u256(x, bits)?;
+            }
+        }
+        fields::write_below(w, &commitment.t_b, &self.ring.q)
+    }
+    /// Read a commitment written by [`Self::write_commitment`] with `messages` rows in $`t_B`$,
+    /// refusing high parts above [`Self::max_high`] and values not below $`q`$.
+    pub(crate) fn read_commitment(
+        &self,
+        r: &mut BitReader<'_>,
+        messages: usize,
+    ) -> Result<Commitment, Error> {
+        let (bits, max_high) = (self.high_bits(), self.max_high());
+        let mut t_a = Vec::with_capacity(self.parameters.n_msis);
+        for _ in 0..self.parameters.n_msis {
+            let coefficients = (0..self.ring.degree())
+                .map(|_| {
+                    let x = r.unsigned_u256(bits)?;
+                    if x > max_high {
+                        return Err(Error::Encoding);
+                    }
+                    Ok(x)
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            t_a.push(Poly::from_canonical(self.ring.clone(), coefficients));
+        }
+        Ok(Commitment {
+            t_a: PolyVec::new(self.ring.clone(), t_a)?,
+            t_b: fields::read_below(r, &self.ring, messages, &self.ring.q)?,
+        })
+    }
+    /// The serialization of high parts $`w_1`$, each in $`[0,m)`$ in $`\mathrm{bitlen}(m-1)`$
+    /// bits for $`m=(q-1)/\gamma`$: the opening proof's first message, absorbed and never sent.
+    pub(crate) fn high_bytes(&self, w1: &PolyVec) -> Result<Vec<u8>, Error> {
+        let mut w = BitWriter::new();
+        fields::write_below(&mut w, w1, &self.compression.hint_modulus())?;
+        w.into_bytes()
+    }
+    /// The challenge after the first message `w1` of the opening proof on its own: on a copy of
+    /// `transcript`, absorb [`Self::high_bytes`] of `w1` and squeeze a challenge
+    /// ([`Self::squeeze_challenge`]). Prover and verifier call this same function.
+    pub(crate) fn challenge(&self, transcript: &Transcript, w1: &PolyVec) -> Result<Poly, Error> {
+        let mut transcript = transcript.clone();
+        transcript.absorb(&self.high_bytes(w1)?);
+        self.squeeze_challenge(&mut transcript)
+    }
+    /// Test only: the bytes that [`Self::challenge`] decodes its challenge from.
+    #[cfg(test)]
+    pub(crate) fn challenge_bytes(
+        &self,
+        transcript: &Transcript,
         w1: &PolyVec,
-    ) -> Result<AesPrg, Error> {
-        let mut writer = BitWriter::new();
-        encode_vec(&mut writer, w1, &self.compression.hint_modulus())?;
-        let mut t = prefix.clone();
-        t.absorb(b"w1", &writer.finish());
-        Ok(AesPrg::new(&t.challenge_seed(b"c"), 0))
+    ) -> Result<Vec<u8>, Error> {
+        let mut transcript = transcript.clone();
+        transcript.absorb(&self.high_bytes(w1)?);
+        let mut bytes = vec![0u8; crate::transcript::CHALLENGE_BYTES];
+        transcript.squeeze(&mut bytes);
+        Ok(bytes)
+    }
+    /// The challenge of the set (LNP22 §2.7, with this set's $`\omega`$ and $`\eta`$) decoded
+    /// from the transcript's next `CHALLENGE_BYTES` bytes (`rand::challenge_from_bytes`): a
+    /// challenge within $`\eta`$ in every case.
+    pub(crate) fn squeeze_challenge(&self, transcript: &mut Transcript) -> Result<Poly, Error> {
+        transcript.challenge(self.ring.clone(), self.checked.omega, self.checked.eta)
     }
     fn rejection_constants(&self) -> Result<[U256; 2], Error> {
         let p = &self.parameters;
@@ -787,14 +818,14 @@ impl Abdlop {
         context: &[u8],
         seed: &Zeroizing<[u8; 32]>,
     ) -> Result<OpeningProof, Error> {
-        let prefix = self.prefix(commitment, context)?;
+        let transcript = self.opening_transcript(commitment, context)?;
         let (proof, ()) = self.prove_core(
             commitment,
             opening,
             Caller::Opening,
-            &prefix.digest(),
+            &transcript.binding(),
             seed,
-            |_, _, w1| Ok((self.challenge(&prefix, w1)?, ())),
+            |_, _, w1| Ok((self.challenge(&transcript, w1)?, ())),
         )?;
         Ok(proof)
     }
@@ -806,15 +837,16 @@ impl Abdlop {
         binding: &[u8; 32],
         seed: &[u8; 32],
     ) -> Zeroizing<[u8; 32]> {
+        // "/v3" since the duplex-sponge transcript and the fixed-width codes of version 0.2,
         // "/v2" since the 256-bit sampler, the 256-bit rejection coins and the challenges
-        // within eta. The earlier version read these streams differently: masks that two
+        // within eta. Each version reads these streams under its own key: masks that two
         // samplers read from one stream are correlated, and two proofs with correlated masks can
         // reveal the witness.
-        Self::opening_key_labeled(b"abdlop/opening-proof/v2", opening, caller, binding, seed)
+        Self::opening_key_labeled(b"abdlop/opening-proof/v3", opening, caller, binding, seed)
     }
     /// The key of [`Self::opening_key`] under another label. The extractable mode reads more
     /// streams per attempt (the LinHC masks and coin), so it takes its own label,
-    /// `abdlop/opening-proof-sl/v1`.
+    /// `abdlop/opening-proof-sl/v2`.
     pub(crate) fn opening_key_labeled(
         label: &[u8],
         opening: &Opening,
@@ -834,9 +866,10 @@ impl Abdlop {
             ],
         )
     }
-    /// The opening proof with a caller-defined challenge. `binding` must be the digest of a
-    /// transcript that the challenge extends and that binds everything it depends on besides
-    /// the prover's messages, so that one key never meets two challenge functions.
+    /// The opening proof with a caller-defined challenge. `binding` must be the
+    /// `Transcript::binding` of the transcript that the challenge extends, which binds
+    /// everything it depends on besides the prover's messages, so that one key never meets two
+    /// challenge functions.
     ///
     /// The challenge function returns the challenge with side data of its own, which is
     /// returned with the proof: that of the accepted attempt. With the `parallel` feature
@@ -930,7 +963,7 @@ impl Abdlop {
     /// and an attempt is kept only if the LinHC opening passes its own rejection test too. The
     /// attempt reads its LinHC masks from the words `LINHC_MASKS` $`+3a`$ to $`+3a+2`$ and its
     /// LinHC coin from the stream `(LINHC_COINS, a)`, under a key with the label
-    /// `abdlop/opening-proof-sl/v1`, so its outcome is still a function of the key and $`a`$.
+    /// `abdlop/opening-proof-sl/v2`, so its outcome is still a function of the key and $`a`$.
     /// Without `ext` this is the plain opening proof, with its own key, streams and challenges.
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub(crate) fn prove_core_ext<T: Send>(
@@ -960,7 +993,7 @@ impl Abdlop {
         let key = match ext {
             None => Self::opening_key(opening, caller, binding, seed),
             Some(_) => Self::opening_key_labeled(
-                b"abdlop/opening-proof-sl/v1",
+                b"abdlop/opening-proof-sl/v2",
                 opening,
                 caller,
                 binding,
@@ -1084,6 +1117,13 @@ impl Abdlop {
         if !self.joint_within_bound(&z21, &z22)? {
             return Ok(None);
         }
+        // The fixed-width codes: a response coefficient beyond its width restarts the attempt,
+        // a test of the accepted response alone.
+        if !fields::fits_signed(&z1, response_width(self.parameters.log_sigma[0]))
+            || !fields::fits_signed(&z21, response_width(self.parameters.log_sigma[1]))
+        {
+            return Ok(None);
+        }
         // The LinHC opening of c (s1 || s21) + (y1 || y21), with its own rejection coin.
         let linhc_opening = match (ext, &linhc_mask) {
             (Some(ext), Some(mask)) => {
@@ -1091,8 +1131,14 @@ impl Abdlop {
                 let mut coin = [0u8; reject::COIN_BYTES];
                 AesPrg::new(key, domain(secret::LINHC_COINS, attempt)).fill(&mut coin)?;
                 match linhc::open(ext.checked, &c_lifted, ext.secret, mask, &coin)? {
-                    Some(opening) => Some(opening),
-                    None => return Ok(None),
+                    Some(opening)
+                        if opening.z.iter().all(|z| {
+                            fields::fits_signed(z, response_width(ext.params.log_sigma))
+                        }) =>
+                    {
+                        Some(opening)
+                    }
+                    _ => return Ok(None),
                 }
             }
             _ => None,
@@ -1113,12 +1159,18 @@ impl Abdlop {
                 )
             })
             .collect();
+        let hint = PolyVec::new(self.ring.clone(), hints)?;
+        // Hints beyond the hint code's width restart the attempt too: they are a function of
+        // the accepted response and the public data (`docs/security.md`).
+        if !fields::fits_signed(&hint, self.checked.hint_width) {
+            return Ok(None);
+        }
         Ok(Some((
             OpeningProof {
                 challenge: c,
                 z1,
                 z21,
-                hint: PolyVec::new(self.ring.clone(), hints)?,
+                hint,
             },
             linhc_opening,
             side,
@@ -1144,14 +1196,14 @@ impl Abdlop {
         proof: &OpeningProof,
         context: &[u8],
     ) -> Result<(), Error> {
-        let prefix = self.prefix(commitment, context)?;
-        self.verify_core(commitment, proof, |w1| self.challenge(&prefix, w1))
+        let transcript = self.opening_transcript(commitment, context)?;
+        self.verify_core(commitment, proof, |w1| self.challenge(&transcript, w1))
     }
     /// Whether `c` has the form of a challenge: in this ring, sigma-stable, with coefficients of
     /// absolute value at most omega and a zero coefficient at d/2. The last condition of the
     /// challenge set, the operator-norm bound eta, is not tested here: `verify_core` accepts
-    /// only the challenge it derives, and the derivation (`Abdlop::challenge`, through
-    /// `rand::challenge`) never returns one above eta. A challenge above eta is therefore
+    /// only the challenge it derives, and the derivation (`Abdlop::squeeze_challenge`, through
+    /// `rand::challenge_from_bytes`) never returns one above eta. A challenge above eta is therefore
     /// refused there, and the exact test, the costly part, runs once per derived draw rather
     /// than once more here.
     pub(crate) fn challenge_well_formed(&self, c: &Poly) -> bool {
@@ -1267,115 +1319,116 @@ impl Abdlop {
             .collect::<Result<_, Error>>()?;
         PolyVec::new(self.ring.clone(), entries)
     }
-    /// The challenge code: each coefficient plus omega, in $`[0,2\omega]`$.
-    pub(crate) fn write_challenge(&self, w: &mut BitWriter, c: &Poly) -> Result<(), Error> {
-        let omega = self.checked.omega;
-        for x in c.coefficients() {
-            let x = self.ring.centred_i128(x).ok_or(Error::Encoding)?;
-            if x.unsigned_abs() > omega as u128 {
-                return Err(Error::Encoding);
-            }
-            w.uniform((x + omega) as u128, (2 * omega + 1) as u128)?;
-        }
-        Ok(())
-    }
-    /// The hint code, after checking the canonical hint interval.
+    /// Write the hints in the hint code's width ([`CheckedParams::hint_width`]), each checked
+    /// against the canonical hint interval $`(-m/2,m/2]`$.
     pub(crate) fn write_hints(&self, w: &mut BitWriter, hints: &PolyVec) -> Result<(), Error> {
         for p in hints.entries() {
             for x in p.coefficients() {
                 self.compression
                     .use_hint(&self.ring.centred_i256(x), &U256::ZERO)?;
-                w.hint(self.ring.centred_i128(x).ok_or(Error::Encoding)?, 1 << 20)?;
             }
         }
-        Ok(())
+        fields::write_signed(w, hints, self.checked.hint_width)
     }
-    /// Read one hint, bounded by $`m/2`$ and checked against the canonical interval.
-    pub(crate) fn read_hint(&self, reader: &mut BitReader<'_>) -> Result<i128, Error> {
-        let max_abs =
-            int::to_u128(&self.compression.hint_modulus().shr_vartime(1)).unwrap_or(u128::MAX);
-        let hint = reader.hint(max_abs, 1 << 20)?;
-        self.compression
-            .use_hint(&I256::from_i128(hint), &U256::ZERO)?;
-        Ok(hint)
+    /// Read `n` polynomials of hints written by [`Self::write_hints`], refusing one outside the
+    /// canonical interval.
+    pub(crate) fn read_hints(&self, r: &mut BitReader<'_>) -> Result<PolyVec, Error> {
+        let hints = fields::read_signed(
+            r,
+            &self.ring,
+            self.parameters.n_msis,
+            self.checked.hint_width,
+        )?;
+        for p in hints.entries() {
+            for x in p.coefficients() {
+                let x = self.ring.centred_i128(x).ok_or(Error::Encoding)?;
+                self.compression
+                    .use_hint(&I256::from_i128(x), &U256::ZERO)?;
+            }
+        }
+        Ok(hints)
     }
-    /// Encode the proof in a strict, parameter-sized bit stream.
-    pub fn encode_proof(&self, proof: &OpeningProof) -> Result<Vec<u8>, Error> {
+    /// Write the opening proof's last fields, as the compact flavor sends them: the challenge,
+    /// then $`z_1`$ and $`z_{21}`$ in their response widths, then the hints.
+    pub(crate) fn write_opening(
+        &self,
+        w: &mut BitWriter,
+        proof: &OpeningProof,
+    ) -> Result<(), Error> {
         self.shape(&proof.z1, self.bounded_len())?;
         self.shape(&proof.z21, self.a2.cols())?;
         self.shape(&proof.hint, self.parameters.n_msis)?;
         if proof.challenge.ring() != &self.ring {
             return Err(Error::RingMismatch);
         }
-        let mut w = BitWriter::new();
-        self.write_challenge(&mut w, &proof.challenge)?;
-        self.write_hints(&mut w, &proof.hint)?;
-        for (v, t) in [
-            (&proof.z1, self.parameters.log_sigma[0]),
-            (&proof.z21, self.parameters.log_sigma[1]),
-        ] {
-            write_gaussians(&mut w, v, t)?;
-        }
-        Ok(w.finish())
+        fields::write_challenge(w, &proof.challenge, self.checked.omega)?;
+        fields::write_signed(w, &proof.z1, response_width(self.parameters.log_sigma[0]))?;
+        fields::write_signed(w, &proof.z21, response_width(self.parameters.log_sigma[1]))?;
+        self.write_hints(w, &proof.hint)
     }
-    /// Decode with exact dimensions, canonical padding and no trailing bytes.
-    pub fn decode_proof(&self, bytes: &[u8]) -> Result<OpeningProof, Error> {
-        let mut reader = crate::codec::proof_reader(bytes)?;
-        let challenge = Poly::new(
-            self.ring.clone(),
-            (0..self.ring.degree())
-                .map(|_| {
-                    Ok(
-                        reader.uniform((2 * self.checked.omega + 1) as u128)? as i128
-                            - self.checked.omega,
-                    )
-                })
-                .collect::<Result<_, Error>>()?,
-        )?;
-        let hint = self.read_vector(&mut reader, self.parameters.n_msis, None)?;
-        let z1 = self.read_vector(
-            &mut reader,
-            self.bounded_len(),
-            Some(self.parameters.log_sigma[0]),
-        )?;
-        let z21 = self.read_vector(
-            &mut reader,
-            self.a2.cols(),
-            Some(self.parameters.log_sigma[1]),
-        )?;
-        reader.finish()?;
+    /// Read the fields of [`Self::write_opening`].
+    pub(crate) fn read_opening(&self, r: &mut BitReader<'_>) -> Result<OpeningProof, Error> {
         Ok(OpeningProof {
-            challenge,
-            z1,
-            z21,
-            hint,
+            challenge: fields::read_challenge(r, &self.ring, self.checked.omega)?,
+            z1: fields::read_signed(
+                r,
+                &self.ring,
+                self.bounded_len(),
+                response_width(self.parameters.log_sigma[0]),
+            )?,
+            z21: fields::read_signed(
+                r,
+                &self.ring,
+                self.a2.cols(),
+                response_width(self.parameters.log_sigma[1]),
+            )?,
+            hint: self.read_hints(r)?,
         })
     }
-    fn read_vector(
-        &self,
-        reader: &mut BitReader<'_>,
-        len: usize,
-        t: Option<u32>,
-    ) -> Result<PolyVec, Error> {
-        let mut out = Vec::with_capacity(len);
-        for _ in 0..len {
-            let coeffs = (0..self.ring.degree())
-                .map(|_| {
-                    let x = if let Some(t) = t {
-                        reader.gaussian(t, 1 << 20)?
-                    } else {
-                        self.read_hint(reader)?
-                    };
-                    if U256::from_u128(x.unsigned_abs()) > self.ring.half {
-                        return Err(Error::Encoding);
-                    }
-                    Ok(x)
-                })
-                .collect::<Result<_, _>>()?;
-            out.push(Poly::new(self.ring.clone(), coeffs)?);
-        }
-        PolyVec::new(self.ring.clone(), out)
+    /// Encode the proof as its compact NARG string: the challenge, $`z_1`$, $`z_{21}`$ and the
+    /// hints in their fixed widths, every length from the parameters.
+    pub fn encode_proof(&self, proof: &OpeningProof) -> Result<Vec<u8>, Error> {
+        let mut w = BitWriter::new();
+        self.write_opening(&mut w, proof)?;
+        w.into_bytes()
     }
+    /// Decode the encoding of [`Self::encode_proof`] strictly: exact lengths, every field in its
+    /// range, and no trailing bytes.
+    pub fn decode_proof(&self, bytes: &[u8]) -> Result<OpeningProof, Error> {
+        let mut reader = crate::codec::proof_reader(bytes)?;
+        let proof = self.read_opening(&mut reader)?;
+        reader.finish_bytes()?;
+        Ok(proof)
+    }
+}
+
+/// The 32-byte chain of the transcript of version 0.1 over the framed `(label, payload)` items:
+/// from $`s=\mathrm{SHAKE128}(\texttt{LNP22-RUST-v1})`$, each item gives
+/// $`s\leftarrow\mathrm{SHAKE128}(s\,\|\,\mathrm{LE64}(|label|)\,\|\,label\,\|\,
+/// \mathrm{LE64}(|payload|)\,\|\,payload)`$, each hash taken to 32 bytes. Only
+/// [`Abdlop::fingerprint`] uses it, so that the keys of `commit_with_seed` stay those of 0.1.
+fn legacy_chain(items: &[(&[u8], &[u8])]) -> [u8; 32] {
+    use shake::{ExtendableOutput, Shake128, Update, XofReader};
+    let hash = |parts: &[&[u8]]| {
+        let mut h = Shake128::default();
+        for part in parts {
+            h.update(part);
+        }
+        let mut out = [0u8; 32];
+        h.finalize_xof().read(&mut out);
+        out
+    };
+    let mut state = hash(&[b"LNP22-RUST-v1"]);
+    for (label, payload) in items {
+        state = hash(&[
+            &state,
+            &(label.len() as u64).to_le_bytes(),
+            label,
+            &(payload.len() as u64).to_le_bytes(),
+            payload,
+        ]);
+    }
+    state
 }
 
 #[cfg(test)]
@@ -1402,7 +1455,7 @@ mod seed_reuse_tests {
         let seed = [93; 32];
         let key = scheme.commitment_key(&s1, &m, &seed);
         let (commitment, opening) = scheme.commit_with_seed(s1, m, seed).unwrap();
-        let prefix = scheme.prefix(&commitment, b"").unwrap();
+        let transcript = scheme.opening_transcript(&commitment, b"").unwrap();
         // The masks of every attempt computed, also speculative ones after the accepted one.
         let masks = std::sync::Mutex::new(Vec::new());
         let (proof, ()) = scheme
@@ -1410,11 +1463,11 @@ mod seed_reuse_tests {
                 &commitment,
                 &opening,
                 Caller::Opening,
-                &prefix.digest(),
+                &transcript.binding(),
                 &Zeroizing::new(seed),
                 |y1, y21, w1| {
                     masks.lock().unwrap().push((y1.clone(), y21.clone()));
-                    Ok((scheme.challenge(&prefix, w1)?, ()))
+                    Ok((scheme.challenge(&transcript, w1)?, ()))
                 },
             )
             .unwrap();

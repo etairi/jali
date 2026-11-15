@@ -23,15 +23,16 @@
 //! - each block of the opening is checked against its own bound $`2\dim_\ell\sigma'^2`$ on
 //!   its squared norm, where the paper checks every block against $`\sqrt{2nd}\,\phi T`$,
 //!   which honest openings of the blocks of dimension $`m'd`$ exceed once $`m'>2n`$.
+#[cfg(test)]
+use crate::rand::{ShakePrg, uniform_ring};
 use crate::{
     Error,
     abdlop::{self, Mask},
-    codec::BitWriter,
+    codec::{BitWriter, fields},
     math::{Poly, PolyMat, PolyVec, Ring, U256, int},
     rand::{
-        AesPrg, ShakePrg, bounded, domain,
+        AesPrg, bounded, domain,
         reject::{self, COIN_BYTES, Policy},
-        uniform_ring,
     },
     transcript::Transcript,
 };
@@ -41,8 +42,11 @@ use zeroize::Zeroizing;
 #[cfg(test)]
 mod tests;
 
-/// Domains of the key matrices $`A`$ and $`B`$ under the key seed ("LHCA", "LHCB").
+/// Domains of the key matrices $`A`$ and $`B`$ under the key seed of the tests' keys ("LHCA",
+/// "LHCB").
+#[cfg(test)]
 const KEY_A: u32 = 0x4c48_4341;
+#[cfg(test)]
 const KEY_B: u32 = 0x4c48_4342;
 /// Domains of the trapdoor matrices $`D_1`$ and $`D_2`$ ("LHD1", "LHD2").
 #[cfg(test)]
@@ -286,8 +290,33 @@ pub(crate) struct LinhcKey {
 }
 
 impl LinhcKey {
-    /// Uniform matrices expanded from `seed` by SHAKE128 ([`shake_matrix`]): the key of honest
-    /// use.
+    /// The key of honest use, squeezed from the transcript: $`A`$ then $`B`$, each entry of
+    /// each in row-major order, each coefficient by `DecodeUint` modulo $`q'`$ from
+    /// $`N_s+16`$ bytes ([`Transcript::ring_elements`]). The extraction argument models the
+    /// sponge as a random oracle with values in the key space and programs it to a key with a
+    /// trapdoor.
+    pub(crate) fn squeeze(
+        ring: &Arc<Ring>,
+        params: &LinhcParams,
+        transcript: &mut Transcript,
+    ) -> Result<Self, Error> {
+        let size = abdlop::matrix_size(params.len, params.rank)?;
+        let a = PolyMat::new(
+            ring.clone(),
+            params.len,
+            params.rank,
+            transcript.ring_elements(ring, size)?,
+        )?;
+        let b = PolyMat::new(
+            ring.clone(),
+            params.len,
+            params.rank,
+            transcript.ring_elements(ring, size)?,
+        )?;
+        Ok(Self { a, b })
+    }
+    /// Test only: uniform matrices expanded from `seed` by SHAKE128 ([`shake_matrix`]).
+    #[cfg(test)]
     pub(crate) fn expand(
         ring: &Arc<Ring>,
         params: &LinhcParams,
@@ -300,11 +329,9 @@ impl LinhcKey {
     }
 }
 
-/// A matrix of uniform entries over `ring`, entry $`i`$ (row-major) read from SHAKE128 of `seed`
-/// and the domain $`(\mathrm{dom},i)`$. An extendable-output function, unlike the AES-256-CTR
-/// expansion of the public matrices: the extraction argument models it as a random oracle with
-/// values in the key space and programs it to a key with a trapdoor, which a reduction could not
-/// do through the 32-byte seed of a PRG.
+/// Test only: a matrix of uniform entries over `ring`, entry $`i`$ (row-major) read from
+/// SHAKE128 of `seed` and the domain $`(\mathrm{dom},i)`$, for the keys of the tests.
+#[cfg(test)]
 fn shake_matrix(
     ring: &Arc<Ring>,
     rows: usize,
@@ -552,19 +579,12 @@ pub(crate) fn message(ring: &Arc<Ring>, x: &PolyVec, y: &PolyVec) -> Result<Poly
     )
 }
 
-/// Absorb a pair of vectors over the LinHC ring under `label`, each coefficient in the uniform
-/// code modulo $`q'`$.
-pub(crate) fn absorb_pair(
-    transcript: &mut Transcript,
-    label: &[u8],
-    u: &PolyVec,
-    v: &PolyVec,
-) -> Result<(), Error> {
-    let mut writer = BitWriter::new();
-    abdlop::encode_vec(&mut writer, u, &u.ring().modulus())?;
-    abdlop::encode_vec(&mut writer, v, &v.ring().modulus())?;
-    transcript.absorb(label, &writer.finish());
-    Ok(())
+/// Write a pair of vectors over the LinHC ring, each coefficient modulo $`q'`$ in
+/// $`\mathrm{bitlen}(q'-1)`$ bits: the serialization of a commitment $`(t_1,t_2)`$ or a mask
+/// commitment $`(w_1,w_2)`$.
+pub(crate) fn write_pair(w: &mut BitWriter, u: &PolyVec, v: &PolyVec) -> Result<(), Error> {
+    fields::write_below(w, u, &u.ring().modulus())?;
+    fields::write_below(w, v, &v.ring().modulus())
 }
 
 /// The trapdoor $`(D_1,D_2)`$ of a key with $`B=D_1A+D_2`$.

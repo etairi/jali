@@ -1,16 +1,32 @@
-//! Fixed-shape toolbox proof encoding: validated parameters determine every field and length.
-use super::{BitReader, BitWriter};
+//! The toolbox proof's NARG string: the serializations of its prover messages in protocol
+//! order, with the final round in the compact flavor (the challenge in place of the final
+//! message's recomputed part). Every field has a fixed width that the validated parameters
+//! determine (`docs/encodings.md`):
+//!
+//! 1. the commitment, $`t_{A,1}`$ in $`\mathrm{bitlen}(q-1)-D`$ bits per coefficient and
+//!    $`t_B`$ modulo $`q`$ ($`\ell+e+a+1`$ polynomials, for the $`e`$ exact and $`a`$
+//!    approximate slots), and in the extractable mode the LinHC commitment $`t'_1,t'_2`$ modulo
+//!    $`q'`$,
+//! 2. the range responses $`z^{(e)}`$ and $`z^{(d)}`$ in their response widths, then the
+//!    garbage commitments modulo $`q`$,
+//! 3. $`h`$ modulo $`q`$,
+//! 4. $`t`$ modulo $`q`$, the challenge, $`z_1`$ and $`z_{21}`$ in their response widths and
+//!    the hints in the hint width, and in the extractable mode the LinHC opening
+//!    $`z'_1,z'_2,z'_3`$ in the width $`t'+4`$.
+//!
+//! Parts 1 to 3 and $`t`$ are the bytes the transcript absorbs for those messages.
+use super::{BitReader, BitWriter, fields};
 use crate::{
     Error,
-    abdlop::{self, Abdlop, Commitment, OpeningProof},
-    math::{Poly, PolyVec, Ring, U256},
-    params::ExtractionParams,
+    abdlop::Abdlop,
+    math::{Poly, PolyVec},
+    params::{ExtractionParams, response_width},
     quad::QuadProof,
     quad_eval::EvalProof,
     tbox::{ExtractableProof, Proof},
 };
-use std::sync::Arc;
 
+/// The exact and approximate range slots and the garbage rows of `scheme`.
 fn dimensions(scheme: &Abdlop) -> (usize, usize, usize) {
     (
         if scheme.checked.n_ex > 0 {
@@ -35,22 +51,18 @@ fn shape(scheme: &Abdlop, v: &PolyVec, len: usize) -> Result<(), Error> {
     }
     Ok(())
 }
-/// The width of a compressed high part: $`\mathrm{bits}(q-1)-D`$.
-fn high_bits(scheme: &Abdlop) -> u32 {
-    scheme.ring().coefficient_bits() - scheme.parameters.d_bits
-}
 
-/// Encode `tB, h, tA1, c, hint, z1, z21, z3, z4, end` without wire-controlled lengths.
+/// Encode a toolbox proof as its NARG string (module documentation).
 pub fn encode(scheme: &Abdlop, proof: &Proof) -> Result<Vec<u8>, Error> {
     let mut writer = BitWriter::new();
-    encode_into(&mut writer, scheme, proof)?;
-    Ok(writer.finish())
+    encode_into(&mut writer, scheme, proof, None)?;
+    writer.into_bytes()
 }
 
-/// Encode a proof of the straight-line extractable mode: the toolbox proof's fields as in
-/// [`encode`], then the LinHC commitment $`t_1,t_2`$ in the uniform code modulo $`q'`$ and the
-/// LinHC opening $`z'_1,z'_2,z'_3`$ in the Gaussian code of width $`1.55\cdot2^{t'}`$, with
-/// every length from the parameters and the extraction set.
+/// Encode a proof of the straight-line extractable mode as its NARG string: the toolbox proof's
+/// fields as in [`encode`], with the LinHC commitment $`t'_1,t'_2`$ (modulo $`q'`$) at the end of
+/// the first message and the LinHC opening $`z'_1,z'_2,z'_3`$ (in the width $`t'+4`$) at the
+/// end, every length from the parameters and the extraction set.
 pub fn encode_extractable(
     scheme: &Abdlop,
     extraction: &ExtractionParams,
@@ -58,35 +70,42 @@ pub fn encode_extractable(
 ) -> Result<Vec<u8>, Error> {
     let (params, _) = extraction.linhc(&scheme.parameters, &scheme.checked)?;
     let ring = params.ring()?;
-    let mut writer = BitWriter::new();
-    encode_into(&mut writer, scheme, &proof.proof)?;
-    for (v, len) in [(&proof.t1, params.len), (&proof.t2, params.len)] {
-        shape_in(&ring, v, len)?;
-        abdlop::encode_vec(&mut writer, v, &ring.modulus())?;
-    }
     for (v, len) in [
+        (&proof.t1, params.len),
+        (&proof.t2, params.len),
         (&proof.z1, params.rank),
         (&proof.z2, params.len),
         (&proof.z3, params.len),
     ] {
-        shape_in(&ring, v, len)?;
-        abdlop::write_gaussians(&mut writer, v, params.log_sigma)?;
+        if v.len() != len {
+            return Err(Error::Dimension);
+        }
+        if v.ring() != &ring {
+            return Err(Error::RingMismatch);
+        }
     }
-    Ok(writer.finish())
+    let mut writer = BitWriter::new();
+    encode_into(
+        &mut writer,
+        scheme,
+        &proof.proof,
+        Some((&proof.t1, &proof.t2)),
+    )?;
+    let width = response_width(params.log_sigma);
+    for z in [&proof.z1, &proof.z2, &proof.z3] {
+        fields::write_signed(&mut writer, z, width)?;
+    }
+    writer.into_bytes()
 }
 
-fn shape_in(ring: &Arc<Ring>, v: &PolyVec, len: usize) -> Result<(), Error> {
-    if v.len() != len {
-        return Err(Error::Dimension);
-    }
-    if v.ring() != ring {
-        return Err(Error::RingMismatch);
-    }
-    Ok(())
-}
-
-/// The fields of [`encode`], written to `writer`.
-fn encode_into(writer: &mut BitWriter, scheme: &Abdlop, proof: &Proof) -> Result<(), Error> {
+/// The fields of [`encode`], written to `writer`, with the LinHC commitment after the toolbox's
+/// commitment when given.
+fn encode_into(
+    writer: &mut BitWriter,
+    scheme: &Abdlop,
+    proof: &Proof,
+    linhc_commitment: Option<(&PolyVec, &PolyVec)>,
+) -> Result<(), Error> {
     let (e, d, g) = dimensions(scheme);
     let ring = scheme.ring();
     let opening = &proof.evaluation.quadratic.opening;
@@ -98,97 +117,48 @@ fn encode_into(writer: &mut BitWriter, scheme: &Abdlop, proof: &Proof) -> Result
     shape(scheme, &proof.commitment.t_a, scheme.parameters.n_msis)?;
     shape(scheme, &proof.evaluation.garbage_commitments, g)?;
     shape(scheme, &proof.evaluation.h, g)?;
-    shape(scheme, &opening.z1, scheme.bounded_len())?;
-    shape(
-        scheme,
-        &opening.z21,
-        scheme.parameters.m2 - scheme.parameters.n_msis,
-    )?;
-    shape(scheme, &opening.hint, scheme.parameters.n_msis)?;
     shape(scheme, &proof.z_exact, e)?;
     shape(scheme, &proof.z_approx, d)?;
-    if proof.evaluation.quadratic.t.ring() != ring || opening.challenge.ring() != ring {
+    if proof.evaluation.quadratic.t.ring() != ring {
         return Err(Error::RingMismatch);
     }
-    let full = PolyVec::new(
-        ring.clone(),
-        proof
-            .commitment
-            .t_b
-            .entries()
-            .iter()
-            .chain(proof.evaluation.garbage_commitments.entries())
-            .chain(std::iter::once(&proof.evaluation.quadratic.t))
-            .chain(proof.evaluation.h.entries())
-            .cloned()
-            .collect(),
+    scheme.write_commitment(writer, &proof.commitment)?;
+    if let Some((t1, t2)) = linhc_commitment {
+        crate::linhc::write_pair(writer, t1, t2)?;
+    }
+    fields::write_signed(
+        writer,
+        &proof.z_exact,
+        response_width(scheme.parameters.log_sigma[2]),
     )?;
-    abdlop::encode_vec(writer, &full, &ring.modulus())?;
-    // A high part below 2^k written in k bits is the uniform code modulo 2^k.
-    let bits = high_bits(scheme);
-    let high_max = scheme.max_high();
-    for p in proof.commitment.t_a.entries() {
-        for x in p.coefficients() {
-            if *x > high_max {
-                return Err(Error::Encoding);
-            }
-            writer.unsigned_u256(x, bits)?;
-        }
-    }
-    scheme.write_challenge(writer, &opening.challenge)?;
-    scheme.write_hints(writer, &opening.hint)?;
-    for (v, t) in [
-        (&opening.z1, scheme.parameters.log_sigma[0]),
-        (&opening.z21, scheme.parameters.log_sigma[1]),
-        (&proof.z_exact, scheme.parameters.log_sigma[2]),
-        (&proof.z_approx, scheme.parameters.log_sigma[3]),
-    ] {
-        abdlop::write_gaussians(writer, v, t)?;
-    }
-    Ok(())
+    fields::write_signed(
+        writer,
+        &proof.z_approx,
+        response_width(scheme.parameters.log_sigma[3]),
+    )?;
+    fields::write_below(writer, &proof.evaluation.garbage_commitments, &ring.q)?;
+    fields::write_below(writer, &proof.evaluation.h, &ring.q)?;
+    fields::write_below(
+        writer,
+        &PolyVec::new(ring.clone(), vec![proof.evaluation.quadratic.t.clone()])?,
+        &ring.q,
+    )?;
+    scheme.write_opening(writer, opening)
 }
 
-/// Read `len` polynomials; `coeff` returns canonical values in $`[0,q)`$.
-fn vector(
-    reader: &mut BitReader<'_>,
-    scheme: &Abdlop,
-    len: usize,
-    coeff: impl FnMut(&mut BitReader<'_>) -> Result<U256, Error>,
-) -> Result<PolyVec, Error> {
-    vector_in(reader, scheme.ring(), len, coeff)
-}
-/// [`vector`] over `ring`.
-fn vector_in(
-    reader: &mut BitReader<'_>,
-    ring: &Arc<Ring>,
-    len: usize,
-    mut coeff: impl FnMut(&mut BitReader<'_>) -> Result<U256, Error>,
-) -> Result<PolyVec, Error> {
-    let mut entries = Vec::with_capacity(len);
-    for _ in 0..len {
-        entries.push(Poly::from_canonical(
-            ring.clone(),
-            (0..ring.degree())
-                .map(|_| coeff(reader))
-                .collect::<Result<_, _>>()?,
-        ));
-    }
-    PolyVec::new(ring.clone(), entries)
-}
-
-/// Strict decoder with dimensions taken solely from validated parameters.
-/// Maximum input length is 16 MiB; all unary codes and coefficient ranges are bounded.
+/// Strict decoder with dimensions taken solely from validated parameters: every field in its
+/// range, and no trailing bytes. Inputs above 16 MiB are refused before any parsing.
 pub fn decode(scheme: &Abdlop, bytes: &[u8]) -> Result<Proof, Error> {
     let mut reader = super::proof_reader(bytes)?;
-    let proof = decode_from(&mut reader, scheme)?;
-    reader.finish()?;
+    let (proof, _) = decode_from(&mut reader, scheme, None)?;
+    reader.finish_bytes()?;
     Ok(proof)
 }
 
 /// Strictly decode a proof of the straight-line extractable mode ([`encode_extractable`]):
-/// every length, the modulus $`q'`$ and the width $`t'`$ come from the parameters and the
-/// extraction set, the uniform codes are below $`q'`$, the Gaussian codes are bounded and below
-/// $`q'/2`$, and no bits may follow.
+/// every length, the modulus $`q'`$ and the width $`t'+4`$ come from the parameters and the
+/// extraction set, the LinHC commitment's coefficients are below $`q'`$, and no bytes may
+/// follow.
 pub fn decode_extractable(
     scheme: &Abdlop,
     extraction: &ExtractionParams,
@@ -196,24 +166,14 @@ pub fn decode_extractable(
 ) -> Result<ExtractableProof, Error> {
     let (params, _) = extraction.linhc(&scheme.parameters, &scheme.checked)?;
     let ring = params.ring()?;
-    let q = ring.modulus();
-    let half = q.shr_vartime(1);
     let mut reader = super::proof_reader(bytes)?;
-    let proof = decode_from(&mut reader, scheme)?;
-    let t1 = vector_in(&mut reader, &ring, params.len, |r| r.uniform_u256(&q))?;
-    let t2 = vector_in(&mut reader, &ring, params.len, |r| r.uniform_u256(&q))?;
-    let mut openings = Vec::with_capacity(3);
-    for len in [params.rank, params.len, params.len] {
-        openings.push(vector_in(&mut reader, &ring, len, |r| {
-            let x = r.gaussian(params.log_sigma, 1 << 20)?;
-            if U256::from_u128(x.unsigned_abs()) > half {
-                return Err(Error::Encoding);
-            }
-            Ok(ring.reduce_i128(x))
-        })?);
-    }
-    reader.finish()?;
-    let [z1, z2, z3]: [PolyVec; 3] = openings.try_into().map_err(|_| Error::Encoding)?;
+    let (proof, linhc_commitment) = decode_from(&mut reader, scheme, Some((&ring, params.len)))?;
+    let (t1, t2) = linhc_commitment.ok_or(Error::Encoding)?;
+    let width = response_width(params.log_sigma);
+    let z1 = fields::read_signed(&mut reader, &ring, params.rank, width)?;
+    let z2 = fields::read_signed(&mut reader, &ring, params.len, width)?;
+    let z3 = fields::read_signed(&mut reader, &ring, params.len, width)?;
+    reader.finish_bytes()?;
     Ok(ExtractableProof {
         proof,
         t1,
@@ -224,71 +184,54 @@ pub fn decode_extractable(
     })
 }
 
-/// The fields of [`decode`] from `reader`, which the caller finishes.
-fn decode_from(reader: &mut BitReader<'_>, scheme: &Abdlop) -> Result<Proof, Error> {
+/// The fields of [`decode`] from `reader`, which the caller finishes, with the LinHC
+/// commitment over `linhc` (its ring and length) after the toolbox's commitment when given.
+#[allow(clippy::type_complexity)]
+fn decode_from(
+    reader: &mut BitReader<'_>,
+    scheme: &Abdlop,
+    linhc: Option<(&std::sync::Arc<crate::math::Ring>, usize)>,
+) -> Result<(Proof, Option<(PolyVec, PolyVec)>), Error> {
     let (e, d, g) = dimensions(scheme);
     let ring = scheme.ring();
-    let q = ring.modulus();
-    let tb = vector(reader, scheme, scheme.message_len() + e + d + 1, |r| {
-        r.uniform_u256(&q)
-    })?;
-    let garbage = vector(reader, scheme, g, |r| r.uniform_u256(&q))?;
-    let t = vector(reader, scheme, 1, |r| r.uniform_u256(&q))?.entries()[0].clone();
-    let h = vector(reader, scheme, g, |r| r.uniform_u256(&q))?;
-    let bits = high_bits(scheme);
-    let high_max = scheme.max_high();
-    let ta = vector(reader, scheme, scheme.parameters.n_msis, |r| {
-        let x = r.unsigned_u256(bits)?;
-        if x > high_max {
-            return Err(Error::Encoding);
+    let commitment = scheme.read_commitment(reader, scheme.message_len() + e + d + 1)?;
+    let linhc_commitment = match linhc {
+        Some((linhc_ring, len)) => {
+            let q = linhc_ring.modulus();
+            Some((
+                fields::read_below(reader, linhc_ring, len, &q)?,
+                fields::read_below(reader, linhc_ring, len, &q)?,
+            ))
         }
-        Ok(x)
-    })?;
-    let c = vector(reader, scheme, 1, |r| {
-        Ok(ring.reduce_i128(
-            r.uniform((2 * scheme.checked.omega + 1) as u128)? as i128 - scheme.checked.omega,
-        ))
-    })?
-    .entries()[0]
-        .clone();
-    let hint = vector(reader, scheme, scheme.parameters.n_msis, |r| {
-        Ok(ring.reduce_i128(scheme.read_hint(r)?))
-    })?;
-    let mut responses = Vec::new();
-    for (len, t) in [
-        (scheme.bounded_len(), scheme.parameters.log_sigma[0]),
-        (
-            scheme.parameters.m2 - scheme.parameters.n_msis,
-            scheme.parameters.log_sigma[1],
-        ),
-        (e, scheme.parameters.log_sigma[2]),
-        (d, scheme.parameters.log_sigma[3]),
-    ] {
-        responses.push(vector(reader, scheme, len, |r| {
-            let x = r.gaussian(t, 1 << 20)?;
-            if U256::from_u128(x.unsigned_abs()) > ring.half {
-                return Err(Error::Encoding);
-            }
-            Ok(ring.reduce_i128(x))
-        })?);
-    }
-    let mut responses = responses.into_iter();
-    Ok(Proof {
-        commitment: Commitment { t_a: ta, t_b: tb },
-        evaluation: EvalProof {
-            garbage_commitments: garbage,
-            h,
-            quadratic: QuadProof {
-                t,
-                opening: OpeningProof {
-                    challenge: c,
-                    z1: responses.next().expect("four responses"),
-                    z21: responses.next().expect("four responses"),
-                    hint,
-                },
+        None => None,
+    };
+    let z_exact = fields::read_signed(
+        reader,
+        ring,
+        e,
+        response_width(scheme.parameters.log_sigma[2]),
+    )?;
+    let z_approx = fields::read_signed(
+        reader,
+        ring,
+        d,
+        response_width(scheme.parameters.log_sigma[3]),
+    )?;
+    let garbage_commitments = fields::read_below(reader, ring, g, &ring.q)?;
+    let h = fields::read_below(reader, ring, g, &ring.q)?;
+    let t: Poly = fields::read_below(reader, ring, 1, &ring.q)?.entries()[0].clone();
+    let opening = scheme.read_opening(reader)?;
+    Ok((
+        Proof {
+            commitment,
+            z_exact,
+            z_approx,
+            evaluation: EvalProof {
+                garbage_commitments,
+                h,
+                quadratic: QuadProof { t, opening },
             },
         },
-        z_exact: responses.next().expect("four responses"),
-        z_approx: responses.next().expect("four responses"),
-    })
+        linhc_commitment,
+    ))
 }

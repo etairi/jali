@@ -20,26 +20,29 @@ fn fixture() -> Fixture {
     )
     .unwrap();
     let (commitment, opening) = scheme.commit_with_seed(s1, m, [92; 32]).unwrap();
-    let prefix = scheme.prefix(&commitment, b"speculation").unwrap();
+    let prefix = scheme
+        .opening_transcript(&commitment, b"speculation")
+        .unwrap();
     (scheme, commitment, opening, prefix)
 }
 
 /// Prover seeds of the fixture and the attempt each accepts, found one attempt at a time (the
-/// least seed of 0 to 255 for each attempt, with `prove` at width 1): 0, 1, 2, 3, 4, 7 and 8
+/// least seed of 0 to 255 for each attempt, with `prove` at width 1, by `find_the_seeds`): 0,
+/// 1, 2, 3, 4, 7 and 8
 /// are K - 1 and K for K in {1, 2, 3, 4, 8}, and 9, 15, 16 and 17 lie in and at the ends of
 /// the second batch of 8.
 const SEEDS: [(u8, u32); 11] = [
-    (28, 0),
-    (8, 1),
-    (14, 2),
-    (48, 3),
-    (4, 4),
-    (19, 7),
-    (42, 8),
-    (16, 9),
-    (11, 15),
-    (52, 16),
-    (21, 17),
+    (36, 0),
+    (58, 1),
+    (37, 2),
+    (7, 3),
+    (8, 4),
+    (13, 7),
+    (32, 8),
+    (21, 9),
+    (28, 15),
+    (38, 16),
+    (47, 17),
 ];
 const WIDTHS: [u32; 6] = [1, 2, 3, 4, 8, 16];
 
@@ -55,7 +58,7 @@ fn prove(
         commitment,
         opening,
         Caller::Opening,
-        &prefix.digest(),
+        &prefix.binding(),
         &Zeroizing::new([seed; 32]),
         max_attempts,
         width,
@@ -87,7 +90,7 @@ fn the_side_data_is_that_of_the_accepted_attempt() {
     let f = fixture();
     let (scheme, _, opening, prefix) = &f;
     for (seed, index) in SEEDS {
-        let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.digest(), &[seed; 32]);
+        let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.binding(), &[seed; 32]);
         let mask = sample_gaussian(
             scheme.ring.clone(),
             scheme.bounded_len(),
@@ -115,7 +118,7 @@ fn the_attempt_limit_and_its_error_are_unchanged_at_every_width() {
     let (scheme, commitment, opening, prefix) = &f;
     for (seed, index) in SEEDS {
         let expected = prove(&f, seed, secret::MAX_ATTEMPTS, 1).unwrap();
-        let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.digest(), &[seed; 32]);
+        let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.binding(), &[seed; 32]);
         let masks: Vec<PolyVec> = (0..index)
             .map(|a| {
                 sample_gaussian(
@@ -138,7 +141,7 @@ fn the_attempt_limit_and_its_error_are_unchanged_at_every_width() {
                 commitment,
                 opening,
                 Caller::Opening,
-                &prefix.digest(),
+                &prefix.binding(),
                 &Zeroizing::new([seed; 32]),
                 index,
                 width,
@@ -165,11 +168,11 @@ fn the_attempt_limit_and_its_error_are_unchanged_at_every_width() {
 fn an_attempt_that_fails_ends_the_loop_where_one_at_a_time_would() {
     let f = fixture();
     let (scheme, commitment, opening, prefix) = &f;
-    // Seed 19 accepts at attempt 7. The challenge function fails at attempt e, recognised by
+    // Seed 13 accepts at attempt 7. The challenge function fails at attempt e, recognised by
     // its mask: the proof fails if e <= 7 and is unchanged if e > 7, in the accepted attempt's
     // batch or a later one.
-    let (seed, index) = (19u8, 7u32);
-    let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.digest(), &[seed; 32]);
+    let (seed, index) = (13u8, 7u32);
+    let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.binding(), &[seed; 32]);
     let mask = |a: u32| {
         sample_gaussian(
             scheme.ring.clone(),
@@ -190,7 +193,7 @@ fn an_attempt_that_fails_ends_the_loop_where_one_at_a_time_would() {
                 commitment,
                 opening,
                 Caller::Opening,
-                &prefix.digest(),
+                &prefix.binding(),
                 &Zeroizing::new([seed; 32]),
                 secret::MAX_ATTEMPTS,
                 width,
@@ -208,4 +211,16 @@ fn an_attempt_that_fails_ends_the_loop_where_one_at_a_time_would() {
             }
         }
     }
+}
+
+#[test]
+#[ignore = "search for the seeds of SEEDS"]
+fn find_the_seeds() {
+    let f = fixture();
+    let mut first = std::collections::BTreeMap::new();
+    for seed in 0..=255u8 {
+        let (index, _, _) = prove(&f, seed, secret::MAX_ATTEMPTS, 1).unwrap();
+        first.entry(index).or_insert(seed);
+    }
+    println!("{first:?}");
 }

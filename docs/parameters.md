@@ -29,11 +29,11 @@ with other metadata produces other proofs.
 
 ## Shipped sets
 
-| Set | $`\log_2q`$ | MLWE rank, block size | MSIS rank, block size | $`\gamma`$, $`D`$ | Estimate | Measured |
-| --- | ---: | --- | --- | --- | ---: | ---: |
-| `kyber1024_d64` | 41.14 | 26, 348 | 17, 360 | 262142, 9 | 21,058 B | 20,318 B |
-| `kyber1024_d128` | 41.14 | 13, 348 | 8, 359 | 524286, 11 | 22,608 B | 21,818 B |
-| `demo_d64` | 60.44 | 38, 349 | 11, 347 | 65534, 7 | 24,814 B | 23,991 B |
+| Set | $`\log_2q`$ | MLWE rank, block size | MSIS rank, block size | $`\gamma`$, $`D`$ | Proof |
+| --- | ---: | --- | --- | --- | ---: |
+| `kyber1024_d64` | 41.14 | 26, 348 | 17, 360 | 262142, 9 | 21,004 B |
+| `kyber1024_d128` | 41.14 | 13, 348 | 8, 359 | 524286, 11 | 22,552 B |
+| `demo_d64` | 60.44 | 38, 349 | 11, 347 | 65534, 7 | 24,772 B |
 
 The three sets were derived by the parameter tool from the requests in `tools/params/sets/` for
 the relation $`Aw+t=0`$ over $`\mathbb Z_p[X]/(X^{256}+1)`$ with $`A`$ of size $`4\times8`$: the
@@ -42,9 +42,10 @@ degrees 64 and 128, and the same shape with $`p=2^{32}-4607`$ and $`\|w\|^2\le20
 of the Module-LWE example of LNP22 §6.2, at degree 64. The requirements are the worst case over
 public data (every coefficient of $`A`$ and $`t`$ at the largest centred absolute value), so the
 sets compile every instance of their shape; in all three the lifting check of `compile` sizes
-$`q`$. The demo request caps $`q`$ below $`2^{64}`$. "Estimate" is the set's
-`estimated_proof_bytes`; "measured" is the length of one proof of a seeded random instance with
-a ternary witness, which `tests/param_sets.rs` pins. `src/params/sets/` holds byte-identical
+$`q`$. The demo request caps $`q`$ below $`2^{64}`$. "Proof" is the set's
+`estimated_proof_bytes`, the exact length of every proof of the set since version 0.2, which
+`tests/param_sets.rs` checks on a seeded random instance with a ternary witness. Version 0.1's
+variable-length codes gave 20,318, 21,818 and 23,991 bytes for that instance. `src/params/sets/` holds byte-identical
 copies of the tool's output, and `src/golden_tests.rs` pins each set's transcript digest and
 scheme fingerprint.
 
@@ -104,11 +105,12 @@ and coefficient $`d/2`$ zero, and they meet the operator-norm bound of LNP22 §2
 $`(\|\sigma_{-1}(c^k)c^k\|_1)^{1/(2k)}\le\eta`$ with $`k=32`$. LNP22 chooses $`\eta`$ so that at
 least 99% of the challenges meet it and lists $`(\omega,\eta)=(2,59)`$ for degree 128 (Fig. 3).
 Jali uses $`(2,59)`$ at degree 128 and, at degree 64, $`(8,140)`$, the pair of LaZer's parameter
-script (`scripts/lnp-tbox-codegen.sage`). `rand::challenge` draws a $`\sigma_{-1}`$-stable
-polynomial with uniform coefficients (`rand::autostable`) and keeps it if
+script (`scripts/lnp-tbox-codegen.sage`). `rand::challenge_from_bytes` decodes
+$`\sigma_{-1}`$-stable polynomials with uniform coefficients from the 4032 bytes that the
+transcript squeezes for a challenge and keeps the first with
 $`\|(\sigma_{-1}(c)c)^{32}\|_1\le\eta^{64}`$, a test in exact integer arithmetic
-(`rand::within_eta`); otherwise it draws again from the same stream, at most 64 times ([security
-notes](security.md#challenges)). The bound is what the parameter check assumes: the verifier
+(`rand::within_eta`), with the constant 1 as the fallback when none passes
+([encodings](encodings.md#decodings), [security notes](security.md#challenges)). The bound is what the parameter check assumes: the verifier
 bound $`B`$, the MSIS bound and the rejection constants use $`\eta`$.
 
 Measured with exact arithmetic (SageMath 10.9) on $`2\cdot10^5`$ uniform draws per degree and
@@ -130,26 +132,29 @@ integers; the others take the products in 256 to 1024 bits. A derivation takes 6
 64 and 20 µs at degree 128, a full test 67 µs and 259 µs
 (`cargo bench --bench arithmetic -- challenge/` on an Apple M4). Prover and verifier run one
 test per draw: a prover in each attempt of each opening proof, a verifier once per opening
-proof, and each one more per rejected draw.
+proof, and each one more per rejected draw. The rates above are what the fallback bound of the
+challenge decoding takes as at most a quarter, or at most a fiftieth for its sharper figure.
 
-## Size estimate
+## Proof size
 
-`estimated_proof_bytes` is what the parameter tool's searches minimize. It counts the full-size
-polynomials exactly, as the encoder writes them, each Gaussian coefficient as
-$`\lceil\log_2\sigma+2.5\rceil`$ bits, and each of the $`n\cdot d`$ hint coefficients as
-$`\max(2.25,\,1.6\sigma_2/\gamma+0.7)`$ bits. LNP22 §6.1 counts 2.25 bits per hint, the average
-computed for the prefix-free code by Ducas, Lepoint, Lyubashevsky, Schwabe, Seiler and Stehlé
-(ePrint 2017/633) for hints in $`\{-1,0,1\}`$. A hint is about
-$`\mathrm{round}(z_{2,2}/\gamma)`$, so its expected length grows with $`s=\sigma_2/\gamma`$.
-Modelling $`z_{2,2}/\gamma`$ as a normal variable of deviation $`s`$ plus a uniform rounding
-error, the expected code length is $`H(s)=2-3Q(1/s)-2Q(2/s)+3s\varphi(1/s)+s\varphi(2/s)`$, with
-$`\varphi`$ the standard normal density and $`Q`$ its tail; $`H`$ is nondecreasing and convex
-with slope at most $`2\sqrt{2/\pi}<1.6`$, and $`H(s)=2.25`$ at $`s\approx0.989`$ (computed), so
-the allowance bounds $`H`$ for every $`s`$ and equals 2.25 up to $`s=0.96875`$. The shipped
-sets, the toy set and the test fixtures have $`s<0.1`$. The allowance bounds the expected
-length, not each proof: at $`s=12.45`$, where $`H=19.48`$ and the allowance is 20.62, ten
-measured proofs had 18.5 to 19.7 bits per hint. The estimate is not a proven bound on the length
-of a proof.
+Since version 0.2 every field of a proof has a fixed width ([encodings](encodings.md#codec-c1)),
+so `estimated_proof_bytes`, which the parameter tool's searches minimize, is the exact length of
+every proof of a set: the full-size polynomials as before, each Gaussian coefficient in
+$`t+4`$ bits for the width $`1.55\cdot2^t`$ (the $`\lceil\log_2\sigma+2.5\rceil`$ bits that
+version 0.1 allowed for its variable-length code), the challenge's first $`d/2`$ coefficients in
+$`\mathrm{bitlen}(2\omega)`$ bits, and each of the $`n\cdot d`$ hints in `hint_width` bits, 2
+for every shipped set. The name is kept from version 0.1, for which it was an estimate, so the
+fixed-width proofs have the length that version 0.1 estimated, less the hints' 0.25 bit each and
+half the challenge, and about 3.3% more than version 0.1's measured proofs (20,318 to 21,004
+bytes for `kyber1024_d64`).
+
+The hint width comes from a model of the hints, a heuristic: a hint is about
+$`\mathrm{round}(z_{22}/\gamma)`$, a uniform rounding error plus a normal of deviation at most
+$`s=\sqrt{\sigma_2^2+(d-1)\omega^2(1+4^{D-1}/3)}/\gamma`$, and the width holds every hint up to
+$`\max(1,\lceil9s\rceil)`$. The shipped sets and the toy set have $`s`$ from 0.026 to 0.104,
+and the test fixtures and the possession example from 0.019 to 0.099 (computed), all below
+$`1/9`$, so their hints take 2 bits, as LNP22 §6.1's 2.25-bit average for the prefix-free code
+suggests. A hint beyond the width restarts the attempt.
 
 ## Extraction sets
 
@@ -198,18 +203,20 @@ cost-model heuristics, as for the toolbox [estimate].
 | Set | $`n'`$ | $`n'd`$ | $`m'`$ | $`\log_2p`$ | $`\log_2q'`$ | $`t'`$ | $`M'`$ | uSVP block size | Extractable proof | Plain proof |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | `toy_d64_extraction` | 36 | 2304 | 52 | 23.92 | 57.54 | 19 | 1.305 | 346 | | |
-| `kyber1024_d64_extraction` | 37 | 2368 | 71 | 24.65 | 58.57 | 19 | 1.351 | 351 | 118,695 B | 20,319 B |
-| `kyber1024_d128_extraction` | 19 | 2432 | 38 | 25.34 | 58.33 | 18 | 1.299 | 366 | 125,316 B | 21,826 B |
-| `demo_d64_extraction` | 38 | 2432 | 83 | 24.65 | 59.73 | 20 | 1.174 | 355 | 141,024 B | 23,980 B |
+| `kyber1024_d64_extraction` | 37 | 2368 | 71 | 24.65 | 58.57 | 19 | 1.351 | 351 | 120,964 B | 21,004 B |
+| `kyber1024_d128_extraction` | 19 | 2432 | 38 | 25.34 | 58.33 | 18 | 1.299 | 366 | 127,736 B | 22,552 B |
+| `demo_d64_extraction` | 38 | 2432 | 83 | 24.65 | 59.73 | 20 | 1.174 | 355 | 143,620 B | 24,772 B |
 
 The sets come from `tools/params/lnp_params.py extraction --shipped`, under the `delta` policy of
 the shipped sets, about 101 bits under core-SVP and not 128. `src/params/sets/*.extraction.json`
-are copies of the tool's output. The proof sizes are means over seeds 1 to 20 of the README's
-Kyber-shape instance [measured], about 5.7 to 5.9 times the plain proof's. Over the same 20 seeds,
-proving took 1.17 to 1.49 times the plain mode's retired instructions and verifying 1.14 to 1.17
-times (one thread, release build, rustc 1.100.0, Apple M4, `/usr/bin/time -l`) [measured].
-Proving restarts a random number of times, and a run with other commitment keys gave ratios up to
-0.14 away from these [measured].
+are copies of the tool's output. The proof sizes are exact (`ExtractionParams::proof_bytes`),
+5.7 to 5.8 times the plain proof's. Over seeds 1 to 100 of the README's Kyber-shape instance,
+with version 0.2.0, proving took 1.30 to 1.49 times the plain mode's retired instructions and
+verifying 1.18 to 1.24 times (one thread, release build, rustc 1.100.0, Apple M4, read with
+`proc_pid_rusage`) [measured]. With version 0.1.1, over seeds 1 to 20, the ratios were 1.17 to
+1.49 and 1.14 to 1.17 (`/usr/bin/time -l`) [measured]. Proving restarts a random number of
+times, and with version 0.1.1 a run with other commitment keys gave ratios up to 0.14 away from
+those [measured].
 `cargo run --release --example extractable` proves one seed in both modes. A set for another
 parameter set comes from `lnp_params.py extraction PARAMS.json`, with `--policy beta --beta-min
 439`, for example, for a 128-bit policy.

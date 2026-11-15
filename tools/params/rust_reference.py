@@ -109,12 +109,12 @@ fn derived(c: &CheckedParams) -> String {
             "\"b_squared\":\"{}\",\"z1_bound_squared\":\"{}\",\"z3_bound_squared\":\"{}\",",
             "\"z4_bound\":\"{}\",\"exact_alpha_squared\":\"{}\",\"approx_alpha_squared\":\"{}\",",
             "\"approx_extraction_bound\":\"{}\",\"arp_bound\":\"{:?}\",",
-            "\"msis_delta\":\"{:?}\",\"estimated_proof_bytes\":{}}}"
+            "\"msis_delta\":\"{:?}\",\"estimated_proof_bytes\":{},\"hint_width\":{}}}"
         ),
         c.q, c.lambda, c.omega, c.eta, c.n_ex, c.l_ext, c.b_squared, c.z1_bound_squared,
         c.z3_bound_squared, c.z4_bound, c.exact_alpha_squared, c.approx_alpha_squared,
         c.approx_extraction_bound, c.arp_bound, c.msis_delta,
-        c.estimated_proof_bytes
+        c.estimated_proof_bytes, c.hint_width
     )
 }
 
@@ -713,8 +713,8 @@ def cases():
     add("chk/response-capacity", t, set={"log_sigma": [16, 60, 10, 8]})
     add("chk/response-bound-capacity", t, set={"log_sigma": [100, 12, 10, 8]})
     add("chk/arp-modulus", "kyber1024-d64", set={"log_sigma": [16, 12, 35, 23]})
-    # The hint allowance of the size estimate above sigma_2/gamma = 0.96875: smaller even
-    # divisors gamma of q - 1, with D lowered to meet the rounding bound.
+    # Hint widths above 2 bits: smaller even divisors gamma of q - 1, with D lowered to meet
+    # the rounding bound.
     for g, dbits in ((2028, 2), (676, 1), (338, 0)):
         add(f"est/hints-gamma-{g}", t, set={"gamma": g, "d_bits": dbits})
     for g, dbits in ((6342, 4), (434, 0)):
@@ -1035,7 +1035,7 @@ def run(a, work):
         "blocks, the tool's set, its compilation and one seeded proof, and compile of every "
         "statement case")),
         "toy-d64": {"b_squared": 3487433255883, "z3_bound_squared": 1734566565,
-                    "z4_bound": 50790, "estimated_proof_bytes": 17896,
+                    "z4_bound": 50790, "estimated_proof_bytes": 17844,
                     "source": "tests/arithmetic.rs, the pinned CheckedParams of toy_d64"},
         "sets": {}}
     for name, (p, bsq) in SETS.items():

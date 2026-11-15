@@ -1,12 +1,18 @@
 //! A quadratic relation with automorphisms: LNP22 Fig. 6, Eqs. 29–31.
+//!
+//! On its own the proof runs the transcript `JALI-V02-LNP22-QUAD-C1-SHAKE128`, whose instance
+//! is the parameters, the public seed, the commitment and the equation. Inside the many-equation
+//! and evaluation proofs it continues their transcript after the folding challenge. Either way
+//! its prover message is $`(t,v,w_1)`$, with the LinHC mask commitment before $`w_1`$ in the
+//! extractable mode, and its verifier message the challenge (`docs/encodings.md`).
 use crate::{
     Error,
     abdlop::{self, Abdlop, Caller, Commitment, Opening, OpeningProof},
-    codec::{BitWriter, CodeWriter, SegmentWriter, Segments},
+    codec::{BitWriter, CodeWriter, SegmentWriter, Segments, fields},
     linhc,
     math::{Poly, PolyVec, Ring, SparsePolyMat, SparsePolyVec, U256, int, terms::Shape},
     rand::take_seed,
-    transcript::Transcript,
+    transcript::{Protocol, Transcript},
 };
 use std::{collections::BTreeMap, sync::Arc};
 use zeroize::Zeroizing;
@@ -482,17 +488,17 @@ impl QuadEq {
     }
     /// Canonical, dimension-bound encoding for statement hashing.
     ///
-    /// The transcripts absorb these bytes without building them in one buffer: they hash them
-    /// in pieces from chunks of at most 32 KiB, which hold long runs of zero bytes, such as the
-    /// codes of zero polynomials, as counts. The transcript states are those of absorbing the
-    /// bytes returned here.
+    /// The transcripts absorb these bytes, prefixed with their length, as part of an instance,
+    /// without building them in one buffer: they hash them in pieces from chunks of at most
+    /// 32 KiB, which hold long runs of zero bytes, such as the codes of zero polynomials, as
+    /// counts. The transcript states are those of absorbing the bytes returned here.
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let mut w = BitWriter::new();
         self.write_codes(&mut w)?;
         Ok(w.finish())
     }
     /// The bytes of [`QuadEq::to_bytes`] as [`Segments`], for
-    /// [`Transcript::absorb_segments`]: no buffer of them exceeds 32 KiB, apart from their list
+    /// `Transcript::absorb_varlen_segments`: no buffer of them exceeds 32 KiB, apart from their list
     /// of chunks, and a run of at least 64 whole zero bytes takes only a record header. A zero
     /// polynomial whose codes take 576 bits or more (degree 64 and $`q>2^8`$, for example)
     /// always leaves such a run.
@@ -564,39 +570,53 @@ pub struct QuadProof {
     pub opening: OpeningProof,
 }
 
-fn prefix(
+/// The variable space of the equations of `scheme`: $`2(m_1'+\ell)`$ coordinates, each
+/// variable and its conjugate.
+pub(crate) fn dimension(scheme: &Abdlop) -> usize {
+    2 * (scheme.bounded_len() + scheme.message_len())
+}
+/// The transcript of the quadratic proof on its own, after its instance: the scheme, the
+/// commitment's serialization, and the equation's encoding ([`QuadEq::to_bytes`]) as
+/// `SerializeVarLenString`. Checks the equation's shape.
+fn transcript(
     scheme: &Abdlop,
     commitment: &Commitment,
     equation: &QuadEq,
     context: &[u8],
 ) -> Result<Transcript, Error> {
-    equation.check(
-        scheme.ring(),
-        2 * (scheme.bounded_len() + scheme.message_len()),
-    )?;
-    let mut prefix = scheme.prefix(commitment, context)?;
-    prefix.absorb_segments(b"quadratic-equation", &equation.to_segments()?);
-    Ok(prefix)
+    equation.check(scheme.ring(), dimension(scheme))?;
+    let mut transcript = Transcript::new(Protocol::Quadratic, context)?;
+    scheme.absorb_scheme(&mut transcript)?;
+    transcript.absorb(&scheme.commitment_bytes(commitment)?);
+    transcript.absorb_varlen_segments(&equation.to_segments()?)?;
+    Ok(transcript)
 }
-/// The challenge after the first message `(t, v, w1)`, absorbing the LinHC mask commitment of
-/// the extractable mode, when given, after `(t, v)` and before `w1`.
+/// The challenge after the prover message $`(t,v,w_1)`$: on a copy of `transcript`, absorb the
+/// message's serialization, $`t`$ and $`v`$ modulo $`q`$, the LinHC mask commitment of the
+/// extractable mode when given (modulo $`q'`$), then $`w_1`$ modulo $`m`$, and squeeze the
+/// challenge.
 fn challenge_ext(
     scheme: &Abdlop,
-    prefix: &Transcript,
+    transcript: &Transcript,
     t: &Poly,
     v: &Poly,
     w1: &PolyVec,
     mask: Option<linhc::MaskCommitment<'_>>,
 ) -> Result<Poly, Error> {
-    let mut writer = BitWriter::new();
-    encode_poly(&mut writer, t)?;
-    encode_poly(&mut writer, v)?;
-    let mut prefix = prefix.clone();
-    prefix.absorb(b"quadratic-first-message", &writer.finish());
+    let ring = scheme.ring();
+    let mut w = BitWriter::new();
+    fields::write_below(
+        &mut w,
+        &PolyVec::new(ring.clone(), vec![t.clone(), v.clone()])?,
+        &ring.q,
+    )?;
     if let Some((w1_mask, w2_mask)) = mask {
-        linhc::absorb_pair(&mut prefix, b"linhc-mask-commitment", w1_mask, w2_mask)?;
+        linhc::write_pair(&mut w, w1_mask, w2_mask)?;
     }
-    scheme.challenge(&prefix, w1)
+    fields::write_below(&mut w, w1, &scheme.compression.hint_modulus())?;
+    let mut transcript = transcript.clone();
+    transcript.absorb(&w.into_bytes()?);
+    scheme.squeeze_challenge(&mut transcript)
 }
 /// Row $`\ell`$ of the matrix $`B`$ with one more row, the row of the commitment to $`t`$.
 /// Entries of the public matrices are independent streams, so the row is expanded alone.
@@ -647,20 +667,32 @@ pub(crate) fn prove_seeded(
     context: &[u8],
     seed: &Zeroizing<[u8; 32]>,
 ) -> Result<QuadProof, Error> {
-    Ok(prove_seeded_ext(scheme, commitment, opening, equation, context, seed, None)?.0)
+    let transcript = transcript(scheme, commitment, equation, context)?;
+    Ok(prove_in(
+        scheme,
+        commitment,
+        opening,
+        equation,
+        &transcript,
+        seed,
+        None,
+    )?
+    .0)
 }
-/// [`prove_seeded`] with the extractable commitment beside the opening when `ext` is given,
-/// returning the accepted attempt's LinHC opening too.
-pub(crate) fn prove_seeded_ext(
+/// The quadratic proof in `transcript`, which binds everything its challenge depends on
+/// besides the prover's message, with the extractable commitment beside the opening when `ext`
+/// is given, returning the accepted attempt's LinHC opening too. The masks' key binds the
+/// transcript through `Transcript::binding`.
+pub(crate) fn prove_in(
     scheme: &Abdlop,
     commitment: &Commitment,
     opening: &Opening,
     equation: &QuadEq,
-    context: &[u8],
+    transcript: &Transcript,
     seed: &Zeroizing<[u8; 32]>,
     ext: Option<&linhc::ProverExt<'_>>,
 ) -> Result<(QuadProof, Option<linhc::LinhcOpening>), Error> {
-    let prefix = prefix(scheme, commitment, equation, context)?;
+    equation.check(scheme.ring(), dimension(scheme))?;
     let s = interleave(&opening.s1, &opening.m)?;
     if !equation.evaluate(&s)?.is_zero() {
         return Err(Error::Witness);
@@ -670,15 +702,15 @@ pub(crate) fn prove_seeded_ext(
         commitment,
         opening,
         equation,
-        &prefix.digest(),
+        &transcript.binding(),
         seed,
         ext,
-        |t, v, w1, mask| Ok((challenge_ext(scheme, &prefix, t, v, w1, mask)?, ())),
+        |t, v, w1, mask| Ok((challenge_ext(scheme, transcript, t, v, w1, mask)?, ())),
     )?;
     Ok((proof, linhc_opening))
 }
 /// The quadratic proof with a caller-defined challenge of the first message `(t, v, w1)`. It
-/// does not check the witness against the equation; `binding` is as in `Abdlop::prove_core`.
+/// does not check the witness against the equation. `binding` is as in `Abdlop::prove_core`.
 /// The challenge function returns side data with the challenge, and the proof is returned
 /// with that of its accepted attempt; the function may be called for further attempts, in no
 /// particular order (`Abdlop::prove_core`).
@@ -767,24 +799,26 @@ pub fn verify(
     proof: &QuadProof,
     context: &[u8],
 ) -> Result<(), Error> {
-    verify_ext(scheme, commitment, equation, proof, context, None)
+    let transcript = transcript(scheme, commitment, equation, context)?;
+    verify_in(scheme, commitment, equation, proof, &transcript, None)
 }
-/// [`verify`] with the extractable commitment's checks when `ext` is given.
-pub(crate) fn verify_ext(
+/// [`verify`] in `transcript`, as [`prove_in`] proves, with the extractable commitment's checks
+/// when `ext` is given.
+pub(crate) fn verify_in(
     scheme: &Abdlop,
     commitment: &Commitment,
     equation: &QuadEq,
     proof: &QuadProof,
-    context: &[u8],
+    transcript: &Transcript,
     ext: Option<&linhc::VerifierExt<'_>>,
 ) -> Result<(), Error> {
-    let prefix = prefix(scheme, commitment, equation, context)?;
+    equation.check(scheme.ring(), dimension(scheme))?;
     verify_core_ext(scheme, commitment, equation, proof, ext, |v, w1, mask| {
-        challenge_ext(scheme, &prefix, &proof.t, v, w1, mask)
+        challenge_ext(scheme, transcript, &proof.t, v, w1, mask)
     })
 }
 /// The check of Fig. 6 (Eq. (31), rewritten) with a caller-defined challenge of the
-/// reconstructed `(v, w1)`; the caller must have checked the equation's shape, as `prefix`
+/// reconstructed `(v, w1)`. The caller must have checked the equation's shape, as `verify_in`
 /// does.
 #[cfg(test)]
 pub(crate) fn verify_core(

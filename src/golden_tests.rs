@@ -1,8 +1,10 @@
 //! Pinned values: parameter transcripts, scheme fingerprints, opening-proof bytes and ring
 //! arithmetic. A change to any of them changes what verifiers accept, so each must stay byte for
-//! byte unless the parameters themselves change, or, for the proof bytes, the way proofs draw
-//! their randomness (the 256-bit sampler, the 256-bit rejection coins and the challenges within
-//! eta changed them).
+//! byte unless the parameters themselves change, or, for the proof bytes and the transcript
+//! bindings, the way proofs draw their randomness or hash their transcript (the 256-bit sampler,
+//! the 256-bit rejection coins and the challenges within eta changed them, and so did the
+//! duplex-sponge transcript and the fixed-width codes of version 0.2). The parameter transcripts
+//! and the fingerprints are unchanged since version 0.1.
 use crate::{
     abdlop::Abdlop,
     math::{Poly, PolyVec, Ring, int},
@@ -55,17 +57,17 @@ fn parameter_transcripts_fingerprints_and_opening_proofs_are_unchanged() {
             toy_d64(),
             "b62dab81063396d79799ad6df6fe49f97cc65b008a74945592dbffc457c55ad0",
             "5ade81f1ea9aae9d97121f8ecc4148eaeef0e9982f502d88cb2aee62bcd816f3",
-            "8cdf0f0af4ad3e5dced199c44d288761f28784c005af309e8412aa490433d213",
-            6873,
-            "26ef4830b9090fe5797baa904fafd25e01f68851914a71de81be2dbe599f532c",
+            "22931ced7755398db93cd9a1ea9301f80b53b27572b01bb8c588b42553be2dc0",
+            7316,
+            "a8724af8625136965dda75d3478a60d120e5c2d97a9614b2c2105101ee496bb5",
         ),
         (
             possession(),
             "7f3cb670ea5a236803f5d7ecc2b99bbde64bf3943372479d25f3e00be1abe768",
             "485842745d59ecd6766db654dddd8923ff752970efa6dc9957269f444c7ed4d5",
-            "c04b68734ec1e840dc329c5c6a532212690e16a8b798af3e12d7a69f2cec716f",
-            8020,
-            "3766a7b4063151864f671ba741dc129f2496678bfabb05f92186323efb4b54f8",
+            "fa530553bae65de1008cb2e48f5499a55f589ff3dabad4ad3a93ba43d1874788",
+            8548,
+            "4d6b08ce7e2c4ca2f479e6ff87d13f00d92e33987d03af47220a71849122038b",
         ),
     ] {
         assert_eq!(digest(&p.transcript_bytes()), transcript);
@@ -84,7 +86,12 @@ fn parameter_transcripts_fingerprints_and_opening_proofs_are_unchanged() {
         .unwrap();
         let (commitment, opening) = scheme.commit_with_seed(s1, m, [92; 32]).unwrap();
         assert_eq!(
-            hex::encode(scheme.prefix(&commitment, b"ctx").unwrap().digest()),
+            hex::encode(
+                scheme
+                    .opening_transcript(&commitment, b"ctx")
+                    .unwrap()
+                    .binding()
+            ),
             prefix
         );
         let proof = scheme
@@ -108,12 +115,12 @@ fn opening_proofs_with_a_redrawn_challenge_are_unchanged() {
     };
     for ((params, i), (length, proof_digest)) in redrawn_challenge_cases().into_iter().zip([
         (
-            6883,
-            "f58c376d78efab26bd75574c3649aa9c8fdb124897dcaed0ee9157c1767f4d2a",
+            7316,
+            "2a8d20a889d1a24b0d6f508af2e15a8070aa5f13cc774105e075e6b57ecc2879",
         ),
         (
-            9848,
-            "f47247f63650499c6b946de9cfbc663d7f051a3c16ae5e30e76288c0186fbb32",
+            10488,
+            "91790199f6d92a270c3bcc78857ce8b8051c27c4c293663a6e4b81fb72a920c1",
         ),
     ]) {
         let (scheme, commitment, opening) = commitment_for(params);

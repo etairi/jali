@@ -181,6 +181,30 @@ impl BitWriter {
         }
         Ok(())
     }
+    /// The fixed-width signed code: $`b-x`$ in `width` bits for $`b=2^{width-1}-1`$, which
+    /// FIPS 204's `BitPack(w, b, b)` writes for a coefficient $`x\in[-b,b]`$. The width is 2
+    /// to 127 bits, and a value outside $`[-b,b]`$ is refused with [`Error::Encoding`].
+    pub fn signed(&mut self, value: i128, width: u32) -> Result<(), Error> {
+        if !(2..=127).contains(&width) {
+            return Err(Error::Encoding);
+        }
+        let b = (1i128 << (width - 1)) - 1;
+        if !(-b..=b).contains(&value) {
+            return Err(Error::Encoding);
+        }
+        self.put((b - value) as u128, width);
+        Ok(())
+    }
+    /// The written bits as bytes, with no end bit: the serialization of a message of
+    /// fixed-width fields. Fails with [`Error::Encoding`] unless the bits fill whole bytes.
+    pub fn into_bytes(self) -> Result<Vec<u8>, Error> {
+        if !self.used.is_multiple_of(8) {
+            return Err(Error::Encoding);
+        }
+        let mut bytes = self.bytes;
+        bytes.extend_from_slice(&self.word.to_le_bytes()[..(self.used / 8) as usize]);
+        Ok(bytes)
+    }
     /// Append the mandatory one bit and zero padding to the byte boundary.
     pub fn finish(mut self) -> Vec<u8> {
         self.bit(true);
@@ -299,16 +323,40 @@ impl<'a> BitReader<'a> {
         self.pos += 1;
         Ok(value)
     }
-    /// Decode exactly `bits` bits.
+    /// Decode exactly `bits` bits. A field that runs past the input is refused before any of
+    /// it is read.
     pub fn unsigned(&mut self, bits: u32) -> Result<u128, Error> {
         if bits > 128 {
             return Err(Error::Encoding);
         }
-        let mut value = 0;
-        for i in 0..bits {
-            value |= u128::from(self.bit()?) << i;
+        let end = self.pos.checked_add(bits as usize).ok_or(Error::Encoding)?;
+        if end.div_ceil(8) > self.bytes.len() {
+            return Err(Error::Encoding);
         }
+        let value = crate::rand::bits(self.bytes, self.pos, bits);
+        self.pos = end;
         Ok(value)
+    }
+    /// Decode the fixed-width signed code of [`BitWriter::signed`]: $`b-u`$ for the `width`-bit
+    /// value $`u`$, refusing $`u>2b`$, the one code that no value has.
+    pub fn signed(&mut self, width: u32) -> Result<i128, Error> {
+        if !(2..=127).contains(&width) {
+            return Err(Error::Encoding);
+        }
+        let b = (1i128 << (width - 1)) - 1;
+        let u = self.unsigned(width)? as i128;
+        if u > 2 * b {
+            return Err(Error::Encoding);
+        }
+        Ok(b - u)
+    }
+    /// Require the end of input, with no bit left: the end of a string of messages written by
+    /// [`BitWriter::into_bytes`].
+    pub fn finish_bytes(self) -> Result<(), Error> {
+        if self.pos.div_ceil(8) != self.bytes.len() || !self.pos.is_multiple_of(8) {
+            return Err(Error::Encoding);
+        }
+        Ok(())
     }
     /// Read a canonical element of $`[0,m)`$.
     pub fn uniform(&mut self, modulus: u128) -> Result<u128, Error> {
@@ -321,15 +369,20 @@ impl<'a> BitReader<'a> {
         }
         Ok(value)
     }
-    /// Decode exactly `bits` bits into a 256-bit value.
+    /// Decode exactly `bits` bits into a 256-bit value: the low 128 bits, then the rest.
     pub fn unsigned_u256(&mut self, bits: u32) -> Result<U256, Error> {
         if bits > 256 {
             return Err(Error::Encoding);
         }
-        let mut bytes = [0u8; 32];
-        for i in 0..bits as usize {
-            bytes[i / 8] |= u8::from(self.bit()?) << (i % 8);
+        let end = self.pos.checked_add(bits as usize).ok_or(Error::Encoding)?;
+        if end.div_ceil(8) > self.bytes.len() {
+            return Err(Error::Encoding);
         }
+        let low = self.unsigned(bits.min(128))?;
+        let high = self.unsigned(bits.saturating_sub(128))?;
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(&low.to_le_bytes());
+        bytes[16..].copy_from_slice(&high.to_le_bytes());
         Ok(U256::from_le_slice(&bytes))
     }
     /// [`BitReader::uniform`] for 256-bit moduli.

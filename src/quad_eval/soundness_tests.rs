@@ -2,23 +2,6 @@
 use super::*;
 use crate::params::toy_d64;
 
-fn weights(scheme: &Abdlop, seed: &[u8; 32], count: usize) -> Vec<Poly> {
-    (0..count)
-        .map(|i| {
-            Poly::from_u256(
-                scheme.ring().clone(),
-                uniform_ring(
-                    &mut AesPrg::new(seed, domain(0x4d550000, i as u32 + 1)),
-                    scheme.ring(),
-                    scheme.ring().degree(),
-                )
-                .unwrap(),
-            )
-            .unwrap()
-        })
-        .collect()
-}
-
 // Solve sum_i mu_i*h_i = target with h_i[0] = h_i[d/2] = 0. This is the
 // adversary's post-challenge choice, using Gaussian elimination over the prime field.
 fn adaptive_h(mu: &[Poly], target: &Poly) -> PolyVec {
@@ -113,11 +96,21 @@ fn adaptive_h_after_mu_can_forge_a_weakened_round_but_fails_default_verification
             opening.s2.clone(),
         )
         .unwrap();
-    let mut prefix =
-        setup_prefix(&extended, &full_commitment, &eqs, &[], b"adversarial-test").unwrap();
-    let gamma = combined(&extended, &prefix, &[], dim).unwrap();
-    let old_seed = prefix.challenge_seed(b"mu");
-    let mu = weights(&extended, &old_seed, 1 + extended.checked.lambda / 2);
+    let garbage_commitments = abdlop::part(
+        &full_commitment.t_b,
+        scheme.message_len(),
+        extended.message_len(),
+    )
+    .unwrap();
+    let mut default = transcript(&scheme, &commitment, &eqs, &[], b"adversarial-test").unwrap();
+    default.absorb(&vector_bytes(&garbage_commitments).unwrap());
+    let gamma_values = squeeze_gamma(&extended, &mut default, 0).unwrap();
+    let gamma = combined(&extended, &gamma_values, &[], dim).unwrap();
+    // The weakened round squeezes mu before h is absorbed, so h is chosen after mu.
+    let mut weak = default.clone();
+    let mu = weak
+        .ring_elements(&ring, 1 + extended.checked.lambda / 2)
+        .unwrap();
     let h = adaptive_h(&mu[1..], &mu[0]);
     assert!(
         h.entries()
@@ -140,32 +133,33 @@ fn adaptive_h_after_mu_can_forge_a_weakened_round_but_fails_default_verification
             .unwrap()
             .is_zero()
     );
-    let quadratic = quad::prove_with_seed(
+    let (quadratic, _) = quad::prove_in(
         &extended,
         &full_commitment,
         &full_opening,
         &folded,
-        &prefix.digest(),
-        [72; 32],
+        &weak,
+        &Zeroizing::new([72; 32]),
+        None,
     )
     .unwrap();
-    quad::verify(
+    quad::verify_in(
         &extended,
         &full_commitment,
         &folded,
         &quadratic,
-        &prefix.digest(),
+        &weak,
+        None,
     )
     .unwrap();
-    bind_h(&mut prefix, &h).unwrap();
-    assert_ne!(old_seed, prefix.challenge_seed(b"mu"));
+    // The default transcript absorbs h first, and so squeezes another mu.
+    default.absorb(&vector_bytes(&h).unwrap());
+    let default_mu = default
+        .ring_elements(&ring, 1 + extended.checked.lambda / 2)
+        .unwrap();
+    assert_ne!(mu, default_mu);
     let proof = EvalProof {
-        garbage_commitments: abdlop::part(
-            &full_commitment.t_b,
-            scheme.message_len(),
-            extended.message_len(),
-        )
-        .unwrap(),
+        garbage_commitments,
         h,
         quadratic,
     };
@@ -190,8 +184,9 @@ fn garbage_chosen_after_gamma_absorbs_a_false_row_but_fails_default_verification
     let evals = [false_row];
     // Deliberately sample Gamma before committing to g. The reserved coefficients of
     // g can now cancel an arbitrary false evaluation row, while transmitted h is zero.
-    let mut prefix = setup_prefix(&scheme, &commitment, &[], &evals, b"early-Gamma-test").unwrap();
-    let gamma = combined(&scheme, &prefix, &evals, dim).unwrap();
+    let mut weak = transcript(&scheme, &commitment, &[], &evals, b"early-Gamma-test").unwrap();
+    let gamma_values = squeeze_gamma(&scheme, &mut weak, evals.len()).unwrap();
+    let gamma = combined(&scheme, &gamma_values, &evals, dim).unwrap();
     let g: Vec<_> = (0..scheme.checked.lambda / 2)
         .map(|i| {
             gamma[2 * i]
@@ -220,31 +215,36 @@ fn garbage_chosen_after_gamma_absorbs_a_false_row_but_fails_default_verification
         .unwrap();
     let h = PolyVec::zero(ring, scheme.checked.lambda / 2);
     let equations = final_equations(&extended, &[], gamma.clone(), &h, dim).unwrap();
-    bind_h(&mut prefix, &h).unwrap();
-    let quadratic = quad_many::prove_with_seed(
+    let garbage_commitments = abdlop::part(
+        &full_commitment.t_b,
+        scheme.message_len(),
+        extended.message_len(),
+    )
+    .unwrap();
+    // The weakened transcript absorbs the garbage commitments after Gamma, then h.
+    weak.absorb(&vector_bytes(&garbage_commitments).unwrap());
+    weak.absorb(&vector_bytes(&h).unwrap());
+    let (quadratic, _) = quad_many::prove_in(
         &extended,
         &full_commitment,
         &full_opening,
         &equations,
-        &prefix.digest(),
-        [82; 32],
+        weak.clone(),
+        &Zeroizing::new([82; 32]),
+        None,
     )
     .unwrap();
-    quad_many::verify(
+    quad_many::verify_in(
         &extended,
         &full_commitment,
         &equations,
         &quadratic,
-        &prefix.digest(),
+        weak,
+        None,
     )
     .unwrap();
     let proof = EvalProof {
-        garbage_commitments: abdlop::part(
-            &full_commitment.t_b,
-            scheme.message_len(),
-            extended.message_len(),
-        )
-        .unwrap(),
+        garbage_commitments,
         h,
         quadratic,
     };

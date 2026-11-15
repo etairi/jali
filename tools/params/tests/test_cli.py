@@ -140,7 +140,7 @@ class Subcommands(unittest.TestCase):
             self.assertTrue(out["accepted"])
             self.assertEqual(out["tight"], [])
         res = run("check", common.JALI / "src/params/sets/toy-d64.json")
-        self.assertEqual(json.loads(res.stdout)["estimated_proof_bytes"], 17896)
+        self.assertEqual(json.loads(res.stdout)["estimated_proof_bytes"], 17844)
 
     def test_derive_to_files(self):
         with tempfile.TemporaryDirectory() as tmp:

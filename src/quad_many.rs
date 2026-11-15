@@ -1,13 +1,17 @@
 //! Independent ring-valued Schwartz–Zippel folding, LNP22 Fig. 7.
+//!
+//! On its own the proof runs the transcript `JALI-V02-LNP22-QUAD-MANY-C1-SHAKE128`, whose
+//! instance is the parameters, the public seed, the commitment and the equations. Inside the
+//! evaluation proof it continues that proof's transcript after $`h`$. Either way its verifier
+//! message is the folding challenge $`\mu`$, one ring element per equation, and the quadratic
+//! proof of the folded equation follows in the same transcript (`docs/encodings.md`).
 use crate::{
     Error,
     abdlop::{Abdlop, Commitment, Opening},
-    codec::Segments,
     linhc,
-    math::Poly,
     quad::{self, QuadEq, QuadProof},
-    rand::{AesPrg, domain, take_seed, uniform_ring},
-    transcript::Transcript,
+    rand::take_seed,
+    transcript::{Protocol, Transcript},
 };
 use zeroize::Zeroizing;
 
@@ -17,59 +21,54 @@ mod tests;
 /// Equations encoded at once before they are absorbed: in parallel with the `parallel`
 /// feature (from 8 equations on), with the encodings of one chunk held at a time.
 const ENCODING_CHUNK: usize = 32;
-/// Absorb the number of `equations`, then each one's encoding ([`QuadEq::to_bytes`], held as
-/// segments of at most 32 KiB) under the label `equation`.
+/// Absorb a list of equations as part of an instance: their number as `LE32`, then each one's
+/// encoding ([`QuadEq::to_bytes`], held as segments of at most 32 KiB) as
+/// `SerializeVarLenString`.
 pub(crate) fn absorb_equations(
     transcript: &mut Transcript,
-    label: &[u8],
     equations: &[QuadEq],
 ) -> Result<(), Error> {
-    transcript.absorb(label, &(equations.len() as u64).to_le_bytes());
+    transcript.absorb_len(equations.len() as u64)?;
     // Absorbed in order, up to the first equation that fails to encode.
     for chunk in equations.chunks(ENCODING_CHUNK) {
         for encoding in crate::par::map_min(chunk.len(), 8, |i| chunk[i].to_segments()) {
-            transcript.absorb_segments(b"equation", &encoding?);
+            transcript.absorb_varlen_segments(&encoding?)?;
         }
     }
     Ok(())
 }
-/// The encodings of `equations`, for absorbing one list into several transcripts; computed in
-/// parallel with the `parallel` feature. Each is held as segments, in chunks of at most 32 KiB
-/// in which long runs of zero bytes, such as the codes of zero polynomials, are counts.
-pub(crate) fn encode_equations(equations: &[QuadEq]) -> Result<Vec<Segments>, Error> {
-    crate::par::try_map_min(equations.len(), 8, |i| equations[i].to_segments())
-}
-/// [`absorb_equations`] from the encodings of [`encode_equations`]: the same absorptions.
-pub(crate) fn absorb_encoded(transcript: &mut Transcript, label: &[u8], encoded: &[Segments]) {
-    transcript.absorb(label, &(encoded.len() as u64).to_le_bytes());
-    for encoding in encoded {
-        transcript.absorb_segments(b"equation", encoding);
-    }
-}
+/// Squeeze the folding challenge $`\mu`$, one ring element per equation with each coefficient
+/// by `DecodeUint` modulo $`q`$, and return $`\sum_i\mu_if_i`$ for the equations $`f_i`$.
 fn fold(
+    scheme: &Abdlop,
+    equations: &[QuadEq],
+    transcript: &mut Transcript,
+) -> Result<QuadEq, Error> {
+    let dim = quad::dimension(scheme);
+    for equation in equations {
+        equation.check(scheme.ring(), dim)?;
+    }
+    let weights = transcript.ring_elements(scheme.ring(), equations.len())?;
+    let mut folded = QuadEq::zero(scheme.ring().clone(), dim)?;
+    for (equation, weight) in equations.iter().zip(&weights) {
+        // In place: the keys and values of `folded.add(&equation.scale(weight)?)`.
+        folded.add_scaled_assign(equation, weight)?;
+    }
+    Ok(folded)
+}
+/// The transcript of the proof on its own, after its instance: the scheme, the commitment's
+/// serialization and the equations ([`absorb_equations`]).
+fn transcript(
     scheme: &Abdlop,
     commitment: &Commitment,
     equations: &[QuadEq],
     context: &[u8],
-) -> Result<(QuadEq, [u8; 32]), Error> {
-    let dim = 2 * (scheme.bounded_len() + scheme.message_len());
-    let mut prefix = scheme.prefix(commitment, context)?;
-    absorb_equations(&mut prefix, b"many-quadratics", equations)?;
-    let seed = prefix.challenge_seed(b"mu");
-    let mut folded = QuadEq::zero(scheme.ring().clone(), dim)?;
-    for (i, equation) in equations.iter().enumerate() {
-        equation.check(scheme.ring(), dim)?;
-        let index = u32::try_from(i + 1).map_err(|_| Error::Dimension)?;
-        let values = uniform_ring(
-            &mut AesPrg::new(&seed, domain(0x4d550000, index)),
-            scheme.ring(),
-            scheme.ring().degree(),
-        )?;
-        let weight = Poly::from_canonical(scheme.ring().clone(), values);
-        // In place: the keys and values of `folded.add(&equation.scale(&weight)?)`.
-        folded.add_scaled_assign(equation, &weight)?;
-    }
-    Ok((folded, prefix.digest()))
+) -> Result<Transcript, Error> {
+    let mut transcript = Transcript::new(Protocol::ManyQuadratic, context)?;
+    scheme.absorb_scheme(&mut transcript)?;
+    transcript.absorb(&scheme.commitment_bytes(commitment)?);
+    absorb_equations(&mut transcript, equations)?;
+    Ok(transcript)
 }
 /// Prove all equations after checking the original witness against every equation.
 ///
@@ -109,16 +108,21 @@ pub(crate) fn prove_seeded(
     context: &[u8],
     seed: &Zeroizing<[u8; 32]>,
 ) -> Result<QuadProof, Error> {
-    Ok(prove_seeded_ext(scheme, commitment, opening, equations, context, seed, None)?.0)
+    let transcript = transcript(scheme, commitment, equations, context)?;
+    Ok(prove_in(
+        scheme, commitment, opening, equations, transcript, seed, None,
+    )?
+    .0)
 }
-/// [`prove_seeded`] with the extractable commitment beside the final opening when `ext` is
-/// given, returning the accepted attempt's LinHC opening too.
-pub(crate) fn prove_seeded_ext(
+/// The proof in `transcript`, positioned before the folding challenge, with the extractable
+/// commitment beside the final opening when `ext` is given, returning the accepted attempt's
+/// LinHC opening too.
+pub(crate) fn prove_in(
     scheme: &Abdlop,
     commitment: &Commitment,
     opening: &Opening,
     equations: &[QuadEq],
-    context: &[u8],
+    mut transcript: Transcript,
     seed: &Zeroizing<[u8; 32]>,
     ext: Option<&linhc::ProverExt<'_>>,
 ) -> Result<(QuadProof, Option<linhc::LinhcOpening>), Error> {
@@ -130,8 +134,16 @@ pub(crate) fn prove_seeded_ext(
             false => Err(Error::Witness),
         }
     })?;
-    let (equation, binding) = fold(scheme, commitment, equations, context)?;
-    quad::prove_seeded_ext(scheme, commitment, opening, &equation, &binding, seed, ext)
+    let equation = fold(scheme, equations, &mut transcript)?;
+    quad::prove_in(
+        scheme,
+        commitment,
+        opening,
+        &equation,
+        &transcript,
+        seed,
+        ext,
+    )
 }
 /// Verify the folded proof, deriving fresh coefficients from the full public statement.
 pub fn verify(
@@ -141,17 +153,19 @@ pub fn verify(
     proof: &QuadProof,
     context: &[u8],
 ) -> Result<(), Error> {
-    verify_ext(scheme, commitment, equations, proof, context, None)
+    let transcript = transcript(scheme, commitment, equations, context)?;
+    verify_in(scheme, commitment, equations, proof, transcript, None)
 }
-/// [`verify`] with the extractable commitment's checks when `ext` is given.
-pub(crate) fn verify_ext(
+/// [`verify`] in `transcript`, as [`prove_in`] proves, with the extractable commitment's checks
+/// when `ext` is given.
+pub(crate) fn verify_in(
     scheme: &Abdlop,
     commitment: &Commitment,
     equations: &[QuadEq],
     proof: &QuadProof,
-    context: &[u8],
+    mut transcript: Transcript,
     ext: Option<&linhc::VerifierExt<'_>>,
 ) -> Result<(), Error> {
-    let (equation, binding) = fold(scheme, commitment, equations, context)?;
-    quad::verify_ext(scheme, commitment, &equation, proof, &binding, ext)
+    let equation = fold(scheme, equations, &mut transcript)?;
+    quad::verify_in(scheme, commitment, &equation, proof, &transcript, ext)
 }

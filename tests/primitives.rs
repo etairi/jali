@@ -8,7 +8,6 @@ use jali::{
         reject::{self, Policy, Variance},
         uniform, uniform_u256, within_eta,
     },
-    transcript::Transcript,
 };
 use serde_json::Value;
 
@@ -184,6 +183,55 @@ fn python_challenge_known_answers() {
         redrawn += usize::from(norms.len() > 1);
     }
     assert_eq!((items.len(), redrawn), (8, 4));
+}
+
+#[test]
+fn python_challenge_from_bytes_known_answers() {
+    // `challenge_from_bytes` on 4032 bytes of SHAKE128(b"jali challenge kat" || seed ||
+    // LE32(index)), as the Python oracle decodes them: the challenge, whose l1 norm of
+    // (sigma_{-1}(c) c)^32 is the oracle's last norm. Per degree: indices 0 and 1, the first two
+    // indices whose first draw is rejected, and the fallback to 1 on bytes 0xff.
+    use shake::{ExtendableOutput, Shake128, Update, XofReader};
+    let kat = vectors();
+    let seed = hex::decode(kat["seed"].as_str().unwrap()).unwrap();
+    let items = kat["challenges_from_bytes"].as_array().unwrap();
+    let (mut redrawn, mut fallbacks) = (0, 0);
+    for item in items {
+        let d = item["degree"].as_u64().unwrap() as usize;
+        let omega = i128::from(item["omega"].as_i64().unwrap());
+        let eta = item["eta"].as_u64().unwrap();
+        let bytes = match item["index"].as_u64() {
+            Some(index) => {
+                let mut h = Shake128::default();
+                h.update(b"jali challenge kat");
+                h.update(&seed);
+                h.update(&(index as u32).to_le_bytes());
+                let mut out = vec![0u8; jali::rand::CHALLENGE_BYTES];
+                h.finalize_xof().read(&mut out);
+                out
+            }
+            None => vec![0xff; jali::rand::CHALLENGE_BYTES],
+        };
+        let norms = item["norms"].as_array().unwrap();
+        let ring = Ring::new(1099511627917, d).unwrap();
+        let c = jali::rand::challenge_from_bytes(&bytes, ring, omega, eta).unwrap();
+        let expected: Vec<i128> = item["challenge"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| i128::from(x.as_i64().unwrap()))
+            .collect();
+        assert_eq!(*c.coefficients_i128().unwrap(), expected, "{item}");
+        match norms.last() {
+            Some(norm) => assert_eq!(
+                eta_norm_power(&c).unwrap(),
+                U1024::from_str_radix_vartime(norm.as_str().unwrap(), 10).unwrap()
+            ),
+            None => fallbacks += 1,
+        }
+        redrawn += usize::from(norms.len() > 1);
+    }
+    assert_eq!((items.len(), redrawn, fallbacks), (10, 4, 2));
 }
 
 #[test]
@@ -550,56 +598,78 @@ fn zero_proof(scheme: &jali::abdlop::Abdlop, p: &jali::params::TboxParams) -> ja
         },
     }
 }
-/// A hand-written encoding of a zero proof. Polynomials always hold coefficients reduced into
-/// $`(-q/2,q/2]`$, so values outside the decoders' ranges exist only as bit strings: `t_a0`
-/// replaces the first coefficient of $`t_A`$ and `z` the first Gaussian response coefficient,
-/// of $`z^{(d)}`$ for a toolbox proof and of $`z_1`$ for an opening proof. The field order is
-/// that of `codec::proof::encode` and `Abdlop::encode_proof`.
+/// Raw codes that a hand-written proof puts in place of the first coefficient of a field.
+#[derive(Clone, Copy, Default)]
+struct Codes {
+    /// The first coefficient of $`t_A`$, in $`\mathrm{bitlen}(q-1)-D`$ bits.
+    t_a0: u128,
+    /// The code of the first response coefficient, of $`z^{(d)}`$ for a toolbox proof and of
+    /// $`z_1`$ for an opening proof, in place of the code of zero.
+    z: Option<u128>,
+    /// The code of the challenge's first coefficient, in place of that of zero.
+    c0: Option<u128>,
+    /// The code of the first hint, in place of that of zero.
+    h0: Option<u128>,
+}
+/// A hand-written encoding of a zero proof in the NARG layout of `docs/encodings.md`.
+/// Polynomials always hold coefficients reduced into $`(-q/2,q/2]`$, so values outside the
+/// decoders' ranges exist only as bit strings: `codes` replaces the first coefficient of some
+/// fields. The field order is that of `codec::proof::encode` and `Abdlop::encode_proof`.
 fn zero_bytes(
     scheme: &jali::abdlop::Abdlop,
     p: &jali::params::TboxParams,
     toolbox: bool,
-    t_a0: u128,
-    z: i128,
+    codes: Codes,
 ) -> Vec<u8> {
     let c = p.check().unwrap();
     let ring = scheme.ring();
-    let (q, d) = (common::narrow(&ring.modulus()), p.degree);
+    let d = p.degree;
+    let k_q = 128 - (common::narrow(&ring.modulus()) - 1).leading_zeros();
     let e = if c.n_ex > 0 { 256 / d } else { 0 };
     let ds = if p.n_prime > 0 { 256 / d } else { 0 };
     let g = c.lambda / 2;
     let mut w = BitWriter::new();
-    let mut gaussians = vec![
-        (scheme.bounded_len(), p.log_sigma[0]),
-        (p.m2 - p.n_msis, p.log_sigma[1]),
-    ];
+    // The signed code of zero in `width` bits, or the replacement of the first coefficient.
+    let signed = |w: &mut BitWriter, n: usize, width: u32, first: Option<u128>| {
+        let zero = (1u128 << (width - 1)) - 1;
+        for j in 0..n {
+            w.unsigned(if j == 0 { first.unwrap_or(zero) } else { zero }, width)
+                .unwrap();
+        }
+    };
     if toolbox {
-        for _ in 0..(p.l + e + ds + 1 + g + 1 + g) * d {
-            w.uniform(0, q).unwrap();
-        }
-        let high_mod = 1u128 << (ring.coefficient_bits() - p.d_bits);
-        w.uniform(t_a0, high_mod).unwrap();
+        let k_a = ring.coefficient_bits() - p.d_bits;
+        w.unsigned(codes.t_a0, k_a).unwrap();
         for _ in 1..p.n_msis * d {
-            w.uniform(0, high_mod).unwrap();
+            w.unsigned(0, k_a).unwrap();
         }
-        gaussians.extend([(e, p.log_sigma[2]), (ds, p.log_sigma[3])]);
+        for _ in 0..(p.l + e + ds + 1) * d {
+            w.unsigned(0, k_q).unwrap();
+        }
+        signed(&mut w, e * d, p.log_sigma[2] + 4, None);
+        signed(&mut w, ds * d, p.log_sigma[3] + 4, codes.z);
+        for _ in 0..(2 * g + 1) * d {
+            w.unsigned(0, k_q).unwrap();
+        }
     }
     let omega = c.omega as u128;
-    for _ in 0..d {
-        w.uniform(omega, 2 * omega + 1).unwrap();
+    let k_c = 128 - (2 * omega).leading_zeros();
+    for j in 0..d / 2 {
+        w.unsigned(
+            if j == 0 {
+                codes.c0.unwrap_or(omega)
+            } else {
+                omega
+            },
+            k_c,
+        )
+        .unwrap();
     }
-    for _ in 0..p.n_msis * d {
-        w.hint(0, 1 << 20).unwrap();
-    }
-    // The coefficient to replace: the first of z_approx, or the first of z1.
-    let target = if toolbox { 3 } else { 0 };
-    for (i, (len, t)) in gaussians.into_iter().enumerate() {
-        for j in 0..len * d {
-            let value = if i == target && j == 0 { z } else { 0 };
-            w.gaussian(value, t, 1 << 20).unwrap();
-        }
-    }
-    w.finish()
+    let z1 = if toolbox { None } else { codes.z };
+    signed(&mut w, scheme.bounded_len() * d, p.log_sigma[0] + 4, z1);
+    signed(&mut w, (p.m2 - p.n_msis) * d, p.log_sigma[1] + 4, None);
+    signed(&mut w, p.n_msis * d, c.hint_width, codes.h0);
+    w.into_bytes().unwrap()
 }
 
 #[test]
@@ -611,9 +681,8 @@ fn proof_decoders_enforce_value_ranges() {
         math::PolyVec,
         statement::Requirements,
     };
-    // Wide Gaussians (log_sigma[0] = 21 and [3] = 29 at a 40-bit q) give a coefficient just
-    // above q/2 a Gaussian code within the unary limit, so the decoders' range checks, not that
-    // limit, refuse it. Fitted by the test port of the parameter tool.
+    // A set with wide Gaussians (log_sigma[0] = 21 and [3] = 29 at a 40-bit q), whose response
+    // codes of 25 and 33 bits stay below q/2, fitted by the test port of the parameter tool.
     let req = Requirements {
         m1: 10,
         l: 1,
@@ -633,62 +702,109 @@ fn proof_decoders_enforce_value_ranges() {
     let scheme = Abdlop::new([3; 32], p.clone()).unwrap();
     let ring = scheme.ring().clone();
     let q = common::modulus(&ring);
-    let omega = p.check().unwrap().omega;
+    let checked = p.check().unwrap();
+    let omega = checked.omega;
     let high_max = common::narrow(
         &Compression::new(q, i128::from(p.gamma), p.d_bits)
             .unwrap()
             .power2round(&U256::from_u128((q - 1) as u128))
             .0,
     );
-    // The hand-written encoder agrees with both encoders on zero proofs.
+    // The hand-written encoder agrees with both encoders on zero proofs, and the encoding's
+    // length is the set's exact proof size.
     let proof = zero_proof(&scheme, &p);
-    assert_eq!(
-        zero_bytes(&scheme, &p, true, 0, 0),
-        encode(&scheme, &proof).unwrap()
-    );
+    let zero = zero_bytes(&scheme, &p, true, Codes::default());
+    assert_eq!(zero, encode(&scheme, &proof).unwrap());
+    assert_eq!(zero.len(), checked.estimated_proof_bytes);
     let opening = proof.evaluation.quadratic.opening.clone();
     assert_eq!(
-        zero_bytes(&scheme, &p, false, 0, 0),
+        zero_bytes(&scheme, &p, false, Codes::default()),
         scheme.encode_proof(&opening).unwrap()
     );
     // t_A: high_max decodes, high_max + 1 does not.
-    let decoded = decode(&scheme, &zero_bytes(&scheme, &p, true, high_max, 0)).unwrap();
+    let codes = |t_a0| Codes {
+        t_a0,
+        ..Codes::default()
+    };
+    let decoded = decode(&scheme, &zero_bytes(&scheme, &p, true, codes(high_max))).unwrap();
     assert_eq!(
         decoded.commitment.t_a.entries()[0].coefficient_i128(0),
         Ok(high_max as i128)
     );
     assert_eq!(
-        decode(&scheme, &zero_bytes(&scheme, &p, true, high_max + 1, 0)).err(),
+        decode(&scheme, &zero_bytes(&scheme, &p, true, codes(high_max + 1))).err(),
         Some(Error::Encoding)
     );
-    // Responses: |z| <= (q - 1) / 2 decodes, one more does not, in either decoder.
-    let half = q / 2;
-    for (z, ok) in [
-        (half, true),
-        (-half, true),
-        (half + 1, false),
-        (-half - 1, false),
-    ] {
-        let toolbox = decode(&scheme, &zero_bytes(&scheme, &p, true, 0, z));
-        let opening = scheme.decode_proof(&zero_bytes(&scheme, &p, false, 0, z));
-        if ok {
-            assert_eq!(
-                toolbox.unwrap().z_approx.entries()[0].coefficient_i128(0),
-                Ok(z)
+    // Responses: the codes 0 and 2b of a width w, b = 2^(w-1) - 1, decode to b and -b, and the
+    // last code 2b + 1 does not decode, in either decoder.
+    for (toolbox, t) in [(true, p.log_sigma[3]), (false, p.log_sigma[0])] {
+        let b = (1u128 << (t + 3)) - 1;
+        assert!(b < (q / 2) as u128, "the width keeps responses below q/2");
+        for (code, value) in [
+            (0, Some(b as i128)),
+            (2 * b, Some(-(b as i128))),
+            (2 * b + 1, None),
+        ] {
+            let bytes = zero_bytes(
+                &scheme,
+                &p,
+                toolbox,
+                Codes {
+                    z: Some(code),
+                    ..Codes::default()
+                },
             );
-            assert_eq!(opening.unwrap().z1.entries()[0].coefficient_i128(0), Ok(z));
-        } else {
-            assert_eq!(toolbox.err(), Some(Error::Encoding), "{z}");
-            assert_eq!(opening.err(), Some(Error::Encoding), "{z}");
+            let first = if toolbox {
+                decode(&scheme, &bytes).map(|x| x.z_approx.entries()[0].clone())
+            } else {
+                scheme
+                    .decode_proof(&bytes)
+                    .map(|x| x.z1.entries()[0].clone())
+            };
+            match value {
+                Some(value) => assert_eq!(first.unwrap().coefficient_i128(0), Ok(value)),
+                None => assert_eq!(first.err(), Some(Error::Encoding), "{toolbox}"),
+            }
         }
     }
+    // The challenge: the code 2 omega decodes to -omega, 2 omega + 1 does not. Hints: the code
+    // 2b of the hint width decodes, 2b + 1 does not.
+    let omega_code = 2 * omega as u128;
+    let hint_code = 2 * ((1u128 << (checked.hint_width - 1)) - 1);
+    for (c0, h0, ok) in [
+        (Some(omega_code), None, true),
+        (Some(omega_code + 1), None, false),
+        (None, Some(hint_code), true),
+        (None, Some(hint_code + 1), false),
+    ] {
+        let bytes = zero_bytes(
+            &scheme,
+            &p,
+            false,
+            Codes {
+                c0,
+                h0,
+                ..Codes::default()
+            },
+        );
+        assert_eq!(scheme.decode_proof(&bytes).is_ok(), ok, "{c0:?} {h0:?}");
+    }
+    // Exact length: a byte more or a byte less does not decode.
+    let mut longer = zero.clone();
+    longer.push(0);
+    assert_eq!(decode(&scheme, &longer).err(), Some(Error::Encoding));
+    assert_eq!(
+        decode(&scheme, &zero[..zero.len() - 1]).err(),
+        Some(Error::Encoding)
+    );
     // Inputs above 16 MiB are refused. Parsing would refuse this one too, so the cap itself
     // is tested at its boundary by the unit test of `codec::proof_reader`, which both
     // decoders call.
     let huge = vec![0u8; 16 * 1024 * 1024 + 1];
     assert_eq!(decode(&scheme, &huge).err(), Some(Error::Encoding));
     assert_eq!(scheme.decode_proof(&huge).err(), Some(Error::Encoding));
-    // Encoders refuse t_A above high_max and challenge coefficients above omega.
+    // Encoders refuse t_A above high_max, challenge coefficients above omega, and responses
+    // beyond their width.
     let mut bad = proof.clone();
     let mut t_a = bad.commitment.t_a.entries().to_vec();
     t_a[0].set_coefficient(0, high_max as i128 + 1).unwrap();
@@ -705,6 +821,11 @@ fn proof_decoders_enforce_value_ranges() {
         scheme.encode_proof(&bad.evaluation.quadratic.opening).err(),
         Some(Error::Encoding)
     );
+    let mut bad = proof.clone();
+    let mut z1 = bad.evaluation.quadratic.opening.z1.entries().to_vec();
+    z1[0].set_coefficient(0, 1 << (p.log_sigma[0] + 3)).unwrap();
+    bad.evaluation.quadratic.opening.z1 = PolyVec::new(ring.clone(), z1).unwrap();
+    assert_eq!(encode(&scheme, &bad).err(), Some(Error::Encoding));
 }
 
 #[test]
@@ -774,7 +895,7 @@ fn gaussians_follow_the_discrete_gaussian_at_small_widths() {
 }
 
 #[test]
-fn challenge_symmetry_and_transcript_binding() {
+fn challenge_symmetry() {
     for d in [64, 128] {
         let c = autostable(
             &mut AesPrg::new(&[12; 32], 0),
@@ -786,12 +907,6 @@ fn challenge_symmetry_and_transcript_binding() {
         assert_eq!(c.coefficient_i128(d / 2), Ok(0));
         assert!(c.norm_infinity() <= U256::from_u8(8));
     }
-    let mut a = Transcript::new(b"quad", b"params", &[0; 32], b"statement");
-    let mut b = a.clone();
-    a.absorb(b"h", b"abc");
-    b.absorb(b"ha", b"bc");
-    assert_ne!(a.challenge_seed(b"mu"), b.challenge_seed(b"mu"));
-    assert_ne!(a.challenge_seed(b"mu"), a.challenge_seed(b"gamma"));
 }
 
 #[test]

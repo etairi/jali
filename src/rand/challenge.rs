@@ -124,6 +124,89 @@ pub fn challenge(
     Err(Error::Randomness)
 }
 
+/// The bytes that the proofs squeeze for one challenge and [`challenge_from_bytes`] decodes: 24
+/// blocks of the SHAKE128 rate, 4032 bytes. For the two challenge sets of the parameter check,
+/// $`(d,\omega)=(64,8)`$ and $`(128,2)`$, they hold no draw within $`\eta`$ with probability at
+/// most $`2^{-210.9}`$ and $`2^{-208.0}`$ on uniform bytes if at most a quarter of the draws fail
+/// the $`\eta`$ test, and at most $`2^{-582}`$ if a fiftieth do (exact rational computation in
+/// Sage over the binomial law of the kept words). About 1% of draws fail it.
+pub const CHALLENGE_BYTES: usize = 24 * 168;
+
+/// The challenge decoded from the fixed-length byte string `bytes`, the decoding of the
+/// proofs' challenge from [`CHALLENGE_BYTES`] squeezed bytes.
+///
+/// The bytes are read as $`k`$-bit words, $`k=\mathrm{bitlen}(2\omega)`$, least significant bit
+/// first (word $`i`$ is bits $`ik`$ to $`ik+k-1`$, bit $`j`$ being bit $`j\bmod8`$ of byte
+/// $`\lfloor j/8\rfloor`$), and the bits after the last whole word are not read. A word $`w`$
+/// below $`2\omega+1`$ is kept as the coefficient $`w-\omega`$, the others are skipped. Each
+/// $`d/2`$ kept coefficients in order are one draw, the coefficients $`0`$ to $`d/2-1`$ of a
+/// $`\sigma_{-1}`$-stable polynomial ([`autostable`]'s form: coefficient $`d/2`$ zero,
+/// coefficient $`d-i`$ minus coefficient $`i`$), and the first draw [`within_eta`] is the
+/// challenge. If no draw in `bytes` is within $`\eta`$, the result is the constant 1, which is
+/// in the challenge set.
+///
+/// On uniform bytes the result is uniform on the challenge set except for the weight of that
+/// fallback, so the decoding's bias is the probability that no draw in `bytes` is within
+/// $`\eta`$. The decoding is infallible on every byte string: the errors are the parameter
+/// refusals of [`challenge`] ($`\omega<1`$, $`\omega\ge q/2`$, $`(d-1)\omega>2^{15}`$,
+/// $`\eta\ge2^{16}`$), which depend on no byte.
+pub fn challenge_from_bytes(
+    bytes: &[u8],
+    ring: Arc<Ring>,
+    omega: i128,
+    eta: u64,
+) -> Result<Poly, Error> {
+    let powers = eta_powers(eta)?;
+    if omega < 1 || crate::math::U256::from_u128(omega as u128) >= ring.half {
+        return Err(Error::Parameter("challenge bound"));
+    }
+    let largest = (ring.degree() as u128)
+        .saturating_sub(1)
+        .checked_mul(omega as u128);
+    if largest.is_none_or(|l1| l1 > MAX_L1) {
+        return Err(Error::Parameter("challenge norm capacity"));
+    }
+    let k = 128 - ((2 * omega) as u128).leading_zeros();
+    let half = ring.degree() / 2;
+    let mut first = Vec::with_capacity(half);
+    for i in 0..bytes.len() * 8 / k as usize {
+        let w = super::bits(bytes, i * k as usize, k) as i128;
+        if w > 2 * omega {
+            continue;
+        }
+        first.push(w - omega);
+        if first.len() == half {
+            let c = Poly::new(ring.clone(), stable(&first, 0i128, |x| -x))?;
+            if decide(&c, &powers)? {
+                return Ok(c);
+            }
+            first.clear();
+        }
+    }
+    Ok(Poly::constant(ring, 1))
+}
+
+/// Test only: every whole draw of [`challenge_from_bytes`] in `bytes`, in order, before any
+/// $`\eta`$ test.
+#[cfg(test)]
+pub(crate) fn draws_from_bytes(bytes: &[u8], ring: Arc<Ring>, omega: i128) -> Vec<Poly> {
+    let k = 128 - ((2 * omega) as u128).leading_zeros();
+    let half = ring.degree() / 2;
+    let mut draws = Vec::new();
+    let mut first = Vec::with_capacity(half);
+    for i in 0..bytes.len() * 8 / k as usize {
+        let w = super::bits(bytes, i * k as usize, k) as i128;
+        if w <= 2 * omega {
+            first.push(w - omega);
+        }
+        if first.len() == half {
+            draws.push(Poly::new(ring.clone(), stable(&first, 0i128, |x| -x)).unwrap());
+            first.clear();
+        }
+    }
+    draws
+}
+
 /// The norms $`N_j=\|u^{2^{j-1}}\|_1`$ of the powers of $`u=\sigma_{-1}(c)c`$ for $`j=1`$ to 6,
 /// in order, each passed to `stop` with its $`j`$ once computed. The computation ends after the
 /// first $`j`$ for which `stop` returns true, or after $`j=6`$, and returns that $`N_j`$. Fails

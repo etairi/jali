@@ -22,7 +22,7 @@ fn frequency_below(scheme: &Abdlop, w: &[i128], seeds: u8) -> (f64, usize) {
             256,
         )
         .unwrap();
-        let v = projections(&seed, false, w).unwrap();
+        let v = projections(&Projections::for_tests(&seed, w.len(), w.len()), false, w).unwrap();
         let count = v
             .iter()
             .zip(&y)

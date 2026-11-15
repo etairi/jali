@@ -231,7 +231,7 @@ def check_params(p, capacity=CAPACITY):
     if any(t > capacity["log_sigma"] for t in ls):
         raise RustCheckError("Gaussian width capacity")
     lam = rust_lambda(f[0])
-    omega, eta, challenge_bits = CHALLENGE[d]
+    omega, eta, _ = CHALLENGE[d]
     n_ex = p["n_bin"] + sum(p["l2_rows"]) + z
     if len(f) > 1 and (n_ex > 0 or p["n_prime"] > 0):
         raise RustCheckError("binary, exact-norm and range blocks require a prime modulus")
@@ -287,17 +287,21 @@ def check_params(p, capacity=CAPACITY):
                   "exact norm lifting bound")
             c.mark_float()
     log_q = (q - 1).bit_length()
+    hw = hint_width(s2, d, omega, d_bits, gamma)
+    if hw > 127:
+        raise RustCheckError("hint width")
+    # The exact length of a proof: every field has a fixed width (codec C1 of the crate).
+    k_c = (2 * omega).bit_length()
 
-    def gaussian_bits(s):
-        return math.ceil(math.log2(s) + 2.5)
-    bits = nd * float(log_q - d_bits) \
-        + float((p["l"] + l_ext + lam // 2) * d) * float(log_q) \
-        + float(challenge_bits * d) \
-        + float((p["m1"] + z) * d) * gaussian_bits(s1) \
-        + float((p["m2"] - p["n_msis"]) * d) * gaussian_bits(s2) \
-        + float(exact_slots * d) * gaussian_bits(s3) \
-        + float(approx_slots * d) * gaussian_bits(s4) \
-        + hint_bits(s2, gamma) * nd
+    def width(t):
+        return t + 4
+    bits = p["n_msis"] * d * (log_q - d_bits) \
+        + (p["l"] + exact_slots + approx_slots + 1) * d * log_q \
+        + exact_slots * d * width(ls[2]) + approx_slots * d * width(ls[3]) \
+        + lam * d * log_q + d * log_q + d // 2 * k_c \
+        + (p["m1"] + z) * d * width(ls[0]) + (p["m2"] - p["n_msis"]) * d * width(ls[1]) \
+        + p["n_msis"] * d * hw
+    assert bits % 8 == 0
     z1 = (961 << (2 * ls[0])) * (2 * (p["m1"] + z) * d) // 400
     z3 = ((656 * 656 * 961) << (2 * ls[2])) // 250000
     if max(z1, z3, 2 * z4_bound) >= 1 << 128:
@@ -311,21 +315,24 @@ def check_params(p, capacity=CAPACITY):
         "approx_alpha_squared": approx_alpha_sq, "approx_extraction_bound": 2 * z4_bound,
         "rejection_M1": rej1, "rejection_M2": rej2,
         "range_rejection_M3": m3, "range_rejection_M4": m4,
-        "estimated_proof_bytes": math.ceil(bits / 8.0),
+        "estimated_proof_bytes": bits // 8, "hint_width": hw,
         "rns_primes_required": rns_primes_required(q, d),
     }
     c.floats = {"arp_bound": arp, "msis_delta": msis_delta}
     return derived, c
 
 
-def hint_bits(sigma2, gamma):
-    """Bits per hint coefficient of the size estimate, as `params::hint_bits`:
-    $`\\max(2.25,1.6s+0.7)`$ for $`s=\\sigma_2/\\gamma`$, an upper bound on the expected hint
-    length when $`z_{22}/\\gamma`$ is a normal of deviation $`s`$ plus a uniform rounding error;
-    2.25 bits is the average that LNP22 Section 6.1 takes from the Dilithium paper (Ducas et
-    al., ePrint 2017/633) for hints in $`\\{-1,0,1\\}`$. Division, product and sum are correctly
-    rounded in both languages, so the double is Rust's bit for bit."""
-    return max(2.25, 1.6 * (sigma2 / float(gamma)) + 0.7)
+def hint_width(sigma2, d, omega, d_bits, gamma):
+    """The width of the hints' fixed-width code, as `params::hint_width`: $`1+\\mathrm{bitlen}(H)`$
+    bits for $`H=\\max(1,\\lceil9s\\rceil)`$ and
+    $`s=\\sqrt{\\sigma_2^2+(d-1)\\omega^2(1+4^{D-1}/3)}/\\gamma`$. Products, sums, the
+    quotient, the square root and the ceiling are correctly rounded in both languages, and the
+    power of two is exact, so the width is Rust's."""
+    challenge = (float(d) - 1.0) * float(omega * omega)
+    moments = 1.0 + 2.0 ** (2 * d_bits - 2) / 3.0
+    s = math.sqrt(sigma2 * sigma2 + challenge * moments) / float(gamma)
+    h = max(int(math.ceil(9.0 * s)), 1)
+    return 1 + h.bit_length()
 
 
 def rejection_constants(p, eta):

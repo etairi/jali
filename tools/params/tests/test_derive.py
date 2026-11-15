@@ -561,7 +561,7 @@ class Refusals(unittest.TestCase):
         p, rep = cli.derive_request(json.dumps(r), what_if=False, compare=False)
         got = jsonio.load_params(p)
         self.assertTrue(1 << 45 <= got["prime_factors"][0] < 1 << 46)
-        self.assertEqual((got["gamma"], rep["summary"]["estimated_proof_bytes"]), (131070, 21926))
+        self.assertEqual((got["gamma"], rep["summary"]["estimated_proof_bytes"]), (131070, 21876))
         steps = [s for t in rep["modulus"]["search"] for s in t["steps"]]
         over = [s for s in steps if s.get("event", "").startswith("capacity")]
         self.assertEqual([s["gamma"] for s in over], [524286])
@@ -579,12 +579,12 @@ class Refusals(unittest.TestCase):
         got = jsonio.load_params(p)
         self.assertEqual((got["prime_factors"], got["gamma"], got["d_bits"]),
                          ([18446744073723182029], 524286, 10))
-        self.assertEqual(rep["summary"]["estimated_proof_bytes"], 24438)
+        self.assertEqual(rep["summary"]["estimated_proof_bytes"], 24396)
         by_bits = {t["bits"]: t for t in rep["modulus"]["search"]}
         shipped = jsonio.load_params((common.TOOL / "sets" / "demo.json").read_text())
         at61 = by_bits[61]
         self.assertEqual((jsonio.decode_int(at61["q"]), at61["estimated_proof_bytes"]),
-                         (shipped["prime_factors"][0], 24814))
+                         (shipped["prime_factors"][0], 24772))
         last = by_bits[65]["steps"]
         self.assertEqual(last[0]["gamma"], 1048574)
         self.assertIn("exceeds the request's max_bits (q < 2^65)", last[0]["event"])

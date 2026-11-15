@@ -21,6 +21,8 @@ include = [
     "/examples",
     "/benches",
     "/kat/primitives.json",
+    "/kat/ietf/fiat-shamir-04.json",
+    "/kat/ietf/README.md",
     "/docs/katex-header.html",
     "/README.md",
     "/LICENSE",

@@ -21,7 +21,7 @@ fn fixture() -> Fixture {
     )
     .unwrap();
     let (commitment, opening) = scheme.commit_with_seed(s1, m, [92; 32]).unwrap();
-    let prefix = scheme.prefix(&commitment, b"coins").unwrap();
+    let prefix = scheme.opening_transcript(&commitment, b"coins").unwrap();
     (scheme, commitment, opening, prefix)
 }
 
@@ -93,7 +93,7 @@ fn coins(first: &U256, second: &U256) -> [u8; OPENING_COIN_BYTES] {
 fn an_attempt_decides_with_two_whole_256_bit_coins_in_order() {
     let f = fixture();
     let (scheme, _, opening, prefix) = &f;
-    let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.digest(), &[5; 32]);
+    let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.binding(), &[5; 32]);
     let constants = scheme.rejection_constants().unwrap();
     let challenge = |_: &PolyVec,
                      _: &PolyVec,
@@ -156,7 +156,7 @@ fn attempt_a_reads_bytes_64a_to_64a_plus_63_of_the_coin_stream() {
                 commitment,
                 opening,
                 Caller::Opening,
-                &prefix.digest(),
+                &prefix.binding(),
                 &Zeroizing::new([seed; 32]),
                 secret::MAX_ATTEMPTS,
                 1,
@@ -164,7 +164,7 @@ fn attempt_a_reads_bytes_64a_to_64a_plus_63_of_the_coin_stream() {
             )
             .unwrap();
         // The sequential loop, reading 64 coin bytes per attempt.
-        let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.digest(), &[seed; 32]);
+        let key = Abdlop::opening_key(opening, Caller::Opening, &prefix.binding(), &[seed; 32]);
         let mut stream = AesPrg::new(&key, domain(secret::OPENING_COINS, 0));
         let plain =
             |y1: &PolyVec,

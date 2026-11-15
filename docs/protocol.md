@@ -339,14 +339,12 @@ Every proof, at every layer, takes an application `context: &[u8]`, and verifica
 given the same bytes. The empty context is allowed. Use it for what the proof must be bound to
 besides the statement, such as a session identifier, a verifier's nonce or a protocol tag.
 
-Every transcript starts in `transcript::Transcript::new`, which absorbs, each length-framed, the
-protocol label, the parameters, the public seed and a field under the label `statement`. The
-lower layers (`Abdlop`, `quad`, `quad_many`, `quad_eval`) pass the context as that field, so it
-is absorbed before the commitment and the equations. The toolbox (`tbox`, `Prover` and
-`Verifier`, `Compiled`) passes its version tag `LNP22-toolbox-v3` there instead and absorbs the
-context under the label `application-context` right after the commitment and before the
-equations, so the range-projection challenge and every later challenge depend on it. Its inner
-evaluation proof takes the transcript digest after the range responses as its context.
+Every proof runs one transcript, the duplex sponge of draft-irtf-cfrg-fiat-shamir-04 over
+SHAKE128 ([encodings](encodings.md#transcript)). The context is part of the session identifier:
+the tag is the proof's ASCII tag, then $`\mathrm{LE32}(|ctx|)\,\|\,ctx`$, so every
+challenge of the proof, the first included, depends on it. The inner layers of the toolbox
+(the evaluation, many-equation and quadratic proofs) continue the toolbox's transcript and take
+no context of their own. A context has fewer than $`2^{32}`$ bytes.
 
 ## Seeds
 
@@ -358,9 +356,9 @@ random stream under those keys, one domain per purpose:
 | Randomness | Key inputs besides the seed |
 | --- | --- |
 | Commitment of `Abdlop::commit_with_seed` | parameters, public seed, bounded witness, messages |
-| Masks and coins of the opening proof, also inside `quad`, `quad_many` and `quad_eval` | caller (`Abdlop` or `quad`), transcript digest before the first prover message (parameters, public seed, context, commitment, equations), opening |
-| Garbage polynomials of `quad_eval` | transcript digest before the garbage is committed, opening |
-| Toolbox (`tbox`, `Prover`, `Compiled`): its commitment, range masks, signs, coins and the seed of its evaluation proof | parameters, public seed, statement, context, witness |
+| Masks and coins of the opening proof, also inside `quad`, `quad_many` and `quad_eval` | caller (`Abdlop` or `quad`), binding of the transcript before the first prover message (context, parameters, public seed, statement, earlier messages), opening |
+| Garbage polynomials of `quad_eval` | binding of the transcript before the garbage is committed, opening |
+| Toolbox (`tbox`, `Prover`, `Compiled`): its commitment, range masks, signs, coins and the seed of its evaluation proof | binding of the transcript after the instance (context, parameters, public seed, statement), witness |
 
 Identical calls therefore return identical outputs, and calls that differ in any input read
 independent randomness. The independence is computational: it assumes that SHAKE128, keyed by
@@ -385,8 +383,8 @@ with their seeded and byte variants, run the toolbox with Katsumata's transform 
 full version ePrint 2021/927). An extractable linear homomorphic commitment (LinHC, the MLWE
 construction of its Sec. 3.4) sits beside the final opening proof, so that an extractor that
 holds a trapdoor of the LinHC key recovers the committed witness from one proof, without
-rewinding. The plain mode is unchanged and its proofs are the same bytes as before. Each call
-takes an `ExtractionParams` for the parameter set ([parameters](parameters.md#extraction-sets)).
+rewinding. Each call takes an `ExtractionParams` for the parameter set
+([parameters](parameters.md#extraction-sets)).
 
 **What is committed.** The final opening proof (Fig. 18, inside the quadratic proof that ends
 the evaluation proof) answers its challenge $`c`$ with $`z_1=y_1+cs_1`$ and $`z_{21}=y_{21}+cs_{21}`$.
@@ -402,29 +400,28 @@ verifier checks each $`z'_\ell`$ against $`2\dim_\ell\sigma'^2`$ and recomputes
 $`w'_1=p(Az'_1+z'_2)-ct_1`$ and $`w'_2=p(Bz'_1+z'_3)+(z_1\|z_{21})-ct_2`$. $`z_{22}`$ needs no
 commitment: an extractor rebuilds it from the fixed $`w_1`$ as the verifier does.
 
-**Transcript.** The extractable toolbox transcript starts as `Transcript::new` with the
-parameters, the public seed and the tag `LNP22-toolbox-sl-v1`, then absorbs the extraction set
-(`extraction-parameters`), the application context and the statement. Its challenge seed
-`linhc-key` expands $`A`$ and $`B`$ with SHAKE128, each entry from its own domain, so the LinHC
-key is a random-oracle output on the parameters, the extraction set, the context and the
-statement. The expansion is an extendable-output function, not AES-256-CTR as for the public
-matrices, because the extraction argument programs this oracle to a key with a trapdoor, which an
-expansion of a 32-byte seed by a PRG would not allow. Each range attempt then absorbs
-the toolbox commitment and $`(t_1,t_2)`$ (`linhc-commitment`) before the projection challenge,
-and continues as the plain mode does. The quadratic proof absorbs $`(w'_1,w'_2)`$
-(`linhc-mask-commitment`) after its first message $`(t,v)`$ and before $`w_1`$, so the challenge
-$`c`$ depends on it. Both LinHC pairs are absorbed in the uniform code modulo $`q'`$.
+**Transcript.** The extractable toolbox has its own tag, `JALI-V02-LNP22-TBOX-SL-C1-SHAKE128`
+with the context, and its instance ends with the extraction set. Its first verifier message is
+the LinHC key: $`A`$ and $`B`$ are squeezed from the sponge right after the instance, each
+coefficient by `DecodeUint` modulo $`q'`$, so the key is a random-oracle output on the context,
+the parameters, the statement and the extraction set. The extraction argument programs this
+oracle to a key with a trapdoor, which an expansion of a 32-byte seed by a PRG would not allow.
+The toolbox's first message then carries $`(t_1,t_2)`$ after the commitment, before the
+projection challenge, and the proof continues as the plain mode does. The quadratic proof's
+message carries $`(w'_1,w'_2)`$ after $`(t,v)`$ and before $`w_1`$, so the challenge $`c`$
+depends on it. Both LinHC pairs are serialized modulo $`q'`$
+([encodings](encodings.md#io-patterns)).
 
 **Randomness.** The mode reads its streams under keys of its own labels, so that no stream of the
 plain mode is read otherwise:
 
 | Randomness | Key label | Streams |
 | --- | --- | --- |
-| Toolbox commitment, range masks, signs, coins, evaluation seed | `tbox/proof-sl/v1` | as in the plain mode |
-| LinHC randomness $`s'_\ell`$ | `tbox/proof-sl/v1` | `(LINHC_COMMITMENT, i)` |
-| Opening masks and coins | `abdlop/opening-proof-sl/v1` | as in the plain mode |
-| LinHC masks of attempt $`a`$ | `abdlop/opening-proof-sl/v1` | words `LINHC_MASKS` $`+3a`$ to $`+3a+2`$ |
-| LinHC coin of attempt $`a`$ | `abdlop/opening-proof-sl/v1` | first 32 bytes of `(LINHC_COINS, a)` |
+| Toolbox commitment, range masks, signs, coins, evaluation seed | `tbox/proof-sl/v2` | as in the plain mode |
+| LinHC randomness $`s'_\ell`$ | `tbox/proof-sl/v2` | `(LINHC_COMMITMENT, i)` |
+| Opening masks and coins | `abdlop/opening-proof-sl/v2` | as in the plain mode |
+| LinHC masks of attempt $`a`$ | `abdlop/opening-proof-sl/v2` | words `LINHC_MASKS` $`+3a`$ to $`+3a+2`$ |
+| LinHC coin of attempt $`a`$ | `abdlop/opening-proof-sl/v2` | first 32 bytes of `(LINHC_COINS, a)` |
 
 An attempt's outcome is still a function of its key and index, so the `parallel` feature leaves
 the proof unchanged. The LinHC test is the standard one (`reject::accept`, `Policy::Standard`)
@@ -433,9 +430,11 @@ for $`\gamma=\sigma'/T`$, about 1.2 to 1.4 for the shipped sets.
 
 **Proof and encoding.** `tbox::ExtractableProof` holds the toolbox proof and
 $`t_1,t_2,z'_1,z'_2,z'_3`$. `codec::proof::encode_extractable` writes the toolbox proof's fields
-as `encode` does, then $`t_1,t_2`$ in the uniform code modulo $`q'`$ and the openings in the
-Gaussian code of width $`1.55\cdot2^{t'}`$, with every length from the parameters and the
-extraction set. `decode_extractable` is strict as `decode` is. An extractable proof does not
+as `encode` does, with $`t_1,t_2`$ modulo $`q'`$ at the end of the first message and the
+openings in the fixed width $`t'+4`$ at the end, every length from the parameters and the
+extraction set (`ExtractionParams::proof_bytes`). `decode_extractable` is strict as `decode`
+is. An opening coefficient beyond the width restarts the attempt, as the toolbox's responses
+do. An extractable proof does not
 verify in the plain mode, nor a plain proof in the extractable mode.
 
 **Extraction.** An extractor that knows $`D_1`$ for a key $`B=D_1A+D_2`$ with ternary $`D_1`$,

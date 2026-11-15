@@ -6,7 +6,7 @@
   "tool": {
     "name": "jali-params",
     "version": "3",
-    "sha256": "ef8f05043b835001d91e595d3aaafb439ef534c9cb1973b2c1e2d1b1ab4b3f14"
+    "sha256": "ae826e24bfdc08aece2014f16119e4dd45fa00881a11e9bc9246909bfca56513"
   },
   "environment": {
     "python": "3.12.13",
@@ -54,7 +54,7 @@
       11,
       22
     ],
-    "estimated_proof_bytes": 24814
+    "estimated_proof_bytes": 24772
   },
   "modulus": {
     "q": 1563674726761101613,
@@ -110,7 +110,7 @@
         "bits": 61,
         "start": 1563674726760213223,
         "q": 1563674726761101613,
-        "estimated_proof_bytes": 24814,
+        "estimated_proof_bytes": 24772,
         "steps": [
           {
             "start": 1563674726760213223,
@@ -193,7 +193,7 @@
             "q": 1563674726761101613,
             "candidates_tested": 4,
             "event": "accepted",
-            "estimated_proof_bytes": 24814
+            "estimated_proof_bytes": 24772
           },
           {
             "start": 1563674726760213223,
@@ -202,7 +202,7 @@
             "q": 1563674726761664893,
             "candidates_tested": 12,
             "event": "accepted",
-            "estimated_proof_bytes": 24902
+            "estimated_proof_bytes": 24948
           },
           {
             "start": 1563674726760213223,
@@ -211,7 +211,7 @@
             "q": 1563674726760765733,
             "candidates_tested": 9,
             "event": "accepted",
-            "estimated_proof_bytes": 24990
+            "estimated_proof_bytes": 25124
           }
         ]
       },
@@ -219,7 +219,7 @@
         "bits": 62,
         "start": 2305843009213693952,
         "q": 2305843009231249141,
-        "estimated_proof_bytes": 25054,
+        "estimated_proof_bytes": 25012,
         "steps": [
           {
             "start": 2305843009213693952,
@@ -302,7 +302,7 @@
             "q": 2305843009231249141,
             "candidates_tested": 34,
             "event": "accepted",
-            "estimated_proof_bytes": 25054
+            "estimated_proof_bytes": 25012
           },
           {
             "start": 2305843009213693952,
@@ -311,7 +311,7 @@
             "q": 2305843009216642981,
             "candidates_tested": 12,
             "event": "accepted",
-            "estimated_proof_bytes": 25142
+            "estimated_proof_bytes": 25100
           },
           {
             "start": 2305843009213693952,
@@ -320,7 +320,7 @@
             "q": 2305843009215594349,
             "candidates_tested": 15,
             "event": "accepted",
-            "estimated_proof_bytes": 25230
+            "estimated_proof_bytes": 25276
           }
         ]
       },
@@ -328,7 +328,7 @@
         "bits": 63,
         "start": 4611686018427387904,
         "q": 4611686018461464317,
-        "estimated_proof_bytes": 25166,
+        "estimated_proof_bytes": 25124,
         "steps": [
           {
             "start": 4611686018427387904,
@@ -411,7 +411,7 @@
             "q": 4611686018461464317,
             "candidates_tested": 33,
             "event": "accepted",
-            "estimated_proof_bytes": 25166
+            "estimated_proof_bytes": 25124
           },
           {
             "start": 4611686018427387904,
@@ -420,7 +420,7 @@
             "q": 4611686018442837781,
             "candidates_tested": 30,
             "event": "accepted",
-            "estimated_proof_bytes": 25254
+            "estimated_proof_bytes": 25212
           },
           {
             "start": 4611686018427387904,
@@ -429,7 +429,7 @@
             "q": 4611686018434203437,
             "candidates_tested": 26,
             "event": "accepted",
-            "estimated_proof_bytes": 25342
+            "estimated_proof_bytes": 25300
           }
         ]
       },
@@ -437,7 +437,7 @@
         "bits": 64,
         "start": 9223372036854775808,
         "q": 9223372036857921013,
-        "estimated_proof_bytes": 25494,
+        "estimated_proof_bytes": 25452,
         "steps": [
           {
             "start": 9223372036854775808,
@@ -452,7 +452,7 @@
             "q": 9223372036857921013,
             "candidates_tested": 2,
             "event": "accepted",
-            "estimated_proof_bytes": 25494
+            "estimated_proof_bytes": 25452
           },
           {
             "start": 9223372036854775808,
@@ -461,7 +461,7 @@
             "q": 9223372036865781677,
             "candidates_tested": 11,
             "event": "accepted",
-            "estimated_proof_bytes": 25494
+            "estimated_proof_bytes": 25452
           },
           {
             "start": 9223372036854775808,
@@ -470,7 +470,7 @@
             "q": 9223372036855529461,
             "candidates_tested": 2,
             "event": "accepted",
-            "estimated_proof_bytes": 25582
+            "estimated_proof_bytes": 25540
           }
         ]
       }
@@ -521,7 +521,8 @@
     "rejection_M2": 3,
     "range_rejection_M3": 2,
     "range_rejection_M4": 2,
-    "estimated_proof_bytes": 24814,
+    "estimated_proof_bytes": 24772,
+    "hint_width": 2,
     "rns_primes_required": 3
   },
   "checks": [
@@ -666,7 +667,7 @@
       11,
       22
     ],
-    "estimated_proof_bytes": 26610
+    "estimated_proof_bytes": 26564
   },
   "partition": {
     "realizable": "what-if: the exact-norm blocks of the Ajtai part moved to BDLOP; to let derive choose, name them in the statement's movable list, and realize the result with Statement::var_placed or lin::compile_placed",
@@ -678,7 +679,7 @@
         "l": 0,
         "alpha_squared": 2048,
         "q_bits": 61,
-        "estimated_proof_bytes": 24814
+        "estimated_proof_bytes": 24772
       },
       {
         "bdlop_blocks": [

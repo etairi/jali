@@ -103,8 +103,9 @@ fn forge(
         let (commitment, full_opening) = extended
             .commit_with_randomness(bounded.clone(), messages, opening.s2.clone())
             .unwrap();
-        let mut prefix = round_prefix(&extended, &commitment, &forms, b"").unwrap();
-        let projection_seed = prefix.challenge_seed(b"range-matrices");
+        let mut transcript = instance(scheme, None, b"", |t| absorb_families(t, &forms)).unwrap();
+        transcript.absorb(&commitment_message(&extended, &commitment, None).unwrap());
+        let matrices = Projections::squeeze(&mut transcript, &forms, p.degree).unwrap();
         let affines = if exact { &forms.exact } else { &forms.approx };
         // sign * R * x = u * R * x = R * (u x) modulo q: project the short vector u x.
         let short: Vec<i128> = affines
@@ -119,9 +120,9 @@ fn forge(
             .map(|x| centred(x * u % q, q))
             .collect();
         let response = if reject {
-            range_response(scheme, &projection_seed, exact, &short, &y, 1, &mut random).unwrap()
+            range_response(scheme, &matrices, exact, &short, &y, 1, &mut random).unwrap()
         } else {
-            let v = projections(&projection_seed, exact, &short).unwrap();
+            let v = projections(&matrices, exact, &short).unwrap();
             let z: Vec<i128> = abdlop::flatten(&y.values)
                 .unwrap()
                 .iter()
@@ -145,18 +146,19 @@ fn forge(
         };
         let empty = PolyVec::zero(ring.clone(), 0);
         let (ze, zd) = if exact { (z, empty) } else { (empty, z) };
-        let evals = projection_equations(&extended, &forms, &projection_seed, &ze, &zd).unwrap();
-        bind_responses(&mut prefix, &ze, &zd).unwrap();
-        let mut proof_seed = [0u8; 32];
-        random.fill(&mut proof_seed).unwrap();
-        let evaluation = quad_eval::prove_with_seed(
+        let evals = projection_equations(&extended, &forms, &matrices, &ze, &zd).unwrap();
+        transcript.absorb(&range_message(scheme, &ze, &zd).unwrap());
+        let mut proof_seed = Zeroizing::new([0u8; 32]);
+        random.fill(&mut *proof_seed).unwrap();
+        let (evaluation, _) = quad_eval::prove_in(
             &extended,
             &commitment,
             &full_opening,
             &forms.eqs,
             &evals,
-            &prefix.digest(),
-            proof_seed,
+            transcript,
+            &proof_seed,
+            None,
         )
         .unwrap();
         return Proof {

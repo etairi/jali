@@ -109,26 +109,27 @@ class AgainstRust(unittest.TestCase):
             with self.subTest(set=name):
                 self.assertTrue(r["verified"] and r["tampered_rejected"]
                                 and r["other_context_rejected"])
-                self.assertLess(r["proof_bytes"], ref["checked"]["estimated_proof_bytes"])
+                # Every field has a fixed width: the proof has the exact size of the check.
+                self.assertEqual(r["proof_bytes"], ref["checked"]["estimated_proof_bytes"])
 
 
 class AgainstRustCases(unittest.TestCase):
     """TboxParams::from_json and lin::compile on 264 perturbed sets (every refusal, JSON
-    decoding, moduli up to 255 bits, the hint allowance at small gamma, seeded random
+    decoding, moduli up to 255 bits, the hint width at small gamma, seeded random
     mutations), as Rust decided them."""
 
-    def test_the_hint_allowance_is_rusts(self):
-        # The five cases at small gamma have sigma_2/gamma from 1.001 to 18.8, where the
-        # allowance of params::hint_bits exceeds 2.25 bits: Rust accepted them, and its
-        # estimate equals the emulation's.
+    def test_the_hint_width_is_rusts(self):
+        # The five cases at small gamma have sigma_2/gamma from 1.001 to 18.8, where the hint
+        # code of params::hint_width is wider than 2 bits: Rust accepted them, and its width and
+        # proof size equal the emulation's.
         est = [c for c in CASES["cases"] if c["name"].startswith("est/")]
         self.assertEqual(len(est), 5)
         for c in est:
             with self.subTest(case=c["name"]):
                 text = rust_reference.case_text(CASES["bases"][c["base"]], c)
                 params, derived, _ = rustcheck.from_json(text)
-                sigma2 = 1.55 * 2.0 ** params["log_sigma"][1]
-                self.assertGreater(rustcheck.hint_bits(sigma2, params["gamma"]), 2.25)
+                self.assertGreater(derived["hint_width"], 2)
+                self.assertEqual(derived["hint_width"], c["rust"]["checked"]["hint_width"])
                 self.assertEqual(derived["estimated_proof_bytes"],
                                  c["rust"]["checked"]["estimated_proof_bytes"])
 
