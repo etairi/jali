@@ -3,6 +3,54 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
+## [0.1.1] - 2026-11-14
+
+A straight-line extractable proof mode, with Katsumata's transform (CRYPTO 2021, full version
+ePrint 2021/927). Plain proofs, their transcripts and encodings, the parameter sets and the
+existing API are unchanged.
+
+### Added
+
+- **Extractable mode.** `tbox::prove_extractable_with_seed` and `tbox::verify_extractable`, the
+  `prove_extractable` and `verify_extractable` methods of `lnp::Prover`, `lnp::Verifier` and
+  `statement::Compiled` with their seeded and byte forms, the proof type `tbox::ExtractableProof`
+  and its strict codec (`codec::proof::encode_extractable`, `decode_extractable`).
+  - An extractable linear homomorphic commitment, the MLWE construction of the paper's Sec. 3.4,
+    commits to the final opening's witness beside the opening proof. Its key is a random-oracle
+    output on the parameters, the extraction set, the context and the statement, so an extractor
+    that holds a trapdoor recovers the witness from one proof, without rewinding.
+  - The mode has its own transcript tag (`LNP22-toolbox-sl-v1`) and key labels
+    (`tbox/proof-sl/v1`, `abdlop/opening-proof-sl/v1`), so it reads no stream of the plain mode.
+  - The paper's constants are corrected in two places: the shift bound uses the challenges'
+    operator norm, and each block of the opening has its own norm bound ([security
+    notes](docs/security.md#straight-line-extraction)).
+- **Extraction sets.** `params::ExtractionParams` and `params::OracleModel`, with
+  `ExtractionParams::check`, `modulus_for` and, with `serde`, `from_json`, which check a set
+  against its parameter set and derive the commitment's moduli and widths. The extraction sets of
+  the shipped sets: `kyber1024_d64_extraction`, `kyber1024_d128_extraction`,
+  `demo_d64_extraction` and `toy_d64_extraction` (`src/params/sets/*.extraction.json`).
+- **Parameter tool.** `lnp_params.py extraction` derives an extraction set: the commitment's
+  parameters exactly as the crate derives them, and the least rank that a policy accepts at the
+  modulus that rank gives. `extraction --shipped --check` checks the shipped ones, in CI too.
+- `examples/extractable.rs`, extractable benchmarks in `benches/protocols.rs`, and tests:
+  decryption of the commitment at an aligned worst-case opening and at its failure boundary,
+  straight-line extraction of the committed witness from one proof with a trapdoored key, the
+  codec's strictness, and the sizes of the shipped sets' extractable proofs.
+
+### Changed
+
+- The parameter tool hashes `jali_params/extraction.py` with its other files, so its reports
+  record a new tool hash. The sets they describe are unchanged.
+
+### Notes
+
+- For the shipped sets an extractable proof is about 5.7 to 5.9 times as long as a plain one,
+  proving takes 1.17 to 1.49 times the retired instructions and verifying 1.14 to 1.17 times
+  (seeds 1 to 20, one thread, Apple M4) [measured].
+- The extraction argument for the whole toolbox is an outline, in the classical random-oracle
+  model, and no quantum random-oracle security is claimed. The [security
+  notes](docs/security.md#straight-line-extraction) give each step with its status.
+
 ## [0.1.0] - 2026-11-02
 
 First release: the LNP22 proof system (Lyubashevsky, Nguyen and Plançon, CRYPTO 2022, ePrint
