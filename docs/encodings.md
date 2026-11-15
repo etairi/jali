@@ -34,6 +34,7 @@ decodings below) and the hash suite:
 | one quadratic equation on its own (`quad::prove_with_seed`) | `JALI-V02-LNP22-QUAD-C1-SHAKE128` |
 | several quadratic equations on their own (`quad_many`) | `JALI-V02-LNP22-QUAD-MANY-C1-SHAKE128` |
 | evaluation proof on its own (`quad_eval`) | `JALI-V02-LNP22-QUAD-EVAL-C1-SHAKE128` |
+| LaBRADOR (`labrador::prove`, its messages in `labrador.md`) | `JALI-V02-LABRADOR-C1-SHAKE128` |
 
 No ASCII tag is a prefix of another, and the context is length-prefixed, so distinct (argument,
 context) pairs give distinct tags, as FS draft §5.1 requires of composite tags. Nothing but the

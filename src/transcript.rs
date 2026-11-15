@@ -49,18 +49,21 @@ pub(crate) enum Protocol {
     /// Quadratic equations and vanishing constant coefficients on their own
     /// (`quad_eval::prove_with_seed`).
     Evaluation,
+    /// A LaBRADOR proof (`labrador::prove`).
+    Labrador,
 }
 
 impl Protocol {
     /// Every protocol, for the tests of the tags.
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::Toolbox,
         Self::ToolboxExtractable,
         Self::Opening,
         Self::Quadratic,
         Self::ManyQuadratic,
         Self::Evaluation,
+        Self::Labrador,
     ];
 
     /// The ASCII part of the tag: the crate, the transcript version `V02`, the argument, the
@@ -75,6 +78,7 @@ impl Protocol {
             Self::Quadratic => b"JALI-V02-LNP22-QUAD-C1-SHAKE128",
             Self::ManyQuadratic => b"JALI-V02-LNP22-QUAD-MANY-C1-SHAKE128",
             Self::Evaluation => b"JALI-V02-LNP22-QUAD-EVAL-C1-SHAKE128",
+            Self::Labrador => b"JALI-V02-LABRADOR-C1-SHAKE128",
         }
     }
 }
