@@ -3,6 +3,21 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
+## [Unreleased]
+
+### Added
+
+- **LaBRADOR** (`labrador`): succinct proofs of knowledge of short witnesses that satisfy
+  dot-product constraints over $`\mathbb Z_q[X]/(X^{64}+1)`$, after Beullens and Seiler
+  (ePrint 2022/1341). **Not zero knowledge.** The main protocol of the paper, recursed, with the
+  last witness sent in the clear. The prover chooses each level's parameters from the witness
+  and sends them, and the verifier checks the conditions of the paper's Theorem 5.1 for them,
+  with a Module-SIS policy of block size at least 439 by default. `docs/labrador.md` describes
+  the protocol, its encoding and its departures from the paper, and `examples/labrador.rs` runs
+  it: proofs of 68,778 bytes for 262,144 ternary coefficients and 85,490 bytes for 4,194,304
+  (Apple M4, one thread). The proofs of the other modules and their transcripts are unchanged.
+  The new transcript tag is `JALI-V02-LABRADOR-C1-SHAKE128`.
+
 ## [0.2.0] - 2026-11-15
 
 The Fiat–Shamir transcripts and the proof encoding follow the CFRG drafts

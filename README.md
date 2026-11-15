@@ -8,7 +8,8 @@ compiler turns relations over other polynomial rings and moduli into those proof
 variables with norm bounds, degree lowering, modulus lifting with carries, constraints modulo
 several moduli, ℓ<sub>∞</sub> bounds and subring variables. An optional straight-line
 extractable mode adds Katsumata's transform, so that an extractor holding a trapdoor recovers the
-witness from a single proof, without rewinding.
+witness from a single proof, without rewinding. A separate module implements LaBRADOR (Beullens
+and Seiler), a succinct proof system for dot-product constraints, which is not zero knowledge.
 
 ## Status
 
@@ -274,6 +275,7 @@ ratios move with the seeds.
 - [Encodings, transcripts and key
   derivation](https://github.com/etairi/jali/blob/main/docs/encodings.md)
 - [Parameters](https://github.com/etairi/jali/blob/main/docs/parameters.md)
+- [LaBRADOR](https://github.com/etairi/jali/blob/main/docs/labrador.md)
 - [Security notes](https://github.com/etairi/jali/blob/main/docs/security.md)
 - [Parameter tool](https://github.com/etairi/jali/blob/main/tools/README.md)
 - [Contributing: tests, oracles and
@@ -289,6 +291,8 @@ docs.rs does.
   Applications: Shorter, Simpler, and More General. CRYPTO 2022. Full version: Cryptology ePrint
   Archive, Paper 2022/284, revision of 14 August 2022, to which the section, figure and equation
   numbers in this crate refer.
+- W. Beullens and G. Seiler. LaBRADOR: Compact Proofs for R1CS from Module-SIS. CRYPTO 2023.
+  Cryptology ePrint Archive, Paper 2022/1341. (The `labrador` module.)
 - S. Katsumata. A New Simple Technique to Bootstrap Various Lattice Zero-Knowledge Proofs to QROM
   Secure NIZKs. CRYPTO 2021. Full version: Cryptology ePrint Archive, Paper 2021/927. (The
   extractable mode.)

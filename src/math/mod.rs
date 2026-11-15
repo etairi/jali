@@ -13,4 +13,5 @@ pub use containers::{PolyMat, PolyVec, SparsePolyMat, SparsePolyVec};
 pub use crypto_bigint::{I256, U256};
 pub use poly::Poly;
 pub use ring::Ring;
+pub(crate) use ring::SmallCrt;
 pub use rns::{PolyNtt, RnsProduct};
