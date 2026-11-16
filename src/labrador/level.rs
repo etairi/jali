@@ -384,16 +384,21 @@ impl Kept {
             return None;
         }
         Some(if narrow {
-            Kept::Narrow(Vec::with_capacity(count))
+            Kept::Narrow(vec![0; count])
         } else {
-            Kept::Wide(Vec::with_capacity(count))
+            Kept::Wide(vec![0; count])
         })
     }
-    /// Append the polynomials of the next indices, each index's side by side.
-    fn push(&mut self, polys: &[u64]) {
+    /// The storage in slots of `len` values, one per block of [`projection_blocks`], so that
+    /// each block writes its own polynomials and no block's are held for another.
+    fn slots(&mut self, len: usize) -> KeptSlots<'_> {
         match self {
-            Kept::Narrow(kept) => kept.extend(polys.iter().map(|&c| c as u32)),
-            Kept::Wide(kept) => kept.extend_from_slice(polys),
+            Kept::Narrow(kept) => {
+                KeptSlots::Narrow(kept.chunks_mut(len).map(std::sync::Mutex::new).collect())
+            }
+            Kept::Wide(kept) => {
+                KeptSlots::Wide(kept.chunks_mut(len).map(std::sync::Mutex::new).collect())
+            }
         }
     }
     /// The polynomials of index `index`, side by side, into `polys`.
@@ -406,6 +411,29 @@ impl Kept {
                 }
             }
             Kept::Wide(kept) => polys.copy_from_slice(&kept[at..at + len]),
+        }
+    }
+}
+
+/// The slots of [`Kept::slots`], each locked by the task of its block alone.
+enum KeptSlots<'a> {
+    Narrow(Vec<std::sync::Mutex<&'a mut [u32]>>),
+    Wide(Vec<std::sync::Mutex<&'a mut [u64]>>),
+}
+impl KeptSlots<'_> {
+    /// Store the polynomials of block `block`, each index's side by side.
+    fn write(&self, block: usize, polys: &[u64]) {
+        match self {
+            KeptSlots::Narrow(slots) => {
+                let mut slot = slots[block].lock().unwrap_or_else(|e| e.into_inner());
+                for (out, c) in slot.iter_mut().zip(polys) {
+                    *out = *c as u32;
+                }
+            }
+            KeptSlots::Wide(slots) => {
+                let mut slot = slots[block].lock().unwrap_or_else(|e| e.into_inner());
+                slot.copy_from_slice(polys);
+            }
         }
     }
 }
@@ -841,7 +869,9 @@ fn attempt_level<R: Relation>(
     let lambda = ctx.lambda;
     let mut accs = vec![vec![0u64; k]; lambda];
     let mut kept = Kept::new(ring, lambda, &shape);
-    let (keep, n) = (kept.is_some(), shape.n);
+    let n = shape.n;
+    let per_block = BLOCK_BUFFERS * PROJECTION_BLOCK / d;
+    let slots = kept.as_mut().map(|kept| kept.slots(per_block * lambda * d));
     // Each block's sums, added in block order: the residues of one sum in any order.
     projection_blocks(
         ring,
@@ -859,18 +889,19 @@ fn attempt_level<R: Relation>(
                     ring.mac(acc, &hat, &hats[i][x * k..(x + 1) * k]);
                 }
             }
-            Ok((part, keep.then_some(block)))
+            if let Some(slots) = &slots {
+                slots.write(block.first / per_block, &block.data);
+            }
+            Ok(part)
         },
-        |(part, block)| {
+        |part| {
             for (acc, p) in accs.iter_mut().zip(part.chunks_exact(k)) {
                 ring.hat_add_assign(acc, p);
-            }
-            if let (Some(kept), Some(block)) = (&mut kept, block) {
-                kept.push(&block.data);
             }
             Ok(())
         },
     )?;
+    drop(slots);
     let mut bpp = Vec::with_capacity(ctx.lambda);
     for (acc, psi_k) in accs.into_iter().zip(&psi) {
         let mut b = ring.intt(acc);
