@@ -1,5 +1,5 @@
 //! The matrices of `selector`: the entries, in order, that collecting their flattened rows
-//! gives, held in a buffer of exactly their number.
+//! gives, of which only the ones are held.
 use super::*;
 
 /// The matrix of `selector` from `start` on, `cols` wide, collected from its flattened rows.
@@ -19,7 +19,7 @@ fn collected(ring: &Arc<Ring>, indices: &[usize], start: usize, cols: usize) -> 
 }
 
 #[test]
-fn selector_matrices_are_the_collected_ones_in_buffers_of_their_exact_size() {
+fn selector_matrices_are_the_collected_ones_and_hold_only_their_ones() {
     let ring = Ring::new(1099511627917, 64).unwrap();
     // Empty parts, indices in the bounded part, in the message part (from m1 on) and past both,
     // unsorted and repeated indices, and a larger set.
@@ -41,12 +41,13 @@ fn selector_matrices_are_the_collected_ones_in_buffers_of_their_exact_size() {
         let parts = [(block.s.as_ref(), 0, m1), (block.m.as_ref(), m1, l)];
         for (matrix, start, cols) in parts {
             let matrix = matrix.unwrap();
-            assert_eq!(matrix, &collected(&ring, indices, start, cols));
-            assert_eq!(
-                matrix.capacity(),
-                indices.len() * cols,
-                "{indices:?} {m1} {l}"
-            );
+            let dense = collected(&ring, indices, start, cols);
+            assert_eq!(matrix, &dense);
+            let ones = indices
+                .iter()
+                .filter(|i| (start..start + cols).contains(*i));
+            assert_eq!(matrix.capacity(), ones.count(), "{indices:?} {m1} {l}");
+            assert_eq!(matrix.entries(), dense.entries());
         }
     }
 }

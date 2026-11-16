@@ -1319,18 +1319,16 @@ fn selector(
     m1: usize,
     l: usize,
 ) -> Result<AffineBlock, Error> {
-    // The rows' entries in one buffer of exactly their number: collected from the flattened
-    // rows, whose number the iterator does not report, the buffer grew by doubling, to up to
-    // twice the size of the entries.
+    // Only the ones are held: row r has a one in the column of `indices[r]`, if that is in
+    // the part that starts at `start`, and zeros elsewhere.
     let matrix = |start: usize, cols: usize| {
-        let mut entries =
-            Vec::with_capacity(indices.len().checked_mul(cols).ok_or(Error::Dimension)?);
-        for idx in indices {
-            entries.extend(
-                (0..cols).map(|j| Poly::constant(ring.clone(), i128::from(*idx == start + j))),
-            );
-        }
-        PolyMat::new(ring.clone(), indices.len(), cols, entries)
+        let ones = indices
+            .iter()
+            .enumerate()
+            .filter(|(_, idx)| (start..start + cols).contains(*idx))
+            .map(|(row, idx)| (row, idx - start, Poly::constant(ring.clone(), 1)))
+            .collect();
+        PolyMat::sparse(ring.clone(), indices.len(), cols, ones)
     };
     Ok(AffineBlock {
         rows: indices.len(),
@@ -1359,8 +1357,8 @@ fn affine_rows(
     m1: usize,
     l: usize,
 ) -> Result<AffineBlock, Error> {
-    let mut a = vec![Poly::zero(ring.clone()); rows.len() * m1];
-    let mut b = vec![Poly::zero(ring.clone()); rows.len() * l];
+    // The nonzero entries only (`PolyMat::sparse`).
+    let (mut a, mut b) = (Vec::new(), Vec::new());
     let mut offsets = Vec::new();
     for (row, form) in rows.iter().enumerate() {
         if form.r2.entries().any(|(_, p)| !p.is_zero()) {
@@ -1373,17 +1371,17 @@ fn affine_rows(
             }
             let i = i / 2;
             if i < m1 {
-                a[row * m1 + i] = p.clone();
+                a.push((row, i, p.clone()));
             } else {
-                b[row * l + i - m1] = p.clone();
+                b.push((row, i - m1, p.clone()));
             }
         }
         offsets.push(form.r0.clone());
     }
     Ok(AffineBlock {
         rows: rows.len(),
-        s: Some(PolyMat::new(ring.clone(), rows.len(), m1, a)?),
-        m: Some(PolyMat::new(ring.clone(), rows.len(), l, b)?),
+        s: Some(PolyMat::sparse(ring.clone(), rows.len(), m1, a)?),
+        m: Some(PolyMat::sparse(ring.clone(), rows.len(), l, b)?),
         offset: Some(PolyVec::new(ring.clone(), offsets)?),
     })
 }

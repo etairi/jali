@@ -305,3 +305,72 @@ fn matrix_products_at_the_largest_magnitudes_and_mismatches() {
         assert_eq!(m.mul(&v), mul_by_rows(&m, &v));
     }
 }
+
+#[test]
+fn sparse_matrices_equal_their_dense_matrices() {
+    let mut rng = Rng(29);
+    for ring in rings() {
+        for case in 0..24 {
+            let (rows, cols) = match case % 4 {
+                0 => (3, 2 * NADDS + 3),
+                1 => (0, 4),
+                2 => (3, 0),
+                _ => (1 + rng.below(6) as usize, 1 + rng.below(10) as usize),
+            };
+            // About a third of the entries: general, constant, monomial and explicit zeros.
+            let mut dense = vec![Poly::zero(ring.clone()); rows * cols];
+            let mut listed = Vec::new();
+            for r in 0..rows {
+                for c in 0..cols {
+                    let value = match rng.below(9) {
+                        0 => rng.poly(&ring),
+                        1 => Poly::constant(ring.clone(), rng.below(5) as i128 - 2),
+                        2 => Poly::constant(ring.clone(), 1).rotate(rng.below(7) as i64),
+                        3 => Poly::zero(ring.clone()),
+                        _ => continue,
+                    };
+                    dense[r * cols + c] = value.clone();
+                    listed.push((r, c, value));
+                }
+            }
+            listed.reverse();
+            let sparse = PolyMat::sparse(ring.clone(), rows, cols, listed).unwrap();
+            let dense = PolyMat::new(ring.clone(), rows, cols, dense).unwrap();
+            assert_eq!(sparse, dense, "case {case}");
+            assert_eq!(dense, sparse);
+            assert!(sparse.capacity() <= rows * cols);
+            for r in 0..rows {
+                for c in 0..cols {
+                    assert_eq!(sparse.get(r, c).unwrap(), dense.get(r, c).unwrap());
+                }
+            }
+            assert_eq!(sparse.get(rows, 0).err(), Some(Error::Index));
+            for _ in 0..3 {
+                let v = rng.vector(&ring, cols);
+                assert_eq!(
+                    sparse.mul(&v).unwrap(),
+                    dense.mul(&v).unwrap(),
+                    "case {case}"
+                );
+            }
+            // The row-major entries, built on demand, and a clone that shares them.
+            assert_eq!(sparse.entries(), dense.entries());
+            assert_eq!(sparse.clone(), dense);
+        }
+        // Out of range, duplicate positions and another ring are refused.
+        let one = || Poly::constant(ring.clone(), 1);
+        assert_eq!(
+            PolyMat::sparse(ring.clone(), 2, 2, vec![(2, 0, one())]).err(),
+            Some(Error::Index)
+        );
+        assert_eq!(
+            PolyMat::sparse(ring.clone(), 2, 2, vec![(1, 1, one()), (1, 1, one())]).err(),
+            Some(Error::Parameter("duplicate sparse entry"))
+        );
+        let other = rings().into_iter().find(|r| r != &ring).unwrap();
+        assert_eq!(
+            PolyMat::sparse(ring.clone(), 1, 1, vec![(0, 0, Poly::constant(other, 1))]).err(),
+            Some(Error::RingMismatch)
+        );
+    }
+}
