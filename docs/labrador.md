@@ -190,17 +190,19 @@ verification (Orthus), challenge sets for degrees 128 and 256, parallelism and S
 
 `cargo run --release --example labrador -- r n bound` proves random constraints on $`r`$
 vectors of $`n`$ polynomials with coefficients in $`[-\mathrm{bound},\mathrm{bound}]`$. On an
-Apple M4, one thread, load average 5.3 to 5.9 (another process ran), on 15 November 2026:
+Apple M4, one thread, the fastest of three runs at load average 12.6 to 15.3 (other processes
+ran), on 16 November 2026, for $`(r,n)`$ = (1, 64), (8, 512), (8, 2048) and (16, 4096):
 
 | Witness (ternary coefficients) | Proof | Prove | Verify |
 |---:|---:|---:|---:|
-| 4,096 | 9,063 B | 6 ms | 4 ms |
-| 262,144 | 68,778 B | 414 ms | 183 ms |
-| 1,048,576 | 80,943 B | 1.67 s | 0.70 s |
-| 4,194,304 | 85,490 B | 5.29 s | 2.10 s |
+| 4,096 | 7,441 B | 10 ms | 4 ms |
+| 262,144 | 57,856 B | 521 ms | 170 ms |
+| 1,048,576 | 64,848 B | 1.71 s | 0.70 s |
+| 4,194,304 | 71,621 B | 5.07 s | 1.79 s |
 
-At 4,194,304 coefficients the proof has 5 levels of about 4.4 KB and a last witness of about
-64 KB, which the variant of §5.6 would shrink.
+At 4,194,304 coefficients the proof has 5 levels of 3.9 to 4.4 KB (21,519 bytes) and a last
+witness of 50,102 bytes, which the variant of §5.6 would shrink. In the fixed-width code of
+the first version the last witness took 63,939 bytes and the proof 85,490.
 
 ## References
 

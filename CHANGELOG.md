@@ -12,13 +12,14 @@ Not published yet. So far the proofs of the LNP22 modules are those of 0.2.0.
 - **LaBRADOR** (`labrador`): succinct proofs of knowledge of short witnesses that satisfy
   dot-product constraints over $`\mathbb Z_q[X]/(X^{64}+1)`$, after Beullens and Seiler
   (ePrint 2022/1341). **Not zero knowledge.** The main protocol of the paper, recursed, with the
-  last witness sent in the clear. The prover chooses each level's parameters from the witness
-  and sends them, and the verifier checks the conditions of the paper's Theorem 5.1 for them,
-  with a Module-SIS policy of block size at least 439 by default. `docs/labrador.md` describes
-  the protocol, its encoding and its departures from the paper, and `examples/labrador.rs` runs
-  it: proofs of 68,778 bytes for 262,144 ternary coefficients and 85,490 bytes for 4,194,304
-  (Apple M4, one thread). The proofs of the other modules and their transcripts are unchanged.
-  The new transcript tag is `JALI-V02-LABRADOR-C1-SHAKE128`.
+  last witness sent in the clear, in a radix code and a Gaussian code close to its entropy. The
+  prover chooses each level's parameters from the witness, among them the base of the
+  amortized opening, and sends them, and the verifier checks the conditions of the paper's
+  Theorem 5.1 for them, with a Module-SIS policy of block size at least 439 by default.
+  `docs/labrador.md` describes the protocol, its encoding and its departures from the paper,
+  and `examples/labrador.rs` runs it: proofs of 57,856 bytes for 262,144 ternary coefficients
+  and 71,621 bytes for 4,194,304. The proofs of the other modules and their transcripts are
+  unchanged. The new transcript tag is `JALI-V02-LABRADOR-C1-SHAKE128`.
 
 ### Changed
 
@@ -37,7 +38,18 @@ Not published yet. So far the proofs of the LNP22 modules are those of 0.2.0.
     half of its products once instead of once per attempt. Kyber1024 proofs need 1.8 to 2.1
     times fewer cycles, their verification 1.1 to 1.2 times.
   - LaBRADOR multiplies by sparse challenges without 128-bit divisions and uses the faster
-    transforms: 1.3 times fewer cycles to prove, 1.35 times to verify.
+    transforms: 1.3 times fewer cycles to prove, 1.35 times to verify. Then it sums its
+    projections in 32-bit lanes and reads the aggregation sums of all challenges with one table
+    lookup per projection byte: another 1.6 times fewer instructions to prove and 1.4 to 1.5
+    times to verify.
+- **Less memory, with byte-identical proofs.** The toolbox produces the evaluation equations of
+  its projections in chunks of 16 rows, which the evaluation proof combines as they arrive,
+  instead of holding the 256 rows of each family at once. The statement's equations move into
+  the evaluation proof instead of being copied, public matrices share their entries between
+  clones, and the selectors and approximate blocks of a compiled statement hold only their
+  nonzero entries. In the lattice test of the predicate-credential system the peak live heap
+  of each step falls 2.1 to 4.2 times (the attribute proof from 601 to 225 MiB), and the
+  memory that Kyber1024 proofs and their verification allocate 6.3 to 8.5 times.
 
 ## [0.2.0] - 2026-11-15
 
