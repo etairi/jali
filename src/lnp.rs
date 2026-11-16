@@ -180,10 +180,15 @@ impl Statement {
         let witness = crate::quad::interleave(s1, m)?;
         // Evaluated in parallel (`parallel`); the first failure in order is returned.
         let (quadratic, evaluation) = (&self.quadratic, &self.evaluation);
+        let pairs = crate::quad::PairProducts::for_equations(evaluation, &witness)?;
         crate::par::try_map(quadratic.len() + evaluation.len(), |i| {
             let holds = match i.checked_sub(quadratic.len()) {
                 None => quadratic[i].evaluate(&witness)?.is_zero(),
-                Some(j) => evaluation[j].evaluate_constant(&witness)?.is_zero_vartime(),
+                Some(j) => match &pairs {
+                    Some(pairs) => evaluation[j].evaluate_constant_with(&witness, pairs)?,
+                    None => evaluation[j].evaluate_constant(&witness)?,
+                }
+                .is_zero_vartime(),
             };
             match holds {
                 true => Ok(()),
