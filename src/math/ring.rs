@@ -283,26 +283,31 @@ pub(crate) enum ScalarMul {
 // Each method matches the variant once, outside its loop: a match per value costs about a
 // quarter more instructions in a small-modulus scaling (measured 2026-11-16).
 impl ScalarMul {
-    /// `f(o, xw mod q)` for each pair of `out` and canonical `xs`.
+    /// `out += xs w`, or `out -= xs w` with `SUBTRACT`, modulo $`q`$ for canonical values: the
+    /// product and the sum in the variant's own words, without a ring addition per value.
     #[inline(always)]
-    pub(crate) fn zip_apply(
-        &self,
-        out: &mut [U256],
-        xs: &[U256],
-        mut f: impl FnMut(&mut U256, U256),
-    ) {
+    pub(crate) fn add_scaled<const SUBTRACT: bool>(&self, out: &mut [U256], xs: &[U256]) {
         match *self {
             ScalarMul::Small { w, w_shoup, q } => {
                 for (o, x) in out.iter_mut().zip(xs) {
-                    f(o, U256::from_u64(shoup_mul(int::low_u64(x), w, w_shoup, q)));
+                    let t = shoup_mul(int::low_u64(x), w, w_shoup, q);
+                    let a = int::low_u64(o);
+                    *o = U256::from_u64(if SUBTRACT {
+                        sub_mod(a, t, q)
+                    } else {
+                        add_mod(a, t, q)
+                    });
                 }
             }
             ScalarMul::Wide { w, w_shoup, q } => {
                 for (o, x) in out.iter_mut().zip(xs) {
-                    f(
-                        o,
-                        U256::from_u128(shoup_mul128(int::low_u128(x), w, w_shoup, q)),
-                    );
+                    let t = shoup_mul128(int::low_u128(x), w, w_shoup, q);
+                    let a = int::low_u128(o);
+                    *o = U256::from_u128(if SUBTRACT {
+                        sub_mod128(a, t, q)
+                    } else {
+                        add_mod128(a, t, q)
+                    });
                 }
             }
         }
@@ -383,6 +388,8 @@ pub struct Ring {
     pub(crate) half: U256,
     /// The modulus as a divisor when $`q<2^{64}`$.
     pub(crate) small: Option<Divisor64>,
+    /// The modulus when $`q<2^{63}`$, for additions in one word.
+    pub(crate) word: Option<u64>,
     /// The modulus when $`q<2^{128}`$, for additions and sign tests in native arithmetic.
     pub(crate) narrow: Option<u128>,
     /// Native products, multipliers and CRT when $`2^{63}\le q<2^{126}`$.
@@ -489,6 +496,7 @@ impl Ring {
             nonzero,
             half: q.shr_vartime(1),
             small: int::to_u64(&q).map(Divisor64::new),
+            word: int::to_u64(&q).filter(|q| *q < 1 << 63),
             narrow: int::to_u128(&q),
             wide,
             reducers: primes.iter().map(|p| WordReducer::new(*p)).collect(),
@@ -577,6 +585,9 @@ impl Ring {
     // Canonical inputs. Below 2^128 native arithmetic suffices; the sum can carry out of u128.
     #[inline]
     pub(crate) fn add(&self, a: &U256, b: &U256) -> U256 {
+        if let Some(q) = self.word {
+            return U256::from_u64(add_mod(int::low_u64(a), int::low_u64(b), q));
+        }
         match self.narrow {
             Some(q) => {
                 let (s, carry) = int::low_u128(a).overflowing_add(int::low_u128(b));
@@ -591,6 +602,9 @@ impl Ring {
     }
     #[inline]
     pub(crate) fn sub(&self, a: &U256, b: &U256) -> U256 {
+        if let Some(q) = self.word {
+            return U256::from_u64(sub_mod(int::low_u64(a), int::low_u64(b), q));
+        }
         match self.narrow {
             Some(q) => {
                 let (d, borrow) = int::low_u128(a).overflowing_sub(int::low_u128(b));
@@ -601,6 +615,10 @@ impl Ring {
     }
     #[inline]
     pub(crate) fn neg(&self, a: &U256) -> U256 {
+        if let Some(q) = self.word {
+            let a = int::low_u64(a);
+            return U256::from_u64(if a == 0 { 0 } else { q - a });
+        }
         match self.narrow {
             Some(q) => {
                 let a = int::low_u128(a);

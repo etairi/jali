@@ -106,9 +106,18 @@ fn native_ring_operations_equal_big_integer_ones() {
                 let mut in_place = xs.clone();
                 m.apply_in_place(&mut in_place);
                 assert_eq!(in_place, expect, "q {q} w {a}");
-                let mut zipped = vec![U256::ZERO; xs.len()];
-                m.zip_apply(&mut zipped, &xs, |o, p| *o = p);
-                assert_eq!(zipped, expect, "q {q} w {a}");
+                // out + xs w and out - xs w, from an arbitrary canonical out.
+                let start: Vec<U256> = xs.iter().rev().copied().collect();
+                let mut added = start.clone();
+                m.add_scaled::<false>(&mut added, &xs);
+                let mut subtracted = start.clone();
+                m.add_scaled::<true>(&mut subtracted, &xs);
+                for ((s0, e), (p, n)) in
+                    start.iter().zip(&expect).zip(added.iter().zip(&subtracted))
+                {
+                    assert_eq!(*p, ring.add(s0, e), "q {q} w {a}");
+                    assert_eq!(*n, ring.sub(s0, e), "q {q} w {a}");
+                }
             }
         }
         // reduction of arbitrary 256-bit values
