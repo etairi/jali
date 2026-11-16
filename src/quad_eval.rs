@@ -189,7 +189,7 @@ fn check_constants(
 ) -> Result<(), Error> {
     let covered = pairs.add_for(eqs, witness)?;
     let pairs = &*pairs;
-    // Evaluated in parallel (`parallel`); the first failure in order is returned.
+    // Evaluated in parallel (`parallel`), and the first failure in order is returned.
     crate::par::try_map(eqs.len(), |i| {
         let constant = match covered {
             true => eqs[i].evaluate_constant_with(witness, pairs)?,
@@ -370,7 +370,7 @@ pub(crate) fn prove_in<E: EvalRows + ?Sized>(
     transcript.absorb(&vector_bytes(&garbage_commitments)?);
     let gamma = squeeze_gamma(&extended, &mut transcript, evals.count())?;
     // Each chunk of evaluation equations is checked against the witness and added to the
-    // combination as it arrives; none is returned before every check passed.
+    // combination as it arrives. Nothing is returned before every check passed.
     let mut combination = Combination::new(&extended, &gamma, evals.count(), witness.len())?;
     let mut pairs = quad::PairProducts::empty();
     evals.try_for_each_chunk(&mut |chunk| {

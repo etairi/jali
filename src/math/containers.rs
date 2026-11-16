@@ -86,9 +86,11 @@ impl PolyVec {
 
 /// Dense row-major matrix with checked shape and ring membership.
 ///
-/// A matrix built from its nonzero entries ([`PolyMat::sparse`]) holds only those: a selector
-/// or a block of a statement has mostly zero entries, each of which would otherwise hold a
-/// polynomial buffer of its own.
+/// The selectors and blocks of compiled statements are built from their nonzero entries, and
+/// such a matrix holds only those, since most of their entries are zero and each would
+/// otherwise hold a polynomial buffer of its own. It reads the same: [`PolyMat::get`] returns
+/// a shared zero for the other entries, and [`PolyMat::entries`] builds the row-major entries
+/// on its first call.
 #[derive(Clone)]
 pub struct PolyMat {
     ring: Arc<Ring>,
@@ -97,7 +99,7 @@ pub struct PolyMat {
     /// The entries, which cannot change after construction: clones share them.
     entries: Arc<Entries>,
     /// The listed entries ([`Entries`]) classified and, if general, transformed, on the first
-    /// product of any clone; clones share it, also clones made before it. It is never stale,
+    /// product of any clone. Clones share it, also clones made before it. It is never stale,
     /// since the entries cannot change. Not part of the value: equality and `Debug` ignore it.
     terms: Arc<OnceLock<Vec<Term>>>,
 }
