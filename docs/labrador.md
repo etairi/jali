@@ -134,9 +134,15 @@ seed. At the end it absorbs the last witness and squeezes the final aggregation 
 A proof is the concatenation of, per level: the parameters (55 bytes), $`u_1`$ and $`u_2`$ and
 the tails of $`b''`$ as residues of $`\lceil\log_2q\rceil`$ bits, $`p`$ in the signed code of
 codec C1 with the least width for $`\lfloor\sqrt{337\beta^2}\rfloor`$, each message zero-padded
-to a byte. Then the last witness, vector by vector: one byte for the least signed width of its
-coefficients, then the coefficients. Every value, width and padding is checked, and no byte may
-follow.
+to a byte. Then the last witness, one bit string zero-padded to a byte, vector by vector, each
+with its polynomials that carry values. A part of $`z_0`$ or of $`v`$ (centred digits, close to
+uniform) is one byte for the least signed width $`w`$ of its largest magnitude $`h`$, then
+$`h`$ in $`w-1`$ bits, then its values in the radix code of base $`R=2h+1`$: chunks of the most
+digits $`k`$ with $`R^k<2^{128}`$, each the number $`\sum_j(x_j+h)R^j`$ in the canonical code of
+$`[0,R^k)`$, nothing when $`h=0`$. A part of $`z_1`$ (close to a discrete Gaussian) is one byte for
+the parameter of the Gaussian code of codec C1 that writes it in the fewest bits, the least on
+ties, then its values in that code. Every value, width, maximum, parameter and padding is
+checked, so that each witness has one encoding, and no byte may follow.
 
 ## Security notes
 

@@ -793,9 +793,109 @@ fn final_length(layout: &Layout, nu: usize, i: usize) -> usize {
     }
 }
 
-/// The final witness: for each vector, one byte holding the width $`w`$ of the signed code,
-/// the least for its coefficients, then the coefficients of its polynomials that carry values
-/// ([`final_length`]), zero padded to a byte. The padding of $`v`$ is not sent.
+/// Whether vector `i` of the final witness is a part of $`z_1`$, whose coefficients are close
+/// to a discrete Gaussian, rather than of $`z_0`$ or $`v`$, whose coefficients are centred
+/// digits, close to uniform.
+fn gaussian_part(nu: usize, i: usize) -> bool {
+    (nu..2 * nu).contains(&i)
+}
+
+/// The bits of `x` in the Gaussian code of [`BitWriter::gaussian`] with parameter `p`: the
+/// unary quotient, its end bit and $`p+1`$ remainder bits.
+fn gaussian_bits(x: i128, p: u32) -> u64 {
+    let scale = 1i128 << (p + 1);
+    let r = x.rem_euclid(scale);
+    let low = if r >= scale / 2 { r - scale } else { r };
+    let quotient = (x - low) / scale;
+    let n = if quotient > 0 {
+        2 * quotient - 1
+    } else {
+        -2 * quotient
+    };
+    n as u64 + 1 + u64::from(p + 1)
+}
+
+/// The parameter of the Gaussian code that writes `values` in the fewest bits, the least on
+/// ties. From the least $`p`$ with every value in $`[-2^p,2^p)`$ on, every quotient is zero
+/// and the length grows with $`p`$, so the parameters up to that one are compared.
+fn gaussian_parameter(values: &[i128]) -> u32 {
+    let max = values.iter().map(|x| x.unsigned_abs()).max().unwrap_or(0);
+    (0..=128 - max.leading_zeros())
+        .min_by_key(|p| {
+            let bits: u64 = values.iter().map(|x| gaussian_bits(*x, *p)).sum();
+            (bits, *p)
+        })
+        .expect("a nonempty range")
+}
+
+/// The longest unary quotient of a value of magnitude at most `half` in the Gaussian code with
+/// parameter `p`: $`|x|\le h`$ gives a quotient of magnitude at most
+/// $`\lfloor h/2^{p+1}\rfloor+1`$, whose code has at most twice as many one bits.
+fn unary_limit(half: u128, p: u32) -> usize {
+    usize::try_from(2 * ((half >> (p + 1)) + 1)).unwrap_or(usize::MAX)
+}
+
+/// The number of digits of one chunk of the radix code in base `radix` at least 3, the
+/// largest $`k`$ with $`R^k<2^{128}`$.
+fn radix_chunk(radix: u128) -> usize {
+    let (mut k, mut power) = (1, radix);
+    while let Some(next) = power.checked_mul(radix) {
+        power = next;
+        k += 1;
+    }
+    k
+}
+
+/// Values in $`[-h,h]`$, $`h\ge1`$, in the radix code: the digits $`x+h`$ in base
+/// $`R=2h+1`$, in chunks of [`radix_chunk`] digits (the last one shorter), each chunk the
+/// number $`\sum_j(x_j+h)R^j`$ in the canonical code of $`[0,R^k)`$ ([`BitWriter::uniform`]).
+/// Uniform digits take $`\log_2R`$ bits each, up to the rounding of one chunk.
+fn write_radix(writer: &mut BitWriter, values: &[i128], h: u128) -> Result<(), Error> {
+    let radix = 2 * h + 1;
+    for chunk in values.chunks(radix_chunk(radix)) {
+        let (mut value, mut power) = (0u128, 1u128);
+        for x in chunk.iter().rev() {
+            let digit = x.checked_add(h as i128).ok_or(Error::Encoding)?;
+            if !(0..radix as i128).contains(&digit) {
+                return Err(Error::Encoding);
+            }
+            value = value * radix + digit as u128;
+            power *= radix;
+        }
+        writer.uniform(value, power)?;
+    }
+    Ok(())
+}
+
+/// The inverse of [`write_radix`] for `count` values: a chunk at or above $`R^k`$ is refused.
+fn read_radix(reader: &mut BitReader<'_>, count: usize, h: u128) -> Result<Vec<i128>, Error> {
+    let radix = 2 * h + 1;
+    let k = radix_chunk(radix);
+    let mut out = Vec::with_capacity(count);
+    while out.len() < count {
+        let len = k.min(count - out.len());
+        let power = (0..len).fold(1u128, |p, _| p * radix);
+        let mut value = reader.uniform(power)?;
+        for _ in 0..len {
+            out.push((value % radix) as i128 - h as i128);
+            value /= radix;
+        }
+    }
+    Ok(out)
+}
+
+/// The final witness, one bit string zero padded to a byte: for each vector, the coefficients
+/// of its polynomials that carry values ([`final_length`]), centred, in the code of its part.
+/// The padding of $`v`$ is not sent.
+///
+/// - The parts of $`z_0`$ and of $`v`$, centred digits: one byte holding the least signed width
+///   $`w`$ for their largest magnitude $`h`$, then $`h`$ in $`w-1`$ bits, then the values in
+///   the radix code of base $`2h+1`$ ([`write_radix`], nothing when $`h=0`$).
+/// - The parts of $`z_1`$: one byte holding the parameter $`p`$ of the Gaussian code with the
+///   fewest bits for them, the least on ties ([`gaussian_parameter`]), then the values in that
+///   code ([`BitWriter::gaussian`]).
+///
+/// Each value, and so each witness, has exactly one encoding, which [`decode_final`] checks.
 pub(crate) fn encode_final(
     ring: &Rq,
     layout: &Layout,
@@ -803,23 +903,41 @@ pub(crate) fn encode_final(
     witness: &[Zeroizing<Vec<u64>>],
 ) -> Result<Vec<u8>, Error> {
     let d = ring.degree();
-    let mut out = Vec::new();
+    let half = u128::from(ring.modulus() / 2);
+    let mut writer = BitWriter::new();
     for (i, v) in witness.iter().enumerate() {
         let len = final_length(layout, nu, i) * d;
         debug_assert!(v[len..].iter().all(|x| *x == 0));
-        let width = signed_width(u128::from(ring.linf(&v[..len])));
-        out.push(width as u8);
         let values: Vec<i128> = v[..len]
             .iter()
             .map(|x| i128::from(ring.center(*x)))
             .collect();
-        out.extend_from_slice(&encode_signed(&values, width)?);
+        if gaussian_part(nu, i) {
+            let p = gaussian_parameter(&values);
+            writer.unsigned(u128::from(p), 8)?;
+            let limit = unary_limit(half, p);
+            for x in &values {
+                writer.gaussian(*x, p, limit)?;
+            }
+        } else {
+            let h = values.iter().map(|x| x.unsigned_abs()).max().unwrap_or(0);
+            let w = signed_width(h);
+            writer.unsigned(u128::from(w), 8)?;
+            writer.unsigned(h, w - 1)?;
+            if h > 0 {
+                write_radix(&mut writer, &values, h)?;
+            }
+        }
     }
-    Ok(out)
+    let pad = (8 - writer.bit_len() % 8) % 8;
+    writer.unsigned(0, pad as u32)?;
+    writer.into_bytes()
 }
 
-/// The inverse of [`encode_final`]: refuses a width that is not the least, or a coefficient
-/// outside $`[-(q-1)/2,(q-1)/2]`$.
+/// The inverse of [`encode_final`], which consumes its bytes from `input`: refuses a width or
+/// a Gaussian parameter that is not the one [`encode_final`] chooses for the decoded values, a
+/// largest magnitude that no value reaches, a coefficient outside $`[-(q-1)/2,(q-1)/2]`$, a
+/// chunk of the radix code out of range, and nonzero padding.
 pub(crate) fn decode_final(
     ring: &Rq,
     layout: &Layout,
@@ -827,25 +945,58 @@ pub(crate) fn decode_final(
     input: &mut &[u8],
 ) -> Result<Vec<Zeroizing<Vec<u64>>>, Error> {
     let d = ring.degree();
-    let half = (ring.modulus() / 2) as u128;
+    let half = u128::from(ring.modulus() / 2);
     let max_width = signed_width(half);
+    let mut reader = BitReader::new(input);
     let mut out = Vec::with_capacity(layout.r_next);
     for i in 0..layout.r_next {
         let count = final_length(layout, nu, i) * d;
-        let width = u32::from(take(input, 1)?[0]);
-        if !(2..=max_width).contains(&width) {
-            return Err(Error::Encoding);
-        }
-        let bytes = take(input, (count * width as usize).div_ceil(8))?;
-        let values = decode_signed(bytes, count, width)?;
-        let max = values.iter().map(|x| x.unsigned_abs()).max().unwrap_or(0);
-        if max > half || signed_width(max) != width {
-            return Err(Error::Encoding);
-        }
+        let values = if gaussian_part(nu, i) {
+            let p = reader.unsigned(8)? as u32;
+            // The parameter chosen for magnitudes up to `half` is at most its bit length.
+            if p > 128 - half.leading_zeros() {
+                return Err(Error::Encoding);
+            }
+            let limit = unary_limit(half, p);
+            let mut values = Vec::with_capacity(count);
+            for _ in 0..count {
+                let x = reader.gaussian(p, limit)?;
+                if x.unsigned_abs() > half {
+                    return Err(Error::Encoding);
+                }
+                values.push(x);
+            }
+            if gaussian_parameter(&values) != p {
+                return Err(Error::Encoding);
+            }
+            values
+        } else {
+            let w = reader.unsigned(8)? as u32;
+            if !(2..=max_width).contains(&w) {
+                return Err(Error::Encoding);
+            }
+            let h = reader.unsigned(w - 1)?;
+            if h > half || signed_width(h) != w {
+                return Err(Error::Encoding);
+            }
+            let values = match h {
+                0 => vec![0; count],
+                _ => read_radix(&mut reader, count, h)?,
+            };
+            if values.iter().map(|x| x.unsigned_abs()).max().unwrap_or(0) != h {
+                return Err(Error::Encoding);
+            }
+            values
+        };
         let mut v: Vec<u64> = values.iter().map(|x| ring.lift_i128(*x)).collect();
         v.resize(layout.n_next * d, 0);
         out.push(Zeroizing::new(v));
     }
+    let pad = (8 - reader.position() % 8) % 8;
+    if reader.unsigned(pad as u32)? != 0 {
+        return Err(Error::Encoding);
+    }
+    *input = &input[reader.position() / 8..];
     Ok(out)
 }
 
