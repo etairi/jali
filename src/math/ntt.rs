@@ -9,6 +9,10 @@
 //! the forward transform, kept by the Montgomery products of pointwise multiplication and by
 //! sums, and taken out by the untwist of the inverse transform.
 use crate::{Error, math::int::is_prime};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
+};
 
 pub(crate) fn mul_mod(a: u64, b: u64, p: u64) -> u64 {
     (u128::from(a) * u128::from(b) % u128::from(p)) as u64
@@ -148,6 +152,30 @@ impl NttPlan {
                 .map(|i| i.reverse_bits() >> (32 - bits))
                 .collect(),
         })
+    }
+    /// The plan of [`NttPlan::new`], built once per process for each $`(p,d,\psi)`$ and shared.
+    ///
+    /// Rings build one plan per prime, and the statement compiler builds rings for every form
+    /// it lowers, so the tables of the same few plans were computed again and again (a tenth of
+    /// a PCS proof's time, measured 2026-11-16). Only rings call this, with the primes of
+    /// `NTT_PRIMES` at the five degrees, so the memo holds at most 45 plans, about 2 MB at the
+    /// most. Plans are deterministic, so a shared one equals a new one. Rings keep copies.
+    pub(crate) fn shared(p: u64, d: usize, psi: u64) -> Result<Arc<Self>, Error> {
+        type Memo = Mutex<HashMap<(u64, usize, u64), Arc<NttPlan>>>;
+        static PLANS: OnceLock<Memo> = OnceLock::new();
+        let memo = PLANS.get_or_init(Default::default);
+        if let Some(plan) = memo.lock().expect("plan memo").get(&(p, d, psi)) {
+            return Ok(plan.clone());
+        }
+        // Built outside the lock: two threads may build the same plan, and the first one in
+        // is kept.
+        let plan = Arc::new(Self::new(p, d, psi)?);
+        Ok(memo
+            .lock()
+            .expect("plan memo")
+            .entry((p, d, psi))
+            .or_insert(plan)
+            .clone())
     }
     /// The transform modulus.
     #[inline]

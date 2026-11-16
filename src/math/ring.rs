@@ -460,7 +460,13 @@ impl Ring {
                 prefixes.push(product);
                 inverses.push(pow_mod(divisor.rem(&product), p - 2, p));
             }
-            plans.push(NttPlan::new(p, d, pow_mod(root, (1024 / d) as u64, p))?);
+            // A copy of the shared plan: an `Arc` here would cost a dependent load per value in
+            // the product loops (about 1.4% of a Kyber verification, measured 2026-11-16).
+            plans.push(
+                NttPlan::shared(p, d, pow_mod(root, (1024 / d) as u64, p))?
+                    .as_ref()
+                    .clone(),
+            );
             q_mod_p.push(divisor.rem(&q));
             divisors.push(divisor);
             product = product.wrapping_mul(&U64::from_u64(p));
@@ -472,7 +478,7 @@ impl Ring {
             return Err(Error::Overflow);
         }
         let nonzero = NonZero::new(q).expect("modulus at least two");
-        let primes: Vec<u64> = plans.iter().map(NttPlan::modulus).collect();
+        let primes: Vec<u64> = plans.iter().map(|plan| plan.modulus()).collect();
         let wide = Mod128::new(&q);
         let crt = match int::to_u64(&q).filter(|q| *q < 1 << 63) {
             Some(q) => RingCrt::Small(SmallCrt::new(q, &primes)),
@@ -537,7 +543,13 @@ impl Ring {
     /// The canonical representative of an integer.
     pub(crate) fn reduce_i128(&self, x: i128) -> U256 {
         if let Some(q) = &self.small {
-            return U256::from_u64(x.rem_euclid(i128::from(q.value())) as u64);
+            let q = q.value();
+            // When both fit i64 the remainder is one hardware division, not a 128-bit one in
+            // software. Both give the value in [0, q).
+            if let (Ok(x), Ok(m)) = (i64::try_from(x), i64::try_from(q)) {
+                return U256::from_u64(x.rem_euclid(m) as u64);
+            }
+            return U256::from_u64(x.rem_euclid(i128::from(q)) as u64);
         }
         let magnitude = U256::from_u128(x.unsigned_abs());
         let r = self.reduce(&magnitude);

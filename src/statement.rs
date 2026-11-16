@@ -29,6 +29,8 @@ use std::{
 #[cfg(test)]
 mod digits_tests;
 #[cfg(test)]
+mod integer_tests;
+#[cfg(test)]
 mod selector_tests;
 
 /// Integer witness bounds, applied to the whole named block.
@@ -1798,9 +1800,172 @@ fn integer_evaluate_as<T: Integer>(
     }
     Ok(out)
 }
-/// The integer evaluation of a form on centred representatives: in `i128` when every step fits,
-/// and otherwise again in 512 bits. Both give the same integers when both succeed.
+/// Centred coefficients as `i64` with their largest magnitude, if every one fits.
+fn centred_i64(p: &Poly) -> Option<(Zeroizing<Vec<i64>>, u128)> {
+    let values = p.coefficients_i128().ok()?;
+    let mut out = Zeroizing::new(Vec::with_capacity(values.len()));
+    let mut max = 0u128;
+    for v in values.iter() {
+        out.push(i64::try_from(*v).ok()?);
+        max = max.max(v.unsigned_abs());
+    }
+    Some((out, max))
+}
+/// `out += ab` in $`\mathbb Z[X]/(X^d+1)`$ for `i64` coefficients: for each $`a_i\ne0`$ the
+/// products by $`b_0,\dots,b_{d-i-1}`$ land on `out[i..]`, the others, negated, on `out[..i]`.
+/// The caller bounds every partial sum below $`2^{127}`$ in magnitude, so no step overflows.
+fn negacyclic_mac(a: &[i64], b: &[i64], out: &mut [i128]) {
+    let d = a.len();
+    for (i, &x) in a.iter().enumerate() {
+        if x == 0 {
+            continue;
+        }
+        let x = i128::from(x);
+        let (low, high) = out.split_at_mut(i);
+        for (o, &y) in high.iter_mut().zip(&b[..d - i]) {
+            *o += x * i128::from(y);
+        }
+        for (o, &y) in low.iter_mut().zip(&b[d - i..]) {
+            *o -= x * i128::from(y);
+        }
+    }
+}
+/// Coefficient $`m`$ of the negacyclic product $`ab`$, under the same bound:
+/// $`\sum_{t\le m}a_tb_{m-t}-\sum_{t>m}a_tb_{m+d-t}`$.
+fn negacyclic_coefficient(a: &[i64], b: &[i64], m: usize) -> i128 {
+    let mut s = 0i128;
+    // t <= m pairs a_t with b_{m-t}: b[..=m] reversed.
+    for (x, y) in a[..=m].iter().zip(b[..=m].iter().rev()) {
+        s += i128::from(*x) * i128::from(*y);
+    }
+    // t > m pairs a_t with b_{m+d-t}: b[m+1..] reversed, from b_{d-1} down to b_{m+1}.
+    for (x, y) in a[m + 1..].iter().zip(b[m + 1..].iter().rev()) {
+        s -= i128::from(*x) * i128::from(*y);
+    }
+    s
+}
+/// The integer evaluation in `i64` coefficients and `i128` sums, all $`d`$ values or, with
+/// `constant_only`, the constant one alone. `None` when a centred coefficient does not fit
+/// `i64` or the bound below does not keep every partial sum under $`2^{127}`$: the checked
+/// evaluation runs then. Where this returns values, the checked evaluation succeeds with the
+/// same integers, since both sum the same products exactly and the bound covers its steps too.
+///
+/// The bound is $`\|r_0\|_\infty+\sum_id\|a_i\|_\infty\|w_i\|_\infty
+/// +\sum_{ij}d\|a_{ij}\|_\infty\,d\|w_i\|_\infty\|w_j\|_\infty`$ in saturating arithmetic, with
+/// every $`d\|w_i\|_\infty\|w_j\|_\infty`$ below $`2^{63}`$, so that the coefficients of
+/// $`w_iw_j`$ fit `i64` for their product by $`a_{ij}`$.
+fn integer_evaluate_fast(
+    form: &QuadEq,
+    witness: &[Poly],
+    constant_only: bool,
+) -> Option<Zeroizing<Vec<i128>>> {
+    type Centred = (Zeroizing<Vec<i64>>, u128);
+    fn ensure(cache: &mut [Option<Centred>], witness: &[Poly], i: usize) -> Option<()> {
+        if cache[i].is_none() {
+            cache[i] = Some(centred_i64(&witness[i])?);
+        }
+        Some(())
+    }
+    let d = form.r0.ring().degree();
+    let dd = d as u128;
+    let mut cache: Vec<Option<Centred>> = (0..witness.len()).map(|_| None).collect();
+    let (r0, r0_max) = centred_i64(&form.r0)?;
+    let mut bound = r0_max;
+    let mut linear = Vec::new();
+    for (i, a) in form.r1.entries() {
+        let i = usize::from(i);
+        ensure(&mut cache, witness, i)?;
+        let (values, max) = centred_i64(a)?;
+        let w_max = cache[i].as_ref()?.1;
+        bound = bound.saturating_add(dd.saturating_mul(max).saturating_mul(w_max));
+        if max != 0 {
+            linear.push((i, values));
+        }
+    }
+    let mut quadratic = Vec::new();
+    for ((i, j), a) in form.r2.entries() {
+        let (i, j) = (usize::from(i), usize::from(j));
+        ensure(&mut cache, witness, i)?;
+        ensure(&mut cache, witness, j)?;
+        let (values, max) = centred_i64(a)?;
+        let inner = dd
+            .saturating_mul(cache[i].as_ref()?.1)
+            .saturating_mul(cache[j].as_ref()?.1);
+        if inner >= 1 << 63 {
+            return None;
+        }
+        bound = bound.saturating_add(dd.saturating_mul(max).saturating_mul(inner));
+        if max != 0 {
+            quadratic.push((i, j, values));
+        }
+    }
+    if bound >= 1 << 127 {
+        return None;
+    }
+    let w = |i: usize| -> &[i64] { &cache[i].as_ref().expect("converted above").0 };
+    // w_i w_j in full, as i64: its coefficients are at most d|w_i||w_j| < 2^63.
+    let full_product = |i: usize, j: usize| -> Zeroizing<Vec<i64>> {
+        let mut v = Zeroizing::new(vec![0i128; d]);
+        negacyclic_mac(w(i), w(j), &mut v);
+        Zeroizing::new(v.iter().map(|x| *x as i64).collect())
+    };
+    if constant_only {
+        // ct(ab) = a_0 b_0 - sum_{k>=1} a_k b_{d-k}
+        let mut s = i128::from(r0[0]);
+        for (i, a) in &linear {
+            s += i128::from(a[0]) * i128::from(w(*i)[0]);
+            for (x, y) in a[1..].iter().zip(w(*i)[1..].iter().rev()) {
+                s -= i128::from(*x) * i128::from(*y);
+            }
+        }
+        for (i, j, a) in &quadratic {
+            let nonzero: Vec<usize> = (0..d).filter(|k| a[*k] != 0).collect();
+            if nonzero.len() * 4 <= d {
+                // Only the coefficients of w_i w_j that meet a nonzero a_k, d products each.
+                for k in nonzero {
+                    let m = if k == 0 { 0 } else { d - k };
+                    let v = negacyclic_coefficient(w(*i), w(*j), m);
+                    let term = i128::from(a[k]) * v;
+                    s += if k == 0 { term } else { -term };
+                }
+            } else {
+                let v = full_product(*i, *j);
+                s += i128::from(a[0]) * i128::from(v[0]);
+                for (x, y) in a[1..].iter().zip(v[1..].iter().rev()) {
+                    s -= i128::from(*x) * i128::from(*y);
+                }
+            }
+        }
+        return Some(Zeroizing::new(vec![s]));
+    }
+    let mut out = Zeroizing::new(r0.iter().map(|x| i128::from(*x)).collect::<Vec<_>>());
+    for (i, a) in &linear {
+        negacyclic_mac(a, w(*i), &mut out);
+    }
+    for (i, j, a) in &quadratic {
+        let v = full_product(*i, *j);
+        negacyclic_mac(a, &v, &mut out);
+    }
+    Some(out)
+}
+/// The constant coefficient of [`integer_evaluate`], with its refusals: by the fast path when
+/// its bound holds, otherwise from the full checked evaluation.
+fn integer_evaluate_constant(form: &QuadEq, witness: &[Poly]) -> Result<Wide, Error> {
+    match integer_evaluate_fast(form, witness, true) {
+        Some(value) => Ok(Wide(I512::from_i128(value[0]))),
+        None => Ok(integer_evaluate(form, witness)?[0]),
+    }
+}
+/// The integer evaluation of a form on centred representatives: in `i64` coefficients and
+/// `i128` sums when a bound shows that nothing overflows, otherwise in checked `i128` when
+/// every step fits, and otherwise again in 512 bits. All give the same integers when they
+/// succeed.
 fn integer_evaluate(form: &QuadEq, witness: &[Poly]) -> Result<Zeroizing<Vec<Wide>>, Error> {
+    if let Some(values) = integer_evaluate_fast(form, witness, false) {
+        return Ok(Zeroizing::new(
+            values.iter().map(|x| Wide(I512::from_i128(*x))).collect(),
+        ));
+    }
     match integer_evaluate_as::<i128>(form, witness) {
         Ok(values) => Ok(Zeroizing::new(
             values.iter().map(|x| Wide(I512::from_i128(*x))).collect(),
@@ -2048,30 +2213,35 @@ impl Compiled {
                     )?),
                 }
             };
-            let value = constraint.form.evaluate(witness)?;
-            if if constraint.constant_only {
-                !value.coefficients()[0].is_zero_vartime()
+            // A constant-only constraint needs its constant coefficient alone.
+            let unsatisfied = if constraint.constant_only {
+                !constraint
+                    .form
+                    .evaluate_constant(witness)?
+                    .is_zero_vartime()
             } else {
-                !value.is_zero()
-            } {
+                !constraint.form.evaluate(witness)?.is_zero()
+            };
+            if unsatisfied {
                 return Err(Error::Witness);
             }
         }
         for committed in &self.carries {
             let constraint = &self.source.constraints[committed.constraint()];
             let p = &constraint.ring().nonzero;
-            let value = integer_evaluate(&constraint.form, &original)?;
             match *committed {
                 // The constant coefficient's quotient, in its slot; unused slots stay 0.
                 Carry::Slot {
                     poly, coefficient, ..
                 } => {
-                    if !divides(p, &value[0]) {
+                    let value = integer_evaluate_constant(&constraint.form, &original)?;
+                    if !divides(p, &value) {
                         return Err(Error::Witness);
                     }
-                    mapped[poly].set_coefficient(coefficient, carry(p, &value[0])?)?;
+                    mapped[poly].set_coefficient(coefficient, carry(p, &value)?)?;
                 }
                 Carry::Components { start, count, .. } => {
+                    let value = integer_evaluate(&constraint.form, &original)?;
                     if value.iter().any(|x| !divides(p, x)) {
                         return Err(Error::Witness);
                     }

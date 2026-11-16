@@ -118,3 +118,51 @@ fn native_ring_operations_equal_big_integer_ones() {
         }
     }
 }
+
+#[test]
+fn reduce_i128_equals_big_integer_remainders() {
+    let mut moduli: Vec<U256> = vec![
+        U256::from_u8(2),
+        U256::from_u8(13),
+        U256::from_u64(1099511627917),
+        U256::from_u64((1 << 62) - 1),
+        U256::from_u64(i64::MAX as u64),
+        U256::from_u64(1 << 63),
+        U256::from_u64(u64::MAX - 58),
+    ];
+    moduli.extend(moduli_list_wide());
+    let mut rng = Rng(22);
+    for q in moduli {
+        let ring = Ring::with_modulus(q, 64).unwrap();
+        let qb = BigInt::from(big(&q));
+        let mut xs = vec![
+            0i128,
+            1,
+            -1,
+            i64::MAX as i128,
+            i64::MIN as i128,
+            i64::MAX as i128 + 1,
+            i64::MIN as i128 - 1,
+            i128::MAX,
+            i128::MIN,
+            i128::MIN + 1,
+        ];
+        if let Some(v) = int::to_u128(&q).and_then(|v| i128::try_from(v).ok()) {
+            xs.extend([v, -v, v - 1, 1 - v, v + 1, -v - 1]);
+        }
+        xs.extend((0..40).map(|_| (u128::from(rng.next()) << 64 | u128::from(rng.next())) as i128));
+        xs.extend((0..40).map(|_| rng.next() as i64 as i128));
+        for x in xs {
+            let r = ((BigInt::from(x) % &qb) + &qb) % &qb;
+            assert_eq!(BigInt::from(big(&ring.reduce_i128(x))), r, "q {q} x {x}");
+        }
+    }
+}
+
+/// The wide moduli of `moduli()` from 2^64 on.
+fn moduli_list_wide() -> Vec<U256> {
+    moduli()
+        .into_iter()
+        .filter(|q| int::to_u64(q).is_none())
+        .collect()
+}
