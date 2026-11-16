@@ -117,10 +117,14 @@ fn transforms_equal_the_reference_for_every_prime_and_degree() {
                 plan.forward(&mut new).unwrap();
                 slow.forward(&mut expected);
                 assert_eq!(new, expected, "forward p {p} d {d}");
-                // The Montgomery form is the standard one times R.
+                // The Montgomery form is the standard one times R, in the order of the merged
+                // transform: position i holds the evaluation at psi^(2 brv(i) + 1), which the
+                // public transform puts at position brv(i).
                 let mut mont = a.clone();
                 plan.forward_mont(&mut mont);
-                let scaled: Vec<u64> = new.iter().map(|x| mul_mod(*x, r, p)).collect();
+                let scaled: Vec<u64> = (0..d)
+                    .map(|i| mul_mod(new[plan.bit_reverse[i] as usize], r, p))
+                    .collect();
                 assert_eq!(mont, scaled, "forward_mont p {p} d {d}");
                 plan.inverse_mont(&mut mont);
                 assert_eq!(mont, a, "inverse_mont p {p} d {d}");
@@ -188,6 +192,65 @@ fn montgomery_and_shoup_products_equal_remainders() {
                     (u128::from(a) + u128::from(p - b)) % u128::from(p)
                 );
             }
+        }
+    }
+}
+
+/// The negacyclic product modulo p by the schoolbook formula.
+fn schoolbook(a: &[u64], b: &[u64], p: u64) -> Vec<u64> {
+    let d = a.len();
+    let mut out = vec![0u64; d];
+    for i in 0..d {
+        for j in 0..d {
+            let t = mul_mod(a[i], b[j], p);
+            if i + j < d {
+                out[i + j] = add_mod(out[i + j], t, p);
+            } else {
+                out[i + j - d] = sub_mod(out[i + j - d], t, p);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn montgomery_path_products_equal_schoolbook_products() {
+    // The RNS product: transform both, multiply pointwise by Montgomery products, invert. Also
+    // a sum of 128 products, the most that an RNS accumulator holds.
+    let mut rng = Rng(3);
+    for (p, root) in NTT_PRIMES.iter().take(4).copied() {
+        for log_d in 1..=10 {
+            let d = 1usize << log_d;
+            let psi = pow_mod(root, (1024 / d) as u64, p);
+            let plan = NttPlan::new(p, d, psi).unwrap();
+            let vectors = inputs(p, d, &mut rng);
+            let mut sum = vec![0u64; d];
+            let mut want_sum = vec![0u64; d];
+            for k in 0..128 {
+                let a = &vectors[k % vectors.len()];
+                let b = &vectors[(k * 7 + 3) % vectors.len()];
+                let (mut fa, mut fb) = (a.clone(), b.clone());
+                plan.forward_mont(&mut fa);
+                plan.forward_mont(&mut fb);
+                let mut product: Vec<u64> = fa
+                    .iter()
+                    .zip(&fb)
+                    .map(|(x, y)| plan.mont_mul(*x, *y))
+                    .collect();
+                for (s, x) in sum.iter_mut().zip(&product) {
+                    *s = add_mod(*s, *x, p);
+                }
+                let want = schoolbook(a, b, p);
+                for (s, x) in want_sum.iter_mut().zip(&want) {
+                    *s = add_mod(*s, *x, p);
+                }
+                if k < 8 {
+                    plan.inverse_mont(&mut product);
+                    assert_eq!(product, want, "product p {p} d {d} k {k}");
+                }
+            }
+            plan.inverse_mont(&mut sum);
+            assert_eq!(sum, want_sum, "sum of 128 products p {p} d {d}");
         }
     }
 }
