@@ -21,10 +21,20 @@ impl core::fmt::Debug for Poly {
 }
 impl Drop for Poly {
     fn drop(&mut self) {
-        // Every coefficient with one volatile write, then any capacity past the length bytewise.
-        // `Vec::zeroize` also wipes the coefficients a second time bytewise, 32 stores per
-        // coefficient: a third of the samples in a profile of the possession example.
-        self.coeffs.as_mut_slice().zeroize();
+        // The limbs that a canonical coefficient can occupy, with volatile writes, then any
+        // capacity past the length bytewise. The other limbs of a canonical coefficient are
+        // zero from construction on (one limb of four below 2^64). `Vec::zeroize` also wipes
+        // the coefficients a second time bytewise, 32 stores per coefficient: a third of the
+        // samples in a profile of the possession example.
+        let limbs = self.ring.limbs;
+        debug_assert!(
+            self.coeffs
+                .iter()
+                .all(|x| x.as_words()[limbs..].iter().all(|w| *w == 0))
+        );
+        for x in self.coeffs.iter_mut() {
+            x.as_mut_words()[..limbs].zeroize();
+        }
         self.coeffs.spare_capacity_mut().zeroize();
     }
 }
@@ -147,6 +157,14 @@ impl Poly {
     pub(crate) fn add_assign(&mut self, rhs: &Self) -> Result<(), Error> {
         self.compatible(rhs)?;
         let ring = &self.ring;
+        // Below 2^63 the low words alone, written in place.
+        if let Some(q) = ring.word {
+            for (a, b) in self.coeffs.iter_mut().zip(&rhs.coeffs) {
+                let v = super::ntt::add_mod(int::low_u64(a), int::low_u64(b), q);
+                int::set_low_u64(a, v);
+            }
+            return Ok(());
+        }
         for (a, b) in self.coeffs.iter_mut().zip(&rhs.coeffs) {
             *a = ring.add(a, b);
         }
@@ -156,6 +174,14 @@ impl Poly {
     pub(crate) fn sub_assign(&mut self, rhs: &Self) -> Result<(), Error> {
         self.compatible(rhs)?;
         let ring = &self.ring;
+        // Below 2^63 the low words alone, written in place.
+        if let Some(q) = ring.word {
+            for (a, b) in self.coeffs.iter_mut().zip(&rhs.coeffs) {
+                let v = super::ntt::sub_mod(int::low_u64(a), int::low_u64(b), q);
+                int::set_low_u64(a, v);
+            }
+            return Ok(());
+        }
         for (a, b) in self.coeffs.iter_mut().zip(&rhs.coeffs) {
             *a = ring.sub(a, b);
         }
