@@ -3,7 +3,7 @@ mod constant;
 mod containers;
 pub mod int;
 pub mod iso;
-mod mod128;
+pub(crate) mod mod128;
 pub mod ntt;
 mod poly;
 mod ring;

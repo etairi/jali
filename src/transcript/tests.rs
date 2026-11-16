@@ -252,3 +252,39 @@ fn ring_elements_are_uints_per_coefficient() {
     }
     assert_eq!(t.peek(), reference.peek());
 }
+
+#[test]
+fn barrett_remainders_equal_the_native_ones() {
+    let mut rng = Rng(10);
+    let mut moduli = vec![
+        2u64,
+        3,
+        u64::MAX,
+        u64::MAX - 1,
+        1 << 63,
+        (1 << 63) + 1,
+        1 << 32,
+        4294967291,
+    ];
+    moduli.extend((0..200).map(|_| rng.next().max(2)));
+    for m in moduli {
+        let b = Barrett64::new(m);
+        let m128 = u128::from(m);
+        for x in [
+            0u128,
+            1,
+            m128 - 1,
+            m128,
+            m128 + 1,
+            u128::MAX,
+            u128::MAX - 1,
+            u128::MAX / m128 * m128,
+        ] {
+            assert_eq!(b.reduce(x), x % m128, "m {m} x {x}");
+        }
+        for _ in 0..200 {
+            let x = (u128::from(rng.next()) << 64) | u128::from(rng.next());
+            assert_eq!(b.reduce(x), x % m128, "m {m} x {x}");
+        }
+    }
+}

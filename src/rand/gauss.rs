@@ -53,7 +53,11 @@ impl<S: ByteStream> Sampler<'_, S> {
     fn draw(&mut self, table: &[U256]) -> Result<i128, Error> {
         self.stream.fill(&mut self.value)?;
         let value = U256::from_le_slice(&self.value);
-        Ok(table.iter().take_while(|entry| value < **entry).count() as i128)
+        // The entries are public: a comparison from the top limb, which nearly always decides.
+        Ok(table
+            .iter()
+            .take_while(|entry| value.cmp_vartime(entry).is_lt())
+            .count() as i128)
     }
     /// $`t=0`$: $`k`$ with $`\Pr[k]\propto\rho_{1.55}(k)`$, from a random sign and the
     /// half-Gaussian of width 1.55. A draw of sign 1 and $`K=0`$ is drawn again, so that every

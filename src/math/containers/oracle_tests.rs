@@ -374,3 +374,53 @@ fn sparse_matrices_equal_their_dense_matrices() {
         );
     }
 }
+
+#[test]
+fn paired_products_equal_two_products() {
+    // Dense and sparse matrices with general, cheap and zero entries, so that a column can be
+    // general in one matrix and cheap in the other: the pair equals the two products.
+    let mut rng = Rng(31);
+    for ring in rings() {
+        for case in 0..12 {
+            let (rows_a, rows_b, cols) = (
+                1 + rng.below(4) as usize,
+                1 + rng.below(4) as usize,
+                1 + rng.below(9) as usize,
+            );
+            let entry = |rng: &mut Rng| match rng.below(4) {
+                0 => rng.poly(&ring),
+                1 => Poly::constant(ring.clone(), rng.below(5) as i128 - 2),
+                2 => Poly::constant(ring.clone(), 1).rotate(rng.below(9) as i64),
+                _ => Poly::zero(ring.clone()),
+            };
+            let a = PolyMat::new(
+                ring.clone(),
+                rows_a,
+                cols,
+                (0..rows_a * cols).map(|_| entry(&mut rng)).collect(),
+            )
+            .unwrap();
+            let mut listed = Vec::new();
+            for p in 0..rows_b * cols {
+                if rng.below(2) == 0 {
+                    listed.push((p / cols, p % cols, entry(&mut rng)));
+                }
+            }
+            let b = PolyMat::sparse(ring.clone(), rows_b, cols, listed).unwrap();
+            for _ in 0..3 {
+                let v = rng.vector(&ring, cols);
+                let (x, y) = a.mul_pair(&b, &v).unwrap();
+                assert_eq!(x, a.mul(&v).unwrap(), "case {case}");
+                assert_eq!(y, b.mul(&v).unwrap(), "case {case}");
+                let (y2, x2) = b.mul_pair(&a, &v).unwrap();
+                assert_eq!((x2, y2), (x, y));
+            }
+        }
+        let a = PolyMat::new(ring.clone(), 1, 2, vec![Poly::zero(ring.clone()); 2]).unwrap();
+        let b = PolyMat::new(ring.clone(), 1, 3, vec![Poly::zero(ring.clone()); 3]).unwrap();
+        assert_eq!(
+            a.mul_pair(&b, &rng.vector(&ring, 2)).err(),
+            Some(Error::Dimension)
+        );
+    }
+}

@@ -2,6 +2,7 @@ use crate::Error;
 use aes::Aes256;
 use ctr::cipher::{KeyIvInit, StreamCipher};
 use shake::{ExtendableOutput, Shake128, Shake128Reader, Update, XofReader};
+use zeroize::Zeroize;
 
 /// A deterministic byte stream with explicit failure on exhaustion.
 pub trait ByteStream {
@@ -48,7 +49,23 @@ pub(crate) mod secret {
 
 /// AES-256-CTR keystream under the seed, with IV `LE64(domain) || 0^8` and a big-endian
 /// 128-bit counter.
-pub struct AesPrg(ctr::Ctr128BE<Aes256>);
+///
+/// Reads shorter than 256 bytes are served from a buffer of the next keystream bytes,
+/// so that one call to the cipher covers many blocks. The bytes of the reads are those of the
+/// keystream in order, whatever their sizes. The buffer is wiped on drop.
+pub struct AesPrg {
+    cipher: ctr::Ctr128BE<Aes256>,
+    /// The next keystream bytes from `pos` on, which `fill` returns before any other.
+    buffer: [u8; AES_BUFFER],
+    pos: usize,
+}
+/// The keystream bytes that [`AesPrg`] computes ahead for short reads.
+const AES_BUFFER: usize = 256;
+impl Drop for AesPrg {
+    fn drop(&mut self) {
+        self.buffer.zeroize();
+    }
+}
 impl core::fmt::Debug for AesPrg {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AesPrg").finish_non_exhaustive()
@@ -61,15 +78,38 @@ impl AesPrg {
         stream_log::record(seed, domain);
         let mut iv = [0u8; 16];
         iv[..8].copy_from_slice(&domain.to_le_bytes());
-        Self(ctr::Ctr128BE::<Aes256>::new(seed.into(), (&iv).into()))
+        Self {
+            cipher: ctr::Ctr128BE::<Aes256>::new(seed.into(), (&iv).into()),
+            buffer: [0; AES_BUFFER],
+            pos: AES_BUFFER,
+        }
     }
 }
 impl ByteStream for AesPrg {
     fn fill(&mut self, output: &mut [u8]) -> Result<(), Error> {
-        output.fill(0);
-        self.0
-            .try_apply_keystream(output)
-            .map_err(|_| Error::Randomness)
+        // The buffered bytes come first. Once they are used up, the cipher stands right after
+        // them, so a long read takes the keystream directly and a short one refills the buffer.
+        let buffered = (AES_BUFFER - self.pos).min(output.len());
+        output[..buffered].copy_from_slice(&self.buffer[self.pos..self.pos + buffered]);
+        self.pos += buffered;
+        let rest = &mut output[buffered..];
+        if rest.is_empty() {
+            return Ok(());
+        }
+        if rest.len() >= AES_BUFFER {
+            rest.fill(0);
+            return self
+                .cipher
+                .try_apply_keystream(rest)
+                .map_err(|_| Error::Randomness);
+        }
+        self.buffer.fill(0);
+        self.cipher
+            .try_apply_keystream(&mut self.buffer)
+            .map_err(|_| Error::Randomness)?;
+        rest.copy_from_slice(&self.buffer[..rest.len()]);
+        self.pos = rest.len();
+        Ok(())
     }
 }
 
@@ -176,6 +216,41 @@ pub(crate) mod stream_log {
 
 #[cfg(test)]
 mod tests {
+    use super::ByteStream;
+    /// The keystream through reads of every size around the buffer's, against one long read and
+    /// against the cipher itself: the same bytes in the same order.
+    #[test]
+    fn buffered_reads_return_the_keystream() {
+        use ctr::cipher::{KeyIvInit, StreamCipher};
+        for (seed, domain) in [([1u8; 32], 0u64), ([2u8; 32], 7), ([3u8; 32], u64::MAX)] {
+            let total = 5000;
+            let mut whole = vec![0u8; total];
+            super::AesPrg::new(&seed, domain).fill(&mut whole).unwrap();
+            let mut iv = [0u8; 16];
+            iv[..8].copy_from_slice(&domain.to_le_bytes());
+            let mut raw = vec![0u8; total];
+            ctr::Ctr128BE::<aes::Aes256>::new((&seed).into(), (&iv).into())
+                .apply_keystream(&mut raw);
+            assert_eq!(whole, raw);
+            for sizes in [
+                vec![1usize, 7, 8, 24, 32],
+                vec![255, 1, 256, 257, 3],
+                vec![16, 240, 1, 255, 512, 2],
+            ] {
+                let mut prg = super::AesPrg::new(&seed, domain);
+                let mut got = Vec::with_capacity(total);
+                let mut k = 0;
+                while got.len() < total {
+                    let n = sizes[k % sizes.len()].min(total - got.len());
+                    let mut buf = vec![0u8; n];
+                    prg.fill(&mut buf).unwrap();
+                    got.extend_from_slice(&buf);
+                    k += 1;
+                }
+                assert_eq!(got, raw, "{sizes:?}");
+            }
+        }
+    }
     use super::secret::*;
 
     #[test]
