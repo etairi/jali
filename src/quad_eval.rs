@@ -72,33 +72,39 @@ fn squeeze_gamma(
         .ok_or(Error::Dimension)?;
     transcript.uints(&scheme.ring().modulus(), count)
 }
-/// The evaluation equations of a proof, in order: a list, or rows that the toolbox produces
-/// in chunks (its projection rows), so that they are never all held at once.
+/// The evaluation equations of a proof, in order: a list, or the toolbox's projection rows,
+/// which it adds to the combination already combined (`tbox::ProjectionRows`).
 pub(crate) trait EvalRows {
     /// The number of equations.
     fn count(&self) -> usize;
-    /// Call `f` with consecutive chunks of the equations, in order, up to its first error.
-    fn try_for_each_chunk(
+    /// Add the equations, in order, to `combination`. The prover passes its witness, and the
+    /// equations are checked against it before they are added.
+    fn add_to(
         &self,
-        f: &mut dyn FnMut(&[QuadEq]) -> Result<(), Error>,
+        combination: &mut Combination<'_>,
+        witness: Option<&PolyVec>,
     ) -> Result<(), Error>;
 }
 impl EvalRows for [QuadEq] {
     fn count(&self) -> usize {
         self.len()
     }
-    fn try_for_each_chunk(
+    fn add_to(
         &self,
-        f: &mut dyn FnMut(&[QuadEq]) -> Result<(), Error>,
+        combination: &mut Combination<'_>,
+        witness: Option<&PolyVec>,
     ) -> Result<(), Error> {
-        f(self)
+        if let Some(witness) = witness {
+            check_constants(self, witness, &mut quad::PairProducts::empty())?;
+        }
+        combination.add(self)
     }
 }
 /// The traces of the $`\lambda`$ combinations $`\sum_j\Gamma_{rj}f_j`$ of the evaluation
 /// equations $`f_j`$, for the rows $`r`$ of `gamma`, added up as the equations arrive: each
 /// row takes the additions of one pass over the whole list, in its order, so the rows do not
 /// depend on the chunks.
-struct Combination<'a> {
+pub(crate) struct Combination<'a> {
     ring: &'a Arc<Ring>,
     gamma: &'a [U256],
     count: usize,
@@ -107,7 +113,7 @@ struct Combination<'a> {
     rows: Vec<QuadEq>,
 }
 impl<'a> Combination<'a> {
-    fn new(
+    pub(crate) fn new(
         scheme: &'a Abdlop,
         gamma: &'a [U256],
         count: usize,
@@ -129,8 +135,38 @@ impl<'a> Combination<'a> {
             rows,
         })
     }
+    /// Each row's weights of the next `count` equations.
+    pub(crate) fn next_weights(&self, count: usize) -> Result<Vec<&'a [U256]>, Error> {
+        let (start, end) = (
+            self.added,
+            self.added.checked_add(count).ok_or(Error::Dimension)?,
+        );
+        if end > self.count {
+            return Err(Error::Dimension);
+        }
+        let (gamma, total) = (self.gamma, self.count);
+        Ok((0..self.rows.len())
+            .map(|row| &gamma[row * total + start..row * total + end])
+            .collect())
+    }
+    /// Add to each row `rows[row]`, which the caller formed as the combination of the next
+    /// `count` equations with that row's weights ([`Combination::next_weights`]).
+    pub(crate) fn add_combined(&mut self, rows: Vec<QuadEq>, count: usize) -> Result<(), Error> {
+        let end = self.added.checked_add(count).ok_or(Error::Dimension)?;
+        if rows.len() != self.rows.len() || end > self.count {
+            return Err(Error::Dimension);
+        }
+        for eq in &rows {
+            eq.check(self.ring, self.input_dim)?;
+        }
+        // The rows are computed in parallel (`parallel`).
+        let pairs: Vec<(&mut QuadEq, QuadEq)> = self.rows.iter_mut().zip(rows).collect();
+        crate::par::try_for_each_min(pairs, 2, |(row, eq)| row.add_assign(&eq))?;
+        self.added = end;
+        Ok(())
+    }
     /// Add the next equations.
-    fn add(&mut self, chunk: &[QuadEq]) -> Result<(), Error> {
+    pub(crate) fn add(&mut self, chunk: &[QuadEq]) -> Result<(), Error> {
         for eq in chunk {
             eq.check(self.ring, self.input_dim)?;
         }
@@ -153,7 +189,7 @@ impl<'a> Combination<'a> {
         Ok(())
     }
     /// The traces of the rows, once every equation was added.
-    fn finish(mut self) -> Result<Vec<QuadEq>, Error> {
+    pub(crate) fn finish(mut self) -> Result<Vec<QuadEq>, Error> {
         if self.added != self.count {
             return Err(Error::Dimension);
         }
@@ -182,7 +218,7 @@ fn combined(
 }
 /// The honest prover's check that `witness` satisfies each of `eqs` at the constant
 /// coefficient, with the witness products of `pairs`, extended by those of `eqs`.
-fn check_constants(
+pub(crate) fn check_constants(
     eqs: &[QuadEq],
     witness: &PolyVec,
     pairs: &mut quad::PairProducts,
@@ -369,15 +405,10 @@ pub(crate) fn prove_in<E: EvalRows + ?Sized>(
     )?;
     transcript.absorb(&vector_bytes(&garbage_commitments)?);
     let gamma = squeeze_gamma(&extended, &mut transcript, evals.count())?;
-    // Each chunk of evaluation equations is checked against the witness and added to the
-    // combination as it arrives. Nothing is returned before every check passed.
+    // The evaluation equations are checked against the witness as they are added to the
+    // combination. Nothing is returned before every check passed.
     let mut combination = Combination::new(&extended, &gamma, evals.count(), witness.len())?;
-    let mut pairs = quad::PairProducts::empty();
-    evals.try_for_each_chunk(&mut |chunk| {
-        check_constants(chunk, &witness, &mut pairs)?;
-        combination.add(chunk)
-    })?;
-    drop(pairs);
+    evals.add_to(&mut combination, Some(&witness))?;
     let combined = combination.finish()?;
     // The rows' values, in parallel (`parallel`) and in order.
     let values = crate::par::try_map(combined.len(), |k| combined[k].evaluate(&witness))?;
@@ -481,7 +512,7 @@ pub(crate) fn verify_in<E: EvalRows + ?Sized>(
     transcript.absorb(&vector_bytes(&proof.garbage_commitments)?);
     let gamma = squeeze_gamma(&extended, &mut transcript, evals.count())?;
     let mut combination = Combination::new(&extended, &gamma, evals.count(), dim)?;
-    evals.try_for_each_chunk(&mut |chunk| combination.add(chunk))?;
+    evals.add_to(&mut combination, None)?;
     let combined = combination.finish()?;
     let equations = final_equations(&extended, eqs, combined, &proof.h, dim)?;
     transcript.absorb(&vector_bytes(&proof.h)?);
