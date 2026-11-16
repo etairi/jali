@@ -117,6 +117,68 @@ impl Garner {
     }
 }
 
+/// [`Garner`]'s constants for exactly `K` primes in arrays, for the loops of one reconstruction.
+struct FixedGarner<const K: usize> {
+    primes: [u64; K],
+    prefixes: [[(u64, u64); K]; K],
+    inverses: [(u64, u64); K],
+    half: [u64; K],
+}
+impl Garner {
+    fn fixed<const K: usize>(&self) -> FixedGarner<K> {
+        debug_assert_eq!(self.primes.len(), K);
+        FixedGarner {
+            primes: core::array::from_fn(|i| self.primes[i]),
+            prefixes: core::array::from_fn(|i| {
+                core::array::from_fn(|t| self.prefixes[i].get(t).copied().unwrap_or((0, 0)))
+            }),
+            inverses: core::array::from_fn(|i| self.inverses[i]),
+            half: core::array::from_fn(|i| self.half[i]),
+        }
+    }
+}
+impl<const K: usize> FixedGarner<K> {
+    /// [`Garner::digits`] of coefficient `j`.
+    #[inline(always)]
+    fn digits(&self, residues: &[&[u64]; K], j: usize) -> ([u64; K], bool) {
+        let mut digits = [0u64; K];
+        for i in 0..K {
+            let p = self.primes[i];
+            let mut sum = 0;
+            for t in 0..i {
+                let (w, w_shoup) = self.prefixes[i][t];
+                sum = add_mod(sum, shoup_mul(digits[t], w, w_shoup, p), p);
+            }
+            let (w, w_shoup) = self.inverses[i];
+            digits[i] = shoup_mul(sub_mod(residues[i][j], sum, p), w, w_shoup, p);
+        }
+        for i in (0..K).rev() {
+            if digits[i] != self.half[i] {
+                return (digits, digits[i] > self.half[i]);
+            }
+        }
+        (digits, false)
+    }
+}
+/// The residues of every coefficient, prime by prime, as `K` slices of one length.
+fn columns<const K: usize>(residues: &[Vec<u64>]) -> [&[u64]; K] {
+    let d = residues[0].len();
+    core::array::from_fn(|i| &residues[i][..d])
+}
+
+/// $`vw\bmod q`$ for a digit $`v<2^{64}`$: `shoup_mul128` of $`v`$, with two word products for
+/// the quotient instead of four (the quotient is the same, so is the result).
+#[inline(always)]
+fn shoup_mul128_word(v: u64, w: u128, w_shoup: u128, q: u128) -> u128 {
+    let v = u128::from(v);
+    let low = v * (w_shoup & u128::from(u64::MAX));
+    let high = v * (w_shoup >> 64);
+    // The top 128 bits of v w_shoup; no overflow, as high <= (2^64 - 1)^2.
+    let k = (high + (low >> 64)) >> 64;
+    let r = v.wrapping_mul(w).wrapping_sub(k.wrapping_mul(q));
+    if r >= q { r - q } else { r }
+}
+
 /// The CRT for moduli $`q<2^{63}`$: [`Garner`]'s digits, then
 /// $`X\bmod q=\sum_jv_j(M_j\bmod q)\bmod q`$ by Shoup products modulo $`q`$ (which need
 /// $`q<2^{63}`$), less $`P\bmod q`$ for a centred value below zero. The result equals that of
@@ -152,6 +214,39 @@ impl SmallCrt {
     /// The modulus $`q<2^{63}`$.
     pub(crate) fn modulus(&self) -> u64 {
         self.q
+    }
+    /// [`SmallCrt::reconstruct`] of every coefficient, with the constants of one to four
+    /// primes in arrays.
+    pub(crate) fn reconstruct_all(&self, residues: &[Vec<u64>]) -> Vec<U256> {
+        match self.garner.primes.len() {
+            1 => self.reconstruct_fixed::<1>(residues),
+            2 => self.reconstruct_fixed::<2>(residues),
+            3 => self.reconstruct_fixed::<3>(residues),
+            4 => self.reconstruct_fixed::<4>(residues),
+            _ => (0..residues[0].len())
+                .map(|j| U256::from_u64(self.reconstruct(residues, j)))
+                .collect(),
+        }
+    }
+    fn reconstruct_fixed<const K: usize>(&self, residues: &[Vec<u64>]) -> Vec<U256> {
+        let garner = self.garner.fixed::<K>();
+        let columns = columns::<K>(residues);
+        let prefixes: [(u64, u64); K] = core::array::from_fn(|i| self.prefixes_q[i]);
+        let q = self.q;
+        (0..columns[0].len())
+            .map(|j| {
+                let (digits, negative) = garner.digits(&columns, j);
+                let mut x = 0;
+                for (v, (w, w_shoup)) in digits.iter().zip(&prefixes) {
+                    x = add_mod(x, shoup_mul(*v, *w, *w_shoup, q), q);
+                }
+                U256::from_u64(if negative {
+                    sub_mod(x, self.product_q, q)
+                } else {
+                    x
+                })
+            })
+            .collect()
     }
     /// The canonical representative modulo $`q`$ of the centred integer whose residues modulo
     /// the primes are `residues[i][j]`, each in $`[0,p_i)`$.
@@ -220,6 +315,48 @@ impl WideCrt {
             product_q,
             native,
         }
+    }
+    /// [`WideCrt::reconstruct`] of every coefficient, with the constants of one to four primes
+    /// in arrays when $`q`$ has the native tail.
+    pub(crate) fn reconstruct_all(
+        &self,
+        residues: &[Vec<u64>],
+        q: &NonZero<U256>,
+        small: Option<&Divisor64>,
+    ) -> Vec<U256> {
+        match (&self.native, self.garner.primes.len()) {
+            (Some(tail), 1) => self.reconstruct_fixed::<1>(tail, residues),
+            (Some(tail), 2) => self.reconstruct_fixed::<2>(tail, residues),
+            (Some(tail), 3) => self.reconstruct_fixed::<3>(tail, residues),
+            (Some(tail), 4) => self.reconstruct_fixed::<4>(tail, residues),
+            _ => (0..residues[0].len())
+                .map(|j| self.reconstruct(residues, j, q, small))
+                .collect(),
+        }
+    }
+    fn reconstruct_fixed<const K: usize>(
+        &self,
+        tail: &NativeTail,
+        residues: &[Vec<u64>],
+    ) -> Vec<U256> {
+        let garner = self.garner.fixed::<K>();
+        let columns = columns::<K>(residues);
+        let prefixes: [(u128, u128); K] = core::array::from_fn(|i| tail.prefixes_q[i]);
+        let q = tail.q;
+        (0..columns[0].len())
+            .map(|j| {
+                let (digits, negative) = garner.digits(&columns, j);
+                let mut x = 0u128;
+                for (v, (m, m_shoup)) in digits.iter().zip(&prefixes) {
+                    x = add_mod128(x, shoup_mul128_word(*v, *m, *m_shoup, q), q);
+                }
+                U256::from_u128(if negative {
+                    sub_mod128(x, tail.product_q, q)
+                } else {
+                    x
+                })
+            })
+            .collect()
     }
     /// The canonical representative modulo $`q`$ of the centred integer whose residues modulo
     /// the primes are `residues[i][j]`, each in $`[0,p_i)`$; `small` is $`q`$ as a divisor

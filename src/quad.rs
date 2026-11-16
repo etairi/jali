@@ -966,7 +966,7 @@ struct MaskLinear {
     terms: Vec<(usize, Poly, Term)>,
 }
 impl MaskLinear {
-    fn new(equation: &QuadEq, s: &PolyVec) -> Result<Self, Error> {
+    fn new(equation: &QuadEq, quadratic: &Quadratic<'_>, s: &PolyVec) -> Result<Self, Error> {
         let ring = s.ring().clone();
         let dim = s.len();
         equation.check(&ring, dim)?;
@@ -988,16 +988,11 @@ impl MaskLinear {
                 (_, Term::Cheap(shape)) => shape.add_product_to(out, a).map(|_| ()),
             }
         };
-        for ((r, c), p) in equation.r2.entries() {
-            if p.is_zero() {
-                continue;
-            }
-            let (r, c) = (usize::from(r), usize::from(c));
-            let pt = Term::new(p);
+        for &(r, c, p, ref pt) in &quadratic.entries {
             let (sr, sc) = (&s.entries()[r], &s.entries()[c]);
             // w_c += s_r R_rc and w_r += R_rc s_c.
-            add_product(&mut w[c], &mut sums[c], (sr, &s_terms[r]), (p, &pt))?;
-            add_product(&mut w[r], &mut sums[r], (p, &pt), (sc, &s_terms[c]))?;
+            add_product(&mut w[c], &mut sums[c], (sr, &s_terms[r]), (p, pt))?;
+            add_product(&mut w[r], &mut sums[r], (p, pt), (sc, &s_terms[c]))?;
         }
         let mut terms = Vec::new();
         for (k, (mut wk, mut sum)) in w.into_iter().zip(sums).enumerate() {
@@ -1038,6 +1033,85 @@ impl MaskLinear {
     }
 }
 
+/// The nonzero quadratic coefficients of an equation, each classified and, if general,
+/// transformed once per proof, for [`MaskLinear::new`] and every attempt's
+/// [`Quadratic::evaluate`] instead of once per use.
+struct Quadratic<'a> {
+    ring: Arc<Ring>,
+    dim: usize,
+    /// $`(r,c,R_{rc},t_{rc})`$ for the nonzero entries, by row then column.
+    entries: Vec<(usize, usize, &'a Poly, Term)>,
+}
+impl<'a> Quadratic<'a> {
+    fn new(equation: &'a QuadEq) -> Self {
+        let entries = equation
+            .r2
+            .entries()
+            .filter(|(_, p)| !p.is_zero())
+            .map(|((r, c), p)| (usize::from(r), usize::from(c), p, Term::new(p)))
+            .collect();
+        Self {
+            ring: equation.r0.ring().clone(),
+            dim: equation.r2.dimension(),
+            entries,
+        }
+    }
+    /// `bilinear(y, y)` of the quadratic coefficients, computed as it computes it: each row's
+    /// sum $`\sum_cR_{rc}y_c`$, then its product by $`y_r`$, every step exact.
+    fn evaluate(&self, y: &PolyVec) -> Result<Poly, Error> {
+        if y.len() != self.dim {
+            return Err(Error::Dimension);
+        }
+        if y.ring() != &self.ring {
+            return Err(Error::RingMismatch);
+        }
+        let ring = &self.ring;
+        let mut shapes: Zeroizing<Vec<Option<Shape>>> = Zeroizing::new(vec![None; y.len()]);
+        let mut transforms: Vec<Option<PolyNtt>> = vec![None; y.len()];
+        let mut out = Poly::zero(ring.clone());
+        let mut outer = Accumulator::new(ring);
+        for row in self.entries.chunk_by(|x, z| x.0 == z.0) {
+            let r = row[0].0;
+            let mut inner = Poly::zero(ring.clone());
+            let mut inner_sum = Accumulator::new(ring);
+            for &(_, c, p, ref term) in row {
+                let yc = &y.entries()[c];
+                let shape = *shapes[c].get_or_insert_with(|| Shape::of(yc));
+                match (term, shape) {
+                    (Term::General(a), Shape::General) => {
+                        let b = transforms[c].get_or_insert_with(|| yc.to_ntt());
+                        inner_sum.mac(a, b, &mut inner)?;
+                    }
+                    (Term::General(_), cheap) => {
+                        cheap.add_product_to(&mut inner, p)?;
+                    }
+                    (Term::Cheap(cheap), _) => {
+                        cheap.add_product_to(&mut inner, yc)?;
+                    }
+                }
+            }
+            inner_sum.finish_into(&mut inner)?;
+            let yr = &y.entries()[r];
+            let shape = *shapes[r].get_or_insert_with(|| Shape::of(yr));
+            match (shape, Shape::of(&inner)) {
+                (Shape::Zero, _) | (_, Shape::Zero) => {}
+                (Shape::General, Shape::General) => {
+                    let a = transforms[r].get_or_insert_with(|| yr.to_ntt());
+                    outer.mac(a, &inner.to_ntt(), &mut out)?;
+                }
+                (Shape::General, cheap) => {
+                    cheap.add_product_to(&mut out, yr)?;
+                }
+                (cheap, _) => {
+                    cheap.add_product_to(&mut out, &inner)?;
+                }
+            }
+        }
+        outer.finish_into(&mut out)?;
+        Ok(out)
+    }
+}
+
 /// [`prove_core`] with the extractable commitment when `ext` is given: the challenge function
 /// also receives each attempt's LinHC mask commitment, and must absorb it.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -1058,7 +1132,8 @@ pub(crate) fn prove_core_ext<U: Send>(
     + Sync,
 ) -> Result<(QuadProof, Option<linhc::LinhcOpening>, U), Error> {
     let s = interleave(&opening.s1, &opening.m)?;
-    let linear = MaskLinear::new(equation, &s)?;
+    let quadratic = Quadratic::new(equation);
+    let linear = MaskLinear::new(equation, &quadratic, &s)?;
     let b = extra_row(scheme)?;
     let s21 = abdlop::part(&opening.s2, 0, scheme.a2.cols())?;
     let bs = b.dot(&s21)?;
@@ -1081,7 +1156,7 @@ pub(crate) fn prove_core_ext<U: Send>(
             let y = interleave(y1, &minus_by)?;
             let g1 = linear.apply(&y)?;
             let t = bs.add(&g1)?;
-            let v = equation.r2.bilinear(&y, &y)?.add(&b.dot(y21)?)?;
+            let v = quadratic.evaluate(&y)?.add(&b.dot(y21)?)?;
             let (c, side) = challenge(&t, &v, w1, mask)?;
             Ok((c, (t, side)))
         },

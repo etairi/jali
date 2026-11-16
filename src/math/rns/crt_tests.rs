@@ -95,12 +95,14 @@ fn native_crt_equals_a_big_integer_crt_for_one_to_nine_primes() {
             let crt = SmallCrt::new(q, &primes);
             let xs = integers(&product, &mut rng);
             let residues = residues_of(&xs, &primes);
+            let batch = crt.reconstruct_all(&residues);
             for (j, x) in xs.iter().enumerate() {
                 assert_eq!(
                     crt.reconstruct(&residues, j),
                     centred_mod(x, &product, q),
                     "{k} primes, q {q}, X {x}"
                 );
+                assert_eq!(batch[j], U256::from_u64(crt.reconstruct(&residues, j)));
             }
         }
     }
@@ -151,12 +153,15 @@ fn wide_crt_equals_a_big_integer_crt_for_one_to_nine_primes() {
             let xs = integers(&product, &mut rng);
             let residues = residues_of(&xs, &primes);
             for crt in &crts {
+                let batch = crt.reconstruct_all(&residues, &nonzero, small.as_ref());
                 for (j, x) in xs.iter().enumerate() {
+                    let one = crt.reconstruct(&residues, j, &nonzero, small.as_ref());
                     assert_eq!(
-                        big(&crt.reconstruct(&residues, j, &nonzero, small.as_ref())),
+                        big(&one),
                         centred_mod_big(x, &product, &big(&q)),
                         "{k} primes, q {q}, X {x}"
                     );
+                    assert_eq!(batch[j], one, "{k} primes, q {q}, X {x}");
                 }
             }
         }
@@ -215,6 +220,12 @@ fn every_crt_equals_the_multi_limb_path_on_rings_with_one_to_nine_primes() {
             Crt::Six(basis) => reconstruct_with(&ring, basis, &residues),
             Crt::Nine(basis) => reconstruct_with(&ring, basis, &residues),
         };
+        let batch = match &ring.crt {
+            RingCrt::Small(small) => small.reconstruct_all(&residues),
+            RingCrt::Wide(wide) => {
+                wide.reconstruct_all(&residues, &ring.nonzero, ring.small.as_ref())
+            }
+        };
         for (j, want) in want.iter().enumerate() {
             let got = match &ring.crt {
                 RingCrt::Small(small) => U256::from_u64(small.reconstruct(&residues, j)),
@@ -223,6 +234,11 @@ fn every_crt_equals_the_multi_limb_path_on_rings_with_one_to_nine_primes() {
                 }
             };
             assert_eq!(got, *want, "q {}, d {}, coefficient {j}", ring.q, ring.d);
+            assert_eq!(
+                batch[j], *want,
+                "q {}, d {}, coefficient {j}",
+                ring.q, ring.d
+            );
         }
     }
 }

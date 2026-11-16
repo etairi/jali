@@ -108,7 +108,8 @@ impl core::fmt::Debug for RnsProduct {
     }
 }
 impl RnsProduct {
-    /// The empty sum, of no products.
+    /// Test only: the empty sum, of no products.
+    #[cfg(test)]
     pub(crate) fn zero(ring: &Arc<Ring>) -> Self {
         Self {
             ring: ring.clone(),
@@ -116,8 +117,10 @@ impl RnsProduct {
             count: 0,
         }
     }
-    /// `self += a * b` without an intermediate product: the value of `add_assign` with
-    /// `a.product(b)`, refusing a product past [`NADDS`] without modifying `self`.
+    /// Test only, the oracle of [`LazySum`]: `self += a * b` without an intermediate product,
+    /// the value of `add_assign` with `a.product(b)`, refusing a product past [`NADDS`] without
+    /// modifying `self`.
+    #[cfg(test)]
     pub(crate) fn mac(&mut self, a: &PolyNtt, b: &PolyNtt) -> Result<(), Error> {
         if self.ring != a.ring || self.ring != b.ring {
             return Err(Error::RingMismatch);
@@ -141,7 +144,8 @@ impl RnsProduct {
         self.count += 1;
         Ok(())
     }
-    /// The number of products in the sum.
+    /// Test only: the number of products in the sum.
+    #[cfg(test)]
     pub(crate) fn count(&self) -> usize {
         self.count
     }
@@ -173,6 +177,103 @@ impl RnsProduct {
         reconstruct(&self.ring, &self.residues.0)
     }
 }
+/// Products added before a reduction: a sum reduced below $`p<2^{62}`$ plus 15 products of
+/// residues below $`p`$ stays below $`p+15(p-1)^2<2^{128}`$.
+const LAZY: usize = 15;
+
+/// A sum of at most [`NADDS`] products of transforms, added as 128-bit integers and reduced once
+/// per [`LAZY`] products instead of once each.
+///
+/// Each residue of a transform is the Montgomery form $`\tilde x=xR\bmod p`$, below $`p`$, and
+/// [`RnsProduct::mac`] adds $`\mathrm{REDC}(\tilde a\tilde b)=\tilde a\tilde bR^{-1}\bmod p`$
+/// for each product. Here the sums $`\sum_k\tilde a_k\tilde b_k`$ are kept exactly, reduced
+/// modulo $`p`$ (Barrett) whenever [`LAZY`] products are pending, and $`R^{-1}`$ is applied once
+/// at the end (`mont_mul` by 1), so the residues are those of [`RnsProduct::mac`] over the same
+/// products: both are $`R^{-1}\sum_k\tilde a_k\tilde b_k\bmod p`$.
+pub(crate) struct LazySum {
+    ring: Arc<Ring>,
+    /// Prime after prime, `d` sums each.
+    sums: Vec<u128>,
+    pending: usize,
+    count: usize,
+}
+impl LazySum {
+    /// The empty sum, of no products.
+    pub(crate) fn new(ring: &Arc<Ring>) -> Self {
+        Self {
+            ring: ring.clone(),
+            sums: vec![0; ring.plans.len() * ring.d],
+            pending: 0,
+            count: 0,
+        }
+    }
+    /// The number of products in the sum.
+    pub(crate) fn count(&self) -> usize {
+        self.count
+    }
+    /// `self += a * b`, refusing a product past [`NADDS`] without modifying `self`.
+    pub(crate) fn mac(&mut self, a: &PolyNtt, b: &PolyNtt) -> Result<(), Error> {
+        if self.ring != a.ring || self.ring != b.ring {
+            return Err(Error::RingMismatch);
+        }
+        if self.count >= NADDS {
+            return Err(Error::Overflow);
+        }
+        if self.pending == LAZY {
+            self.reduce_pending();
+        }
+        for ((sums, x), y) in self
+            .sums
+            .chunks_exact_mut(self.ring.d)
+            .zip(&a.residues.0)
+            .zip(&b.residues.0)
+        {
+            for ((s, x), y) in sums.iter_mut().zip(x).zip(y) {
+                *s += u128::from(*x) * u128::from(*y);
+            }
+        }
+        self.pending += 1;
+        self.count += 1;
+        Ok(())
+    }
+    fn reduce_pending(&mut self) {
+        for (sums, plan) in self
+            .sums
+            .chunks_exact_mut(self.ring.d)
+            .zip(&self.ring.plans)
+        {
+            for s in sums {
+                *s = u128::from(plan.reduce_wide(*s));
+            }
+        }
+        self.pending = 0;
+    }
+    /// The residues of the sum, in Montgomery form below each prime.
+    fn residues(&self) -> Residues {
+        Residues(
+            self.sums
+                .chunks_exact(self.ring.d)
+                .zip(&self.ring.plans)
+                .map(|(sums, plan)| {
+                    sums.iter()
+                        .map(|s| plan.mont_mul(plan.reduce_wide(*s), 1))
+                        .collect()
+                })
+                .collect(),
+        )
+    }
+    /// Reconstruct the exact centred integer sum, then reduce modulo $`q`$: what
+    /// [`RnsProduct::reduce`] returns for the same products.
+    pub(crate) fn reduce(&self) -> Result<Poly, Error> {
+        reconstruct_owned(&self.ring, self.residues())
+    }
+}
+impl Drop for LazySum {
+    fn drop(&mut self) {
+        self.sums.as_mut_slice().zeroize();
+    }
+}
+
 /// The residues modulo prime $`i`$ of the centred representatives of canonical coefficients.
 fn centred_residues(ring: &Ring, coeffs: &[U256], i: usize) -> Vec<u64> {
     let p = ring.plans[i].modulus();
@@ -226,17 +327,16 @@ fn centred_residues(ring: &Ring, coeffs: &[U256], i: usize) -> Vec<u64> {
     }
 }
 fn reconstruct(ring: &Arc<Ring>, residues: &[Vec<u64>]) -> Result<Poly, Error> {
-    let mut coeffs = Residues(residues.to_vec());
+    reconstruct_owned(ring, Residues(residues.to_vec()))
+}
+/// [`reconstruct`] of residues that the caller gives up, transformed back in place.
+fn reconstruct_owned(ring: &Arc<Ring>, mut coeffs: Residues) -> Result<Poly, Error> {
     for (values, plan) in coeffs.0.iter_mut().zip(&ring.plans) {
         plan.inverse_mont(values);
     }
     let out = match &ring.crt {
-        RingCrt::Small(small) => (0..ring.d)
-            .map(|j| U256::from_u64(small.reconstruct(&coeffs.0, j)))
-            .collect(),
-        RingCrt::Wide(wide) => (0..ring.d)
-            .map(|j| wide.reconstruct(&coeffs.0, j, &ring.nonzero, ring.small.as_ref()))
-            .collect(),
+        RingCrt::Small(small) => small.reconstruct_all(&coeffs.0),
+        RingCrt::Wide(wide) => wide.reconstruct_all(&coeffs.0, &ring.nonzero, ring.small.as_ref()),
     };
     Ok(Poly::from_canonical(ring.clone(), out))
 }
@@ -279,3 +379,5 @@ fn reconstruct_with<const C: usize>(
 
 #[cfg(test)]
 mod crt_tests;
+#[cfg(test)]
+mod lazy_tests;

@@ -76,6 +76,8 @@ pub struct NttPlan {
     d: usize,
     /// $`-p^{-1}\bmod2^{64}`$, for Montgomery reduction.
     neg_inv: u64,
+    /// $`\lfloor(2^{128}-1)/p\rfloor`$, for Barrett reductions of 128-bit sums.
+    barrett: u128,
     /// The twiddles of the cyclic transforms with their Shoup constants, stage after stage: the
     /// stage of length `len` holds $`\omega^{jd/len}`$ for $`j<len/2`$, with $`\omega=\psi^2`$
     /// forward and $`\omega^{-1}`$ inverse.
@@ -165,6 +167,7 @@ impl NttPlan {
             p,
             d,
             neg_inv: inv.wrapping_neg(),
+            barrett: u128::MAX / u128::from(p),
             forward_twiddles: stages(root),
             inverse_twiddles: stages(pow_mod(root, p - 2, p)),
             twist,
@@ -364,6 +367,23 @@ impl NttPlan {
         let m = (t as u64).wrapping_mul(self.neg_inv);
         let u = ((t + u128::from(m) * u128::from(self.p)) >> 64) as u64;
         if u >= self.p { u - self.p } else { u }
+    }
+    /// $`x\bmod p`$ in $`[0,p)`$ for any $`x<2^{128}`$, by Barrett's method: with
+    /// $`\mu=\lfloor(2^{128}-1)/p\rfloor`$ the quotient estimate $`\lfloor x\mu/2^{128}\rfloor`$ is
+    /// at most two below $`\lfloor x/p\rfloor`$ and never above it, so the remainder is below
+    /// $`3p<2^{64}`$ before two conditional subtractions.
+    #[inline(always)]
+    pub(crate) fn reduce_wide(&self, x: u128) -> u64 {
+        let p = u128::from(self.p);
+        let estimate = super::mod128::mul_wide(x, self.barrett).1;
+        let mut r = x.wrapping_sub(estimate.wrapping_mul(p));
+        if r >= p {
+            r -= p;
+        }
+        if r >= p {
+            r -= p;
+        }
+        r as u64
     }
 }
 

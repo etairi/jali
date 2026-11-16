@@ -1,7 +1,8 @@
 //! `MaskLinear` against the three products it replaces in the quadratic proof's attempts:
-//! $`\mathrm{bilinear}(s,y)+\mathrm{bilinear}(y,s)+r_1\cdot y`$, for equations with zero,
-//! scalar, monomial and general entries and masks of every shape, at small, PCS-size and
-//! large moduli.
+//! $`\mathrm{bilinear}(s,y)+\mathrm{bilinear}(y,s)+r_1\cdot y`$, and `Quadratic::evaluate`
+//! against $`\mathrm{bilinear}(y,y)`$, for equations with zero, scalar, monomial and general
+//! entries and masks of every shape, at small, PCS-size and large moduli; `abdlop::scale`
+//! against a product per entry.
 use super::*;
 
 struct Rng(u64);
@@ -75,7 +76,8 @@ fn the_hoisted_form_equals_the_three_products() {
                 r1.push((i, shaped(&ring, &mut rng, kind)));
             }
             eq.r1 = SparsePolyVec::new(ring.clone(), dim, r1).unwrap();
-            let linear = MaskLinear::new(&eq, &s).unwrap();
+            let quadratic = Quadratic::new(&eq);
+            let linear = MaskLinear::new(&eq, &quadratic, &s).unwrap();
             for attempt in 0..4u64 {
                 let y = PolyVec::new(
                     ring.clone(),
@@ -93,11 +95,52 @@ fn the_hoisted_form_equals_the_three_products() {
                     .add(&eq.r1.dot(&y).unwrap())
                     .unwrap();
                 assert_eq!(linear.apply(&y).unwrap(), want, "q {q} round {round}");
+                assert_eq!(
+                    quadratic.evaluate(&y).unwrap(),
+                    eq.r2.bilinear(&y, &y).unwrap(),
+                    "q {q} round {round}"
+                );
             }
+            assert_eq!(
+                quadratic.evaluate(&s).unwrap(),
+                eq.r2.bilinear(&s, &s).unwrap()
+            );
             // The refusals of the products: a mask of another length.
             let short =
                 PolyVec::new(ring.clone(), vec![Poly::zero(ring.clone()); dim - 1]).unwrap();
             assert_eq!(linear.apply(&short), Err(Error::Dimension));
+            assert_eq!(quadratic.evaluate(&short), Err(Error::Dimension));
+            let other = Ring::with_modulus(U256::from_u8(17), 64).unwrap();
+            let foreign = PolyVec::new(other.clone(), vec![Poly::zero(other); dim]).unwrap();
+            assert_eq!(quadratic.evaluate(&foreign), Err(Error::RingMismatch));
         }
+    }
+}
+
+#[test]
+fn scaling_equals_a_product_per_entry() {
+    let mut rng = Rng(72);
+    for q in [
+        U256::from_u8(13),
+        U256::from_u64(1099511627917),
+        U256::from_u128(800602353498606932557),
+    ] {
+        let ring = Ring::with_modulus(q, 64).unwrap();
+        for kind in 0..8u64 {
+            let b = shaped(&ring, &mut rng, kind);
+            let a = PolyVec::new(
+                ring.clone(),
+                (0..9).map(|i| shaped(&ring, &mut rng, i + kind)).collect(),
+            )
+            .unwrap();
+            let want: Vec<Poly> = a.entries().iter().map(|x| x.mul(&b).unwrap()).collect();
+            assert_eq!(abdlop::scale(&a, &b).unwrap().entries(), &want[..], "q {q}");
+        }
+        let other = Ring::with_modulus(U256::from_u8(17), 64).unwrap();
+        let a = PolyVec::new(ring.clone(), vec![Poly::zero(ring.clone())]).unwrap();
+        assert_eq!(
+            abdlop::scale(&a, &Poly::zero(other)).err(),
+            Some(Error::RingMismatch)
+        );
     }
 }
