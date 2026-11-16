@@ -8,7 +8,6 @@ use crate::{
     math::{
         int::Divisor64,
         mod128::Mod128,
-        ntt::NttPlan,
         ring::{SmallCrt, WideCrt},
     },
     params::moduli::NTT_PRIMES,
@@ -196,7 +195,7 @@ fn every_crt_equals_the_multi_limb_path_on_rings_with_one_to_nine_primes() {
         assert!(primes.contains(&k), "no ring with {k} primes");
     }
     for ring in rings {
-        let primes: Vec<u64> = ring.plans.iter().map(NttPlan::modulus).collect();
+        let primes: Vec<u64> = ring.plans.iter().map(|plan| plan.modulus()).collect();
         let product = primes
             .iter()
             .map(|p| BigUint::from(*p))
