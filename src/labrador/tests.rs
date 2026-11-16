@@ -186,6 +186,27 @@ fn proofs_are_deterministic() {
 }
 
 #[test]
+fn kept_projection_polynomials_give_the_streamed_proofs() {
+    // Below and above 2^32 (words of 32 and of 64 bits), one and several levels.
+    let mut rng = TestRng::new(17);
+    let policy = Policy::default();
+    for (q, r, n, bound, full, ct) in [
+        (Q, 2, 8, 1, 1, 1),
+        (Q, 4, 512, 1, 3, 3),
+        (68719476493u64, 3, 16, 50, 2, 1),
+        (274877906837, 2, 64, 1000, 1, 1),
+    ] {
+        let (statement, witness) = instance_mod(&mut rng, q, r, n, bound, full, ct);
+        let kept = prove(&statement, &witness, &[3u8; 32], b"k", &policy).unwrap();
+        level::STREAM_TWICE.with(|c| c.set(true));
+        let streamed = prove(&statement, &witness, &[3u8; 32], b"k", &policy).unwrap();
+        level::STREAM_TWICE.with(|c| c.set(false));
+        assert_eq!(kept, streamed, "q {q}, r {r}, n {n}");
+        verify(&statement, &kept, &[3u8; 32], b"k", &policy).unwrap();
+    }
+}
+
+#[test]
 fn other_moduli_ranks_and_shapes() {
     let mut rng = TestRng::new(15);
     // 2^36 - 243 and 2^38 - 107, a prime rank, many vectors, a 20-bit modulus.
