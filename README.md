@@ -54,7 +54,7 @@ Jali is on [crates.io](https://crates.io/crates/jali). It needs Rust 1.95 or lat
 
 ```toml
 [dependencies]
-jali = { version = "0.2", features = ["serde"] }
+jali = { version = "0.3", features = ["serde"] }
 ```
 
 The crate forbids `unsafe` code and has no C dependencies.
