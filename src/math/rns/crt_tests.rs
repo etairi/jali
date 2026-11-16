@@ -7,6 +7,7 @@ use super::*;
 use crate::{
     math::{
         int::Divisor64,
+        mod128::Mod128,
         ntt::NttPlan,
         ring::{SmallCrt, WideCrt},
     },
@@ -116,6 +117,9 @@ fn wide_moduli() -> Vec<U256> {
         two(64).wrapping_sub(&U256::from_u8(59)),
         two(64),
         two(100).wrapping_sub(&U256::from_u8(15)),
+        U256::from_u128(800602353498606932557),
+        two(126).wrapping_sub(&U256::ONE),
+        two(126),
         two(128).wrapping_sub(&U256::ONE),
         two(128).wrapping_add(&U256::from_u8(165)),
         two(160).wrapping_add(&U256::from_u8(7)),
@@ -138,15 +142,23 @@ fn wide_crt_equals_a_big_integer_crt_for_one_to_nine_primes() {
         for q in wide_moduli() {
             let nonzero = NonZero::new(q).unwrap();
             let small = int::to_u64(&q).map(Divisor64::new);
-            let crt = WideCrt::new(&nonzero, &primes);
+            // The native tail where q has one (2^63 <= q < 2^126), and the six-limb sum always.
+            let wide = Mod128::new(&q);
+            let mut crts = vec![WideCrt::new(&nonzero, &primes, None)];
+            crts.extend(
+                wide.as_ref()
+                    .map(|m| WideCrt::new(&nonzero, &primes, Some(m))),
+            );
             let xs = integers(&product, &mut rng);
             let residues = residues_of(&xs, &primes);
-            for (j, x) in xs.iter().enumerate() {
-                assert_eq!(
-                    big(&crt.reconstruct(&residues, j, &nonzero, small.as_ref())),
-                    centred_mod_big(x, &product, &big(&q)),
-                    "{k} primes, q {q}, X {x}"
-                );
+            for crt in &crts {
+                for (j, x) in xs.iter().enumerate() {
+                    assert_eq!(
+                        big(&crt.reconstruct(&residues, j, &nonzero, small.as_ref())),
+                        centred_mod_big(x, &product, &big(&q)),
+                        "{k} primes, q {q}, X {x}"
+                    );
+                }
             }
         }
     }
@@ -249,6 +261,62 @@ fn native_residues_equal_the_reference_formula() {
                 expected,
                 "q {q}, prime {i}"
             );
+        }
+    }
+}
+
+/// The residue modulo $`p`$ of the centred value of a canonical $`x`$, by big integers:
+/// $`x`$ up to $`\lfloor q/2\rfloor`$, $`x-q`$ above.
+fn centred_residue_big(x: &BigUint, q: &BigUint, p: u64) -> u64 {
+    let p = BigUint::from(p);
+    let r = if x > &(q >> 1u32) {
+        (&p - ((q - x) % &p)) % &p
+    } else {
+        x % &p
+    };
+    r.to_u64_digits().first().copied().unwrap_or(0)
+}
+
+#[test]
+fn wide_centred_residues_equal_a_big_integer_formula() {
+    let mut rng = Rng(12);
+    for q in wide_moduli() {
+        let qb = big(&q);
+        let half = &qb >> 1u32;
+        let one = BigUint::from(1u32);
+        let mut xs = vec![
+            BigUint::from(0u32),
+            one.clone(),
+            half.clone(),
+            &half + &one,
+            &qb - &one,
+        ];
+        xs.extend((0..64).map(|_| rng.below(&qb)));
+        let values: Vec<U256> = xs
+            .iter()
+            .map(|x| {
+                let mut bytes = x.to_bytes_le();
+                bytes.resize(32, 0);
+                U256::from_le_slice(&bytes)
+            })
+            .collect();
+        for d in [64, 256] {
+            let ring = Ring::with_modulus(q, d).unwrap();
+            let mut padded = values.clone();
+            padded.resize(d, U256::ZERO);
+            let mut expected_xs = xs.clone();
+            expected_xs.resize(d, BigUint::from(0u32));
+            for (i, plan) in ring.plans.iter().enumerate() {
+                let expected: Vec<u64> = expected_xs
+                    .iter()
+                    .map(|x| centred_residue_big(x, &qb, plan.modulus()))
+                    .collect();
+                assert_eq!(
+                    centred_residues(&ring, &padded, i),
+                    expected,
+                    "q {q}, d {d}, prime {i}"
+                );
+            }
         }
     }
 }
