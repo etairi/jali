@@ -3,9 +3,9 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-11-16
 
-Not published yet. So far the proofs of the LNP22 modules are those of 0.2.0.
+The proofs of the LNP22 modules and their transcripts are those of 0.2.0, in both modes.
 
 ### Added
 
@@ -50,6 +50,31 @@ Not published yet. So far the proofs of the LNP22 modules are those of 0.2.0.
   nonzero entries. In the lattice test of the predicate-credential system the peak live heap
   of each step falls 2.1 to 4.2 times (the attribute proof from 601 to 225 MiB), and the
   memory that Kyber1024 proofs and their verification allocate 6.3 to 8.5 times.
+- **Faster again, with byte-identical proofs.** Measured on an Apple M4, one thread, against the
+  0.3.0 work before these changes (commit 9bb4c07):
+  - The evaluation proof combines the 256 projection rows of a family with the weights of each
+    challenge row before projecting them, so it projects once per challenge row instead of
+    once per projection row.
+  - The fold of the many-equation proof sums each key's products in the transform domain and
+    reconstructs each key once, products of transforms are added as 128-bit integers and
+    reduced once per 15 products, and the CRT reconstructs a whole polynomial at a time. The
+    quadratic proof transforms its equation's coefficients once per proof instead of once per
+    attempt, and products of affine forms insert their keys by merging sorted lists.
+  - The AES-256-CTR keystream is buffered, squeezed values below $`2^{64}`$ are reduced by
+    Barrett's method, and LinHC's two key products share one transform of their vector.
+
+  The lattice test of the predicate-credential system needs 1.88 times fewer cycles, 1.79 times
+  in the extractable mode, Kyber1024 proofs 2.7 to 3.0 times fewer and their verification 4.9
+  to 5.2 times fewer. The provers of the credential test hold 1.5% to 2.8% more memory, the
+  transformed quadratic coefficients.
+- **LaBRADOR, faster and parallel, with byte-identical proofs.** The prover keeps the
+  polynomials of the aggregated projection constraints between their two uses when they take
+  at most 64 MiB, instead of streaming the projection a third time. The projection is read in
+  blocks of a seekable stream, which the `parallel` feature processes at once. On one thread
+  the prover is 1.21 times faster for 2^18 and 2^20 witness coefficients and 1.04 times for
+  2^22. With `parallel` on the same machine (4 performance and 6 efficiency cores, shared with
+  other jobs) the prover is 1.8 to 1.9 times faster and the verifier 1.9 to 2.4 times, in wall
+  time. The prover holds 1.2 MiB more for 2^18 coefficients and 7 MiB more for 2^20.
 
 ## [0.2.0] - 2026-11-15
 
