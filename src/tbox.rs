@@ -482,8 +482,10 @@ fn range_rejection_m(scheme: &Abdlop, exact: bool) -> Result<u64, Error> {
     };
     crate::params::range_rejection_constant(t, alpha_squared)
 }
-/// At most this many rows of a projection family are held at once (see [`ProjectionRows`]).
-const PROJECTION_CHUNK: usize = 32;
+/// At most this many rows of a projection family are held at once (see [`ProjectionRows`]):
+/// with 16 rather than 32, the peak live heap of the predicate-credential lattice test's steps
+/// falls by another 6 to 13 MiB (measured 2026-11-16), and the work is the same.
+const PROJECTION_CHUNK: usize = 16;
 
 /// The evaluation equations of a toolbox proof, in order: the statement's own, then one per
 /// row of each nonempty projection family, exact first. The rows are produced in chunks of
