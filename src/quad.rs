@@ -588,12 +588,27 @@ impl PairProducts {
     /// the distinct pairs twice, so that the products hold at most half the memory of the
     /// equations' own entries.
     pub(crate) fn for_equations(eqs: &[QuadEq], witness: &PolyVec) -> Result<Option<Self>, Error> {
+        let mut products = Self::empty();
+        Ok(products.add_for(eqs, witness)?.then_some(products))
+    }
+    /// No products, for [`PairProducts::add_for`].
+    pub(crate) fn empty() -> Self {
+        Self {
+            products: BTreeMap::new(),
+        }
+    }
+    /// Add the products of the pairs of `eqs` that are not held yet, when
+    /// [`PairProducts::for_equations`] would return products for `eqs` on their own: `true`
+    /// when every pair of `eqs` is then held (and [`QuadEq::evaluate_constant_with`] computes
+    /// no product for them), `false` when nothing was added. Equations that arrive in chunks
+    /// share the products of their common pairs, each computed once.
+    pub(crate) fn add_for(&mut self, eqs: &[QuadEq], witness: &PolyVec) -> Result<bool, Error> {
         let ring = witness.ring();
         let mut pairs = BTreeMap::new();
         let mut entries = 0usize;
         for eq in eqs {
             if eq.check(ring, witness.len()).is_err() {
-                return Ok(None);
+                return Ok(false);
             }
             for ((r, c), a) in eq.r2.entries() {
                 if !a.is_zero() {
@@ -603,17 +618,19 @@ impl PairProducts {
             }
         }
         if pairs.is_empty() || entries < 2 * pairs.len() {
-            return Ok(None);
+            return Ok(false);
         }
-        let keys: Vec<(u16, u16)> = pairs.into_keys().collect();
+        let keys: Vec<(u16, u16)> = pairs
+            .into_keys()
+            .filter(|key| !self.products.contains_key(key))
+            .collect();
         let w = witness.entries();
         let values = crate::par::try_map(keys.len(), |k| {
             let (r, c) = keys[k];
             w[usize::from(r)].mul(&w[usize::from(c)])
         })?;
-        Ok(Some(Self {
-            products: keys.into_iter().zip(values).collect(),
-        }))
+        self.products.extend(keys.into_iter().zip(values));
+        Ok(true)
     }
 }
 fn encode_poly(w: &mut impl CodeWriter, p: &Poly) -> Result<(), Error> {

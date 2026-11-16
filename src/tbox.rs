@@ -21,7 +21,7 @@ use crate::{
     },
     params::{ExtractionParams, response_width},
     quad::{self, QuadEq},
-    quad_eval::{self, EvalProof},
+    quad_eval::{self, EvalProof, EvalRows},
     quad_many,
     rand::{
         AesPrg, ByteStream, derive_key, domain,
@@ -30,7 +30,7 @@ use crate::{
     },
     transcript::{Protocol, Transcript},
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 use zeroize::Zeroizing;
 
 #[cfg(test)]
@@ -482,6 +482,130 @@ fn range_rejection_m(scheme: &Abdlop, exact: bool) -> Result<u64, Error> {
     };
     crate::params::range_rejection_constant(t, alpha_squared)
 }
+/// At most this many rows of a projection family are held at once (see [`ProjectionRows`]).
+const PROJECTION_CHUNK: usize = 32;
+
+/// The evaluation equations of a toolbox proof, in order: the statement's own, then one per
+/// row of each nonempty projection family, exact first. The rows are produced in chunks of
+/// [`PROJECTION_CHUNK`] as the evaluation proof adds them into its combination. Each row is an
+/// affine form in every projected variable, so the 256 rows of a family together were most of
+/// the memory of a proof and of a verification when they were held at once (269 MiB of the
+/// 548 MiB peak of PCS's R_att proof, measured 2026-11-16).
+struct ProjectionRows<'a> {
+    scheme: &'a Abdlop,
+    dim: usize,
+    evals: &'a [QuadEq],
+    matrices: &'a Projections,
+    families: Vec<Family<'a>>,
+}
+/// A nonempty projection family of [`ProjectionRows`].
+struct Family<'a> {
+    exact: bool,
+    affines: &'a [QuadEq],
+    sign: &'a QuadEq,
+    offset: usize,
+    response: Zeroizing<Vec<i128>>,
+    prepared: Option<Prepared>,
+}
+impl<'a> ProjectionRows<'a> {
+    /// The equations for the statement's evaluation equations `evals` and the families
+    /// `(exact, affines, sign, mask offset, response)`, checked before any row is produced: a
+    /// nonempty family needs $`256/d`$ responses over the ring, an empty one none.
+    fn new(
+        scheme: &'a Abdlop,
+        evals: &'a [QuadEq],
+        families: [(bool, &'a [QuadEq], &'a QuadEq, usize, &PolyVec); 2],
+        matrices: &'a Projections,
+    ) -> Result<Self, Error> {
+        let dim = 2 * (scheme.bounded_len() + scheme.message_len());
+        let ring = scheme.ring();
+        let mut nonempty = Vec::new();
+        for (exact, affines, sign, offset, z) in families {
+            if affines.is_empty() {
+                if !z.is_empty() {
+                    return Err(Error::Dimension);
+                }
+                continue;
+            }
+            if z.len() != 256 / ring.degree() || z.ring() != ring {
+                return Err(Error::Dimension);
+            }
+            let response = abdlop::flatten(z)?;
+            nonempty.push(Family {
+                exact,
+                affines,
+                sign,
+                offset,
+                response,
+                prepared: Prepared::new(ring, dim, affines)?,
+            });
+        }
+        Ok(Self {
+            scheme,
+            dim,
+            evals,
+            matrices,
+            families: nonempty,
+        })
+    }
+    /// The equation of row `i` of `family`.
+    fn row(&self, family: &Family<'_>, i: usize) -> Result<QuadEq, Error> {
+        let (scheme, dim) = (self.scheme, self.dim);
+        let ring = scheme.ring();
+        let r = self.matrices.row(family.exact, i);
+        if r.len() != family.affines.len() * ring.degree() {
+            return Err(Error::Dimension);
+        }
+        let rows = r
+            .chunks_exact(ring.degree())
+            .map(|coeffs| {
+                Ok(Poly::new(
+                    ring.clone(),
+                    coeffs.iter().map(|x| i128::from(*x)).collect(),
+                )?
+                .auto())
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let projection = match &family.prepared {
+            Some(prepared) => prepared.projection(ring, dim, &rows)?,
+            None => projection(ring, dim, family.affines, &rows)?,
+        };
+        let mask = variable(scheme, dim, family.offset + i / ring.degree())?
+            .scale(&Poly::constant(ring.clone(), 1).rotate(-((i % ring.degree()) as i64)))?;
+        // In place: the keys and values of `sign.product_affine(&projection)?.add(&mask)?`.
+        let mut equation = QuadEq::zero(ring.clone(), dim)?;
+        equation.add_product_affine(family.sign, &projection)?;
+        equation.add_assign(&mask)?;
+        equation
+            .r0
+            .sub_assign(&Poly::constant(ring.clone(), family.response[i]))?;
+        Ok(equation)
+    }
+}
+impl EvalRows for ProjectionRows<'_> {
+    fn count(&self) -> usize {
+        self.evals.len() + 256 * self.families.len()
+    }
+    fn try_for_each_chunk(
+        &self,
+        f: &mut dyn FnMut(&[QuadEq]) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        if !self.evals.is_empty() {
+            f(self.evals)?;
+        }
+        for family in &self.families {
+            for start in (0..256).step_by(PROJECTION_CHUNK) {
+                // Each row reads its own stream: the rows are computed in parallel
+                // (`parallel`) and kept in order.
+                let rows = crate::par::try_map(PROJECTION_CHUNK, |k| self.row(family, start + k))?;
+                f(&rows)?;
+            }
+        }
+        Ok(())
+    }
+}
+/// Every equation of [`ProjectionRows`] in one list.
+#[cfg(test)]
 fn projection_equations(
     scheme: &Abdlop,
     forms: &Forms,
@@ -489,59 +613,21 @@ fn projection_equations(
     ze: &PolyVec,
     zd: &PolyVec,
 ) -> Result<Vec<QuadEq>, Error> {
-    let dim = 2 * (scheme.bounded_len() + scheme.message_len());
-    let ring = scheme.ring();
-    let mut equations = forms.evals.clone();
-    for (exact, affines, sign, offset, z) in [
-        (true, &forms.exact, &forms.sign_e, forms.mask_e, ze),
-        (false, &forms.approx, &forms.sign_d, forms.mask_d, zd),
-    ] {
-        if affines.is_empty() {
-            if !z.is_empty() {
-                return Err(Error::Dimension);
-            }
-            continue;
-        }
-        if z.len() != 256 / ring.degree() || z.ring() != ring {
-            return Err(Error::Dimension);
-        }
-        let response = abdlop::flatten(z)?;
-        let prepared = Prepared::new(ring, dim, affines)?;
-        // Each row reads its own stream: the rows are computed in parallel (`parallel`) and
-        // kept in order.
-        let rows = crate::par::try_map(256, |i| {
-            let r = matrices.row(exact, i);
-            if r.len() != affines.len() * ring.degree() {
-                return Err(Error::Dimension);
-            }
-            let rows = r
-                .chunks_exact(ring.degree())
-                .map(|coeffs| {
-                    Ok(Poly::new(
-                        ring.clone(),
-                        coeffs.iter().map(|x| i128::from(*x)).collect(),
-                    )?
-                    .auto())
-                })
-                .collect::<Result<Vec<_>, Error>>()?;
-            let projection = match &prepared {
-                Some(prepared) => prepared.projection(ring, dim, &rows)?,
-                None => projection(ring, dim, affines, &rows)?,
-            };
-            let mask = variable(scheme, dim, offset + i / ring.degree())?
-                .scale(&Poly::constant(ring.clone(), 1).rotate(-((i % ring.degree()) as i64)))?;
-            // In place: the keys and values of `sign.product_affine(&projection)?.add(&mask)?`.
-            let mut equation = QuadEq::zero(ring.clone(), dim)?;
-            equation.add_product_affine(sign, &projection)?;
-            equation.add_assign(&mask)?;
-            equation
-                .r0
-                .sub_assign(&Poly::constant(ring.clone(), response[i]))?;
-            Ok(equation)
-        })?;
-        equations.extend(rows);
-    }
-    Ok(equations)
+    let rows = ProjectionRows::new(
+        scheme,
+        &forms.evals,
+        [
+            (true, &forms.exact[..], &forms.sign_e, forms.mask_e, ze),
+            (false, &forms.approx[..], &forms.sign_d, forms.mask_d, zd),
+        ],
+        matrices,
+    )?;
+    let mut out = Vec::with_capacity(rows.count());
+    rows.try_for_each_chunk(&mut |chunk| {
+        out.extend_from_slice(chunk);
+        Ok(())
+    })?;
+    Ok(out)
 }
 /// A projection row $`\sum_j\sigma(r_j)f_j`$ of the forms $`f_j`$, with the rows
 /// $`\sigma(r_j)`$ given: the keys of every form and the exact sums, as the sum of
@@ -864,7 +950,15 @@ fn prove_rounds_mode(
         else {
             continue;
         };
-        let evals = projection_equations(&extended, &forms, &matrices, &ze, &zd)?;
+        let evals = ProjectionRows::new(
+            &extended,
+            &forms.evals,
+            [
+                (true, &forms.exact[..], &forms.sign_e, forms.mask_e, &ze),
+                (false, &forms.approx[..], &forms.sign_d, forms.mask_d, &zd),
+            ],
+            &matrices,
+        )?;
         transcript.absorb(&range_message(scheme, &ze, &zd)?);
         let mut proof_seed = Zeroizing::new([0; 32]);
         random.fill(&mut *proof_seed)?;
@@ -878,11 +972,12 @@ fn prove_rounds_mode(
                 checked: &setup.checked,
                 secret,
             });
+        // The equations move into the evaluation proof: every path below returns.
         let (evaluation, linhc_opening) = quad_eval::prove_in(
             &extended,
             &commitment,
             &full_opening,
-            &forms.eqs,
+            Cow::Owned(forms.eqs),
             &evals,
             transcript,
             &proof_seed,
@@ -1019,18 +1114,32 @@ pub fn verify(
     let mut transcript = instance(scheme, None, context, |t| absorb_families(t, &forms))?;
     transcript.absorb(&commitment_message(&extended, &proof.commitment, None)?);
     let matrices = Projections::squeeze(&mut transcript, &forms, scheme.ring().degree())?;
-    let evals = projection_equations(
+    let evals = ProjectionRows::new(
         &extended,
-        &forms,
+        &forms.evals,
+        [
+            (
+                true,
+                &forms.exact[..],
+                &forms.sign_e,
+                forms.mask_e,
+                &proof.z_exact,
+            ),
+            (
+                false,
+                &forms.approx[..],
+                &forms.sign_d,
+                forms.mask_d,
+                &proof.z_approx,
+            ),
+        ],
         &matrices,
-        &proof.z_exact,
-        &proof.z_approx,
     )?;
     transcript.absorb(&range_message(scheme, &proof.z_exact, &proof.z_approx)?);
     quad_eval::verify_in(
         &extended,
         &proof.commitment,
-        &forms.eqs,
+        Cow::Owned(forms.eqs),
         &evals,
         &proof.evaluation,
         transcript,
@@ -1098,12 +1207,26 @@ pub(crate) fn verify_extractable_with_key(
         Some(&linhc_commitment),
     )?);
     let matrices = Projections::squeeze(&mut transcript, &forms, scheme.ring().degree())?;
-    let evals = projection_equations(
+    let evals = ProjectionRows::new(
         &extended,
-        &forms,
+        &forms.evals,
+        [
+            (
+                true,
+                &forms.exact[..],
+                &forms.sign_e,
+                forms.mask_e,
+                &proof.proof.z_exact,
+            ),
+            (
+                false,
+                &forms.approx[..],
+                &forms.sign_d,
+                forms.mask_d,
+                &proof.proof.z_approx,
+            ),
+        ],
         &matrices,
-        &proof.proof.z_exact,
-        &proof.proof.z_approx,
     )?;
     transcript.absorb(&range_message(
         scheme,
@@ -1120,7 +1243,7 @@ pub(crate) fn verify_extractable_with_key(
     quad_eval::verify_in(
         &extended,
         &proof.proof.commitment,
-        &forms.eqs,
+        Cow::Owned(forms.eqs),
         &evals,
         &proof.proof.evaluation,
         transcript,

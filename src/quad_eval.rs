@@ -11,12 +11,13 @@ use crate::{
     abdlop::{self, Abdlop, Commitment, Opening},
     codec::{BitWriter, fields},
     linhc,
-    math::{Poly, PolyVec, SparsePolyVec, U256},
+    math::{Poly, PolyVec, Ring, SparsePolyVec, U256},
     quad::{self, QuadEq, QuadProof},
     quad_many,
     rand::{AesPrg, derive_key, domain, secret, take_seed, uniform_ring},
     transcript::{Protocol, Transcript},
 };
+use std::{borrow::Cow, sync::Arc};
 use zeroize::Zeroizing;
 
 #[cfg(test)]
@@ -71,48 +72,164 @@ fn squeeze_gamma(
         .ok_or(Error::Dimension)?;
     transcript.uints(&scheme.ring().modulus(), count)
 }
+/// The evaluation equations of a proof, in order: a list, or rows that the toolbox produces
+/// in chunks (its projection rows), so that they are never all held at once.
+pub(crate) trait EvalRows {
+    /// The number of equations.
+    fn count(&self) -> usize;
+    /// Call `f` with consecutive chunks of the equations, in order, up to its first error.
+    fn try_for_each_chunk(
+        &self,
+        f: &mut dyn FnMut(&[QuadEq]) -> Result<(), Error>,
+    ) -> Result<(), Error>;
+}
+impl EvalRows for [QuadEq] {
+    fn count(&self) -> usize {
+        self.len()
+    }
+    fn try_for_each_chunk(
+        &self,
+        f: &mut dyn FnMut(&[QuadEq]) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        f(self)
+    }
+}
 /// The traces of the $`\lambda`$ combinations $`\sum_j\Gamma_{rj}f_j`$ of the evaluation
-/// equations $`f_j`$, for the rows $`r`$ of `gamma`.
+/// equations $`f_j`$, for the rows $`r`$ of `gamma`, added up as the equations arrive: each
+/// row takes the additions of one pass over the whole list, in its order, so the rows do not
+/// depend on the chunks.
+struct Combination<'a> {
+    ring: &'a Arc<Ring>,
+    gamma: &'a [U256],
+    count: usize,
+    added: usize,
+    input_dim: usize,
+    rows: Vec<QuadEq>,
+}
+impl<'a> Combination<'a> {
+    fn new(
+        scheme: &'a Abdlop,
+        gamma: &'a [U256],
+        count: usize,
+        input_dim: usize,
+    ) -> Result<Self, Error> {
+        if gamma.len() != scheme.checked.lambda * count {
+            return Err(Error::Dimension);
+        }
+        let ring = scheme.ring();
+        let rows = (0..scheme.checked.lambda)
+            .map(|_| QuadEq::zero(ring.clone(), input_dim))
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            ring,
+            gamma,
+            count,
+            added: 0,
+            input_dim,
+            rows,
+        })
+    }
+    /// Add the next equations.
+    fn add(&mut self, chunk: &[QuadEq]) -> Result<(), Error> {
+        for eq in chunk {
+            eq.check(self.ring, self.input_dim)?;
+        }
+        let (start, end) = (self.added, self.added + chunk.len());
+        if end > self.count {
+            return Err(Error::Dimension);
+        }
+        let (gamma, count) = (self.gamma, self.count);
+        // The rows are computed in parallel (`parallel`).
+        let rows: Vec<(usize, &mut QuadEq)> = self.rows.iter_mut().enumerate().collect();
+        crate::par::try_for_each_min(rows, 2, |(row, equation)| {
+            let weights = &gamma[row * count + start..row * count + end];
+            // In place: the keys and values of `equation.add(&eq.scale(&constant(weight)))`.
+            for (eq, weight) in chunk.iter().zip(weights) {
+                equation.add_scaled_scalar_assign(eq, weight)?;
+            }
+            Ok(())
+        })?;
+        self.added = end;
+        Ok(())
+    }
+    /// The traces of the rows, once every equation was added.
+    fn finish(mut self) -> Result<Vec<QuadEq>, Error> {
+        if self.added != self.count {
+            return Err(Error::Dimension);
+        }
+        let ring = self.ring;
+        let rows: Vec<&mut QuadEq> = self.rows.iter_mut().collect();
+        // In parallel (`parallel`).
+        crate::par::try_for_each_min(rows, 2, |row| {
+            let equation = std::mem::replace(row, QuadEq::zero(ring.clone(), 0)?);
+            *row = equation.into_trace()?;
+            Ok(())
+        })?;
+        Ok(self.rows)
+    }
+}
+/// [`Combination`] of a list.
+#[cfg(test)]
 fn combined(
     scheme: &Abdlop,
     gamma: &[U256],
     evals: &[QuadEq],
     input_dim: usize,
 ) -> Result<Vec<QuadEq>, Error> {
-    let ring = scheme.ring();
-    for eq in evals {
-        eq.check(ring, input_dim)?;
-    }
-    if gamma.len() != scheme.checked.lambda * evals.len() {
-        return Err(Error::Dimension);
-    }
-    // The rows are computed in parallel (`parallel`) and kept in order.
-    crate::par::try_map(scheme.checked.lambda, |row| {
-        let weights = &gamma[row * evals.len()..(row + 1) * evals.len()];
-        // In place: the keys and values of `equation.add(&eq.scale(&constant(weight)))`.
-        let mut equation = QuadEq::zero(ring.clone(), input_dim)?;
-        for (eq, weight) in evals.iter().zip(weights) {
-            equation.add_scaled_scalar_assign(eq, weight)?;
+    let mut combination = Combination::new(scheme, gamma, evals.len(), input_dim)?;
+    combination.add(evals)?;
+    combination.finish()
+}
+/// The honest prover's check that `witness` satisfies each of `eqs` at the constant
+/// coefficient, with the witness products of `pairs`, extended by those of `eqs`.
+fn check_constants(
+    eqs: &[QuadEq],
+    witness: &PolyVec,
+    pairs: &mut quad::PairProducts,
+) -> Result<(), Error> {
+    let covered = pairs.add_for(eqs, witness)?;
+    let pairs = &*pairs;
+    // Evaluated in parallel (`parallel`); the first failure in order is returned.
+    crate::par::try_map(eqs.len(), |i| {
+        let constant = match covered {
+            true => eqs[i].evaluate_constant_with(witness, pairs)?,
+            false => eqs[i].evaluate_constant(witness)?,
+        };
+        match constant.is_zero_vartime() {
+            true => Ok(()),
+            false => Err(Error::Witness),
         }
-        equation.into_trace()
-    })
+    })?;
+    Ok(())
 }
 fn final_equations(
     scheme: &Abdlop,
-    eqs: &[QuadEq],
+    eqs: Cow<'_, [QuadEq]>,
     combined: Vec<QuadEq>,
     h: &PolyVec,
     input_dim: usize,
 ) -> Result<Vec<QuadEq>, Error> {
     let dim = 2 * (scheme.bounded_len() + scheme.message_len());
     let ring = scheme.ring().clone();
-    let mut out = eqs
-        .iter()
-        .map(|eq| {
-            eq.check(&ring, input_dim)?;
-            eq.resized(dim)
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
+    // Equations the caller hands over are resized in place, with the keys and values that
+    // `QuadEq::resized` copies.
+    let mut out = match eqs {
+        Cow::Owned(eqs) => eqs
+            .into_iter()
+            .map(|mut eq| {
+                eq.check(&ring, input_dim)?;
+                eq.resize(dim)?;
+                Ok(eq)
+            })
+            .collect::<Result<Vec<_>, Error>>()?,
+        Cow::Borrowed(eqs) => eqs
+            .iter()
+            .map(|eq| {
+                eq.check(&ring, input_dim)?;
+                eq.resized(dim)
+            })
+            .collect::<Result<Vec<_>, Error>>()?,
+    };
     let rotation = Poly::constant(ring.clone(), 1).rotate((ring.degree() / 2) as i64);
     let mut combined = combined.into_iter();
     for i in 0..scheme.checked.lambda / 2 {
@@ -181,7 +298,14 @@ pub(crate) fn prove_seeded(
 ) -> Result<EvalProof, Error> {
     let transcript = transcript(scheme, commitment, eqs, evals, context)?;
     Ok(prove_in(
-        scheme, commitment, opening, eqs, evals, transcript, seed, None,
+        scheme,
+        commitment,
+        opening,
+        Cow::Borrowed(eqs),
+        evals,
+        transcript,
+        seed,
+        None,
     )?
     .0)
 }
@@ -190,29 +314,17 @@ pub(crate) fn prove_seeded(
 /// LinHC opening too. The garbage polynomials' key binds the transcript through
 /// `Transcript::binding`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn prove_in(
+pub(crate) fn prove_in<E: EvalRows + ?Sized>(
     scheme: &Abdlop,
     commitment: &Commitment,
     opening: &Opening,
-    eqs: &[QuadEq],
-    evals: &[QuadEq],
+    eqs: Cow<'_, [QuadEq]>,
+    evals: &E,
     mut transcript: Transcript,
     seed: &Zeroizing<[u8; 32]>,
     ext: Option<&linhc::ProverExt<'_>>,
 ) -> Result<(EvalProof, Option<linhc::LinhcOpening>), Error> {
     let witness = quad::interleave(&opening.s1, &opening.m)?;
-    // Evaluated in parallel (`parallel`); the first failure in order is returned.
-    let pairs = quad::PairProducts::for_equations(evals, &witness)?;
-    crate::par::try_map(evals.len(), |i| {
-        let constant = match &pairs {
-            Some(pairs) => evals[i].evaluate_constant_with(&witness, pairs)?,
-            None => evals[i].evaluate_constant(&witness)?,
-        };
-        match constant.is_zero_vartime() {
-            true => Ok(()),
-            false => Err(Error::Witness),
-        }
-    })?;
     // "/v2" since the duplex-sponge transcript of version 0.2, which the binding comes from.
     let key = derive_key(
         b"quad-eval/garbage/v2",
@@ -256,8 +368,17 @@ pub(crate) fn prove_in(
         extended.message_len(),
     )?;
     transcript.absorb(&vector_bytes(&garbage_commitments)?);
-    let gamma = squeeze_gamma(&extended, &mut transcript, evals.len())?;
-    let combined = combined(&extended, &gamma, evals, witness.len())?;
+    let gamma = squeeze_gamma(&extended, &mut transcript, evals.count())?;
+    // Each chunk of evaluation equations is checked against the witness and added to the
+    // combination as it arrives; none is returned before every check passed.
+    let mut combination = Combination::new(&extended, &gamma, evals.count(), witness.len())?;
+    let mut pairs = quad::PairProducts::empty();
+    evals.try_for_each_chunk(&mut |chunk| {
+        check_constants(chunk, &witness, &mut pairs)?;
+        combination.add(chunk)
+    })?;
+    drop(pairs);
+    let combined = combination.finish()?;
     // The rows' values, in parallel (`parallel`) and in order.
     let values = crate::par::try_map(combined.len(), |k| combined[k].evaluate(&witness))?;
     let h = PolyVec::new(
@@ -322,15 +443,23 @@ pub fn verify(
     context: &[u8],
 ) -> Result<(), Error> {
     let transcript = transcript(scheme, commitment, eqs, evals, context)?;
-    verify_in(scheme, commitment, eqs, evals, proof, transcript, None)
+    verify_in(
+        scheme,
+        commitment,
+        Cow::Borrowed(eqs),
+        evals,
+        proof,
+        transcript,
+        None,
+    )
 }
 /// [`verify`] in `transcript`, as [`prove_in`] proves, with the extractable commitment's checks
 /// when `ext` is given.
-pub(crate) fn verify_in(
+pub(crate) fn verify_in<E: EvalRows + ?Sized>(
     scheme: &Abdlop,
     commitment: &Commitment,
-    eqs: &[QuadEq],
-    evals: &[QuadEq],
+    eqs: Cow<'_, [QuadEq]>,
+    evals: &E,
     proof: &EvalProof,
     mut transcript: Transcript,
     ext: Option<&linhc::VerifierExt<'_>>,
@@ -350,8 +479,10 @@ pub(crate) fn verify_in(
     };
     let dim = 2 * (scheme.bounded_len() + scheme.message_len());
     transcript.absorb(&vector_bytes(&proof.garbage_commitments)?);
-    let gamma = squeeze_gamma(&extended, &mut transcript, evals.len())?;
-    let combined = combined(&extended, &gamma, evals, dim)?;
+    let gamma = squeeze_gamma(&extended, &mut transcript, evals.count())?;
+    let mut combination = Combination::new(&extended, &gamma, evals.count(), dim)?;
+    evals.try_for_each_chunk(&mut |chunk| combination.add(chunk))?;
+    let combined = combination.finish()?;
     let equations = final_equations(&extended, eqs, combined, &proof.h, dim)?;
     transcript.absorb(&vector_bytes(&proof.h)?);
     quad_many::verify_in(

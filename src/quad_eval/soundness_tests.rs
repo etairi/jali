@@ -118,7 +118,8 @@ fn adaptive_h_after_mu_can_forge_a_weakened_round_but_fails_default_verification
             .all(|h| h.coefficient_i128(0) == Ok(0)
                 && h.coefficient_i128(ring.degree() / 2) == Ok(0))
     );
-    let equations = final_equations(&extended, &eqs, gamma.clone(), &h, dim).unwrap();
+    let equations =
+        final_equations(&extended, Cow::Borrowed(&eqs[..]), gamma.clone(), &h, dim).unwrap();
     let mut folded = QuadEq::zero(
         ring.clone(),
         2 * (extended.bounded_len() + extended.message_len()),
@@ -214,7 +215,7 @@ fn garbage_chosen_after_gamma_absorbs_a_false_row_but_fails_default_verification
         )
         .unwrap();
     let h = PolyVec::zero(ring, scheme.checked.lambda / 2);
-    let equations = final_equations(&extended, &[], gamma.clone(), &h, dim).unwrap();
+    let equations = final_equations(&extended, Cow::Borrowed(&[]), gamma.clone(), &h, dim).unwrap();
     let garbage_commitments = abdlop::part(
         &full_commitment.t_b,
         scheme.message_len(),
