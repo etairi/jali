@@ -90,11 +90,12 @@ pub struct PolyMat {
     ring: Arc<Ring>,
     rows: usize,
     cols: usize,
-    entries: Vec<Poly>,
-    /// The entries classified and, if general, transformed, on the first product; clones share
-    /// it. The entries cannot change after construction, so it is never stale. Not part of
-    /// the value: equality and `Debug` ignore it.
-    terms: OnceLock<Arc<Vec<Term>>>,
+    /// The entries, which cannot change after construction: clones share them.
+    entries: Arc<Vec<Poly>>,
+    /// The entries classified and, if general, transformed, on the first product of any clone;
+    /// clones share it, also when they were made before it. It is never stale, since the
+    /// entries cannot change. Not part of the value: equality and `Debug` ignore it.
+    terms: Arc<OnceLock<Vec<Term>>>,
 }
 impl PartialEq for PolyMat {
     fn eq(&self, rhs: &Self) -> bool {
@@ -133,8 +134,8 @@ impl PolyMat {
             ring,
             rows,
             cols,
-            entries,
-            terms: OnceLock::new(),
+            entries: Arc::new(entries),
+            terms: Arc::new(OnceLock::new()),
         })
     }
     /// Number of rows.
@@ -181,7 +182,7 @@ impl PolyMat {
         }
         let terms = self
             .terms
-            .get_or_init(|| Arc::new(self.entries.iter().map(Term::new).collect()));
+            .get_or_init(|| self.entries.iter().map(Term::new).collect());
         let shapes: Zeroizing<Vec<Shape>> =
             Zeroizing::new(vector.entries.iter().map(Shape::of).collect());
         // Transform a vector entry only if it is general and meets a general entry.

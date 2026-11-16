@@ -247,7 +247,10 @@ fn cached_matrix_products_equal_row_dot_products() {
                 assert_eq!(m.clone().mul(&v).unwrap(), expected);
             }
             assert!(m.terms.get().is_some());
-            assert!(fresh.terms.get().is_none());
+            // Clones share the cache and the entries, also a clone made before the first
+            // product.
+            assert!(fresh.terms.get().is_some());
+            assert!(Arc::ptr_eq(&m.terms, &fresh.terms) && Arc::ptr_eq(&m.entries, &fresh.entries));
             assert_eq!(m, fresh, "equality ignores the cache");
             assert_eq!(format!("{m:?}"), debug, "Debug ignores the cache");
         }
