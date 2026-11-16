@@ -333,3 +333,108 @@ fn projection_equations_equal_the_reference() {
         }
     }
 }
+
+#[test]
+fn combined_rows_equal_the_combination_of_the_rows() {
+    // The evaluation proof's combination of the statement's equations and of the 256 rows of
+    // each family, row by row against the rows combined directly: the same keys and values.
+    let mut rng = Rng(14);
+    let scheme = Abdlop::new([8; 32], crate::params::toy_d64()).unwrap();
+    let ring = scheme.ring().clone();
+    let extended = scheme.extend_messages(9).unwrap();
+    let response = |rng: &mut Rng| {
+        let entries = (0..256 / ring.degree())
+            .map(|_| {
+                let c = (0..ring.degree())
+                    .map(|_| rng.below(2001) as i128 - 1000)
+                    .collect();
+                Poly::new(ring.clone(), c).unwrap()
+            })
+            .collect();
+        PolyVec::new(ring.clone(), entries).unwrap()
+    };
+    let empty = PolyVec::zero(ring.clone(), 0);
+    for case in 0..8 {
+        let statement = statement(&mut rng, &scheme);
+        let mut forms = forms(&scheme, &extended, &statement).unwrap();
+        let (mut ze, mut zd) = (response(&mut rng), response(&mut rng));
+        match case % 4 {
+            1 => {
+                forms.approx.clear();
+                zd = empty.clone();
+            }
+            2 => {
+                forms.exact.clear();
+                ze = empty.clone();
+            }
+            3 => {
+                forms.exact.clear();
+                forms.approx.clear();
+                (ze, zd) = (empty.clone(), empty.clone());
+            }
+            _ => {}
+        }
+        let d = ring.degree();
+        let matrices = Projections::for_tests(
+            &[case as u8 + 40; 32],
+            forms.exact.len() * d,
+            forms.approx.len() * d,
+        );
+        let rows = ProjectionRows::new(
+            &extended,
+            &forms.evals,
+            [
+                (true, &forms.exact[..], &forms.sign_e, forms.mask_e, &ze),
+                (false, &forms.approx[..], &forms.sign_d, forms.mask_d, &zd),
+            ],
+            &matrices,
+        )
+        .unwrap();
+        let list = projection_equations(&extended, &forms, &matrices, &ze, &zd).unwrap();
+        assert_eq!(list.len(), rows.count());
+        let gamma: Vec<U256> = (0..extended.checked.lambda * list.len())
+            .map(|_| rng.value(&ring))
+            .collect();
+        let dim = 2 * (extended.bounded_len() + extended.message_len());
+        let mut by_rows = Combination::new(&extended, &gamma, list.len(), dim).unwrap();
+        by_rows.add(&list).unwrap();
+        let mut combined = Combination::new(&extended, &gamma, list.len(), dim).unwrap();
+        rows.add_to(&mut combined, None).unwrap();
+        assert_eq!(
+            combined.finish().unwrap(),
+            by_rows.finish().unwrap(),
+            "case {case}"
+        );
+    }
+}
+
+#[test]
+fn weighted_rows_agree_with_modular_additions() {
+    // The u128 sums against the modular additions that larger moduli take, at extreme and
+    // random weights.
+    let mut rng = Rng(15);
+    for q in [65537u64, 4294967291, 18446744073709551557] {
+        let ring = Ring::new(i128::from(q), 64).unwrap();
+        let cols = 3 * 64;
+        let matrices = Projections::for_tests(&[q as u8; 32], cols, cols);
+        let weights: Vec<Vec<U256>> = (0..3)
+            .map(|k| {
+                (0..256)
+                    .map(|j| match (k + j) % 3 {
+                        0 => ring.modulus().wrapping_sub(&U256::ONE),
+                        1 => U256::ZERO,
+                        _ => rng.value(&ring),
+                    })
+                    .collect()
+            })
+            .collect();
+        let refs: Vec<&[U256]> = weights.iter().map(|w| &w[..]).collect();
+        for exact in [true, false] {
+            assert_eq!(
+                weighted_rows(&ring, &matrices, exact, cols, &refs).unwrap(),
+                weighted_rows_general(&ring, &matrices, exact, cols, &refs).unwrap(),
+                "q {q} exact {exact}"
+            );
+        }
+    }
+}

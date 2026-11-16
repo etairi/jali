@@ -16,12 +16,12 @@ use crate::{
     linhc::{self, LinhcChecked, LinhcCommitment, LinhcKey, LinhcParams},
     lnp::Statement,
     math::{
-        Poly, PolyNtt, PolyVec, Ring, SparsePolyVec, U256,
+        Poly, PolyNtt, PolyVec, Ring, SparsePolyVec, U256, int,
         terms::{Accumulator, Term},
     },
     params::{ExtractionParams, response_width},
     quad::{self, QuadEq},
-    quad_eval::{self, EvalProof, EvalRows},
+    quad_eval::{self, Combination, EvalProof, EvalRows},
     quad_many,
     rand::{
         AesPrg, ByteStream, derive_key, domain,
@@ -482,17 +482,15 @@ fn range_rejection_m(scheme: &Abdlop, exact: bool) -> Result<u64, Error> {
     };
     crate::params::range_rejection_constant(t, alpha_squared)
 }
-/// At most this many rows of a projection family are held at once (see [`ProjectionRows`]):
-/// with 16 rather than 32, the peak live heap of the predicate-credential lattice test's steps
-/// falls by another 6 to 13 MiB (measured 2026-11-16), and the work is the same.
-const PROJECTION_CHUNK: usize = 16;
-
 /// The evaluation equations of a toolbox proof, in order: the statement's own, then one per
-/// row of each nonempty projection family, exact first. The rows are produced in chunks of
-/// [`PROJECTION_CHUNK`] as the evaluation proof adds them into its combination. Each row is an
-/// affine form in every projected variable, so the 256 rows of a family together were most of
-/// the memory of a proof and of a verification when they were held at once (269 MiB of the
-/// 548 MiB peak of PCS's R_att proof, measured 2026-11-16).
+/// row of each nonempty projection family, exact first.
+///
+/// The evaluation proof only needs, for each of its λ challenge rows, the combination of the
+/// equations with that row's weights. A family's 256 equations $`e_j`$ are linear in their
+/// matrix rows $`r_j`$, masks and responses, so their combination $`\sum_jw_je_j`$ is formed
+/// directly ([`ProjectionRows::combined`]): one projection of the combined matrix row
+/// $`\sum_jw_jr_j`$ per challenge row, instead of 256 projections that the combination then
+/// adds up, with the same keys and values. The rows themselves are never formed.
 struct ProjectionRows<'a> {
     scheme: &'a Abdlop,
     dim: usize,
@@ -550,7 +548,9 @@ impl<'a> ProjectionRows<'a> {
             families: nonempty,
         })
     }
-    /// The equation of row `i` of `family`.
+    /// The equation of row `i` of `family`: the reference that [`ProjectionRows::combined`]
+    /// is tested against.
+    #[cfg(test)]
     fn row(&self, family: &Family<'_>, i: usize) -> Result<QuadEq, Error> {
         let (scheme, dim) = (self.scheme, self.dim);
         let ring = scheme.ring();
@@ -584,24 +584,155 @@ impl<'a> ProjectionRows<'a> {
         Ok(equation)
     }
 }
+impl ProjectionRows<'_> {
+    /// For each weight vector `weights[k]` (one weight per row), the combination
+    /// $`\sum_jw_{kj}e_j`$ of the 256 equations $`e_j`$ of `family`. Row $`j`$ is
+    /// $`\mathrm{sign}\cdot\sum_a\sigma(r_{j,a})f_a`$ plus its mask
+    /// $`y_{\lfloor j/d\rfloor}X^{-(j\bmod d)}`$ minus its response $`z_j`$, linear in each, so
+    /// the combination takes the combined matrix row $`\sum_jw_{kj}r_j`$ through one
+    /// projection, each mask polynomial with the factor $`\sum_ew_{k,vd+e}X^{-e}`$, and the
+    /// response $`\sum_jw_{kj}z_j`$. Each part adds the keys that the rows' parts add, so the
+    /// keys and values are those of the combination of the rows.
+    fn combined(&self, family: &Family<'_>, weights: &[&[U256]]) -> Result<Vec<QuadEq>, Error> {
+        let (scheme, dim) = (self.scheme, self.dim);
+        let ring = scheme.ring();
+        let d = ring.degree();
+        let cols = family.affines.len() * d;
+        if weights.iter().any(|w| w.len() != 256) {
+            return Err(Error::Dimension);
+        }
+        let sums = weighted_rows(ring, self.matrices, family.exact, cols, weights)?;
+        // In parallel (`parallel`) over the challenge rows, in order.
+        crate::par::try_map(weights.len(), |k| {
+            let rows: Vec<Poly> = sums[k]
+                .chunks_exact(d)
+                .map(|c| Poly::from_canonical(ring.clone(), c.to_vec()).auto())
+                .collect();
+            let projection = match &family.prepared {
+                Some(prepared) => prepared.projection(ring, dim, &rows)?,
+                None => projection(ring, dim, family.affines, &rows)?,
+            };
+            let mut equation = QuadEq::zero(ring.clone(), dim)?;
+            equation.add_product_affine(family.sign, &projection)?;
+            for v in 0..256 / d {
+                let mut factor = Poly::zero(ring.clone());
+                for e in 0..d {
+                    let w = Poly::constant_u256(ring.clone(), &weights[k][v * d + e]);
+                    factor.add_assign(&w.rotate(-(e as i64)))?;
+                }
+                equation.add_assign(&variable(scheme, dim, family.offset + v)?.scale(&factor)?)?;
+            }
+            let response = weights[k]
+                .iter()
+                .zip(family.response.iter())
+                .fold(U256::ZERO, |sum, (w, z)| {
+                    ring.add(&sum, &ring.mul(w, &ring.reduce_i128(*z)))
+                });
+            equation
+                .r0
+                .sub_assign(&Poly::constant_u256(ring.clone(), &response))?;
+            Ok(equation)
+        })
+    }
+}
+/// For each weight vector `weights[k]` (256 canonical weights), the canonical
+/// $`\sum_jw_{kj}r_{j,c}`$ for every column $`c`$ of the 256 matrix rows $`r_j`$ of a family,
+/// whose entries are in $`\{-1,0,1\}`$. Each row is decoded once. Below $`2^{120}`$ a column's
+/// positive and negative weights are summed in `u128`, where 256 of them stay below
+/// $`2^{128}`$, and reduced once. Otherwise each entry is a modular addition.
+fn weighted_rows(
+    ring: &Ring,
+    matrices: &Projections,
+    exact: bool,
+    cols: usize,
+    weights: &[&[U256]],
+) -> Result<Vec<Vec<U256>>, Error> {
+    let lambda = weights.len();
+    match int::to_u128(&ring.modulus()).filter(|q| *q < 1 << 120) {
+        Some(q) => {
+            let w: Vec<Vec<u128>> = weights
+                .iter()
+                .map(|w| w.iter().map(int::low_u128).collect())
+                .collect();
+            let (mut pos, mut neg) = (vec![0u128; lambda * cols], vec![0u128; lambda * cols]);
+            for j in 0..256 {
+                let row = matrices.row(exact, j);
+                if row.len() != cols {
+                    return Err(Error::Dimension);
+                }
+                for (c, e) in row.iter().enumerate() {
+                    let sums = match e {
+                        1 => &mut pos,
+                        -1 => &mut neg,
+                        _ => continue,
+                    };
+                    for (k, w) in w.iter().enumerate() {
+                        sums[k * cols + c] += w[j];
+                    }
+                }
+            }
+            Ok((0..lambda)
+                .map(|k| {
+                    (0..cols)
+                        .map(|c| {
+                            let (p, n) = (pos[k * cols + c] % q, neg[k * cols + c] % q);
+                            U256::from_u128(if p >= n { p - n } else { p + q - n })
+                        })
+                        .collect()
+                })
+                .collect())
+        }
+        None => weighted_rows_general(ring, matrices, exact, cols, weights),
+    }
+}
+/// [`weighted_rows`] by modular additions, for every modulus.
+fn weighted_rows_general(
+    ring: &Ring,
+    matrices: &Projections,
+    exact: bool,
+    cols: usize,
+    weights: &[&[U256]],
+) -> Result<Vec<Vec<U256>>, Error> {
+    let rows = (0..256).map(|j| matrices.row(exact, j)).collect::<Vec<_>>();
+    if rows.iter().any(|row| row.len() != cols) {
+        return Err(Error::Dimension);
+    }
+    Ok(weights
+        .iter()
+        .map(|w| {
+            let mut sums = vec![U256::ZERO; cols];
+            for (row, w) in rows.iter().zip(w.iter()) {
+                for (sum, e) in sums.iter_mut().zip(row) {
+                    match e {
+                        1 => *sum = ring.add(sum, w),
+                        -1 => *sum = ring.sub(sum, w),
+                        _ => {}
+                    }
+                }
+            }
+            sums
+        })
+        .collect())
+}
 impl EvalRows for ProjectionRows<'_> {
     fn count(&self) -> usize {
         self.evals.len() + 256 * self.families.len()
     }
-    fn try_for_each_chunk(
+    fn add_to(
         &self,
-        f: &mut dyn FnMut(&[QuadEq]) -> Result<(), Error>,
+        combination: &mut Combination<'_>,
+        witness: Option<&PolyVec>,
     ) -> Result<(), Error> {
-        if !self.evals.is_empty() {
-            f(self.evals)?;
-        }
+        self.evals.add_to(combination, witness)?;
         for family in &self.families {
-            for start in (0..256).step_by(PROJECTION_CHUNK) {
-                // Each row reads its own stream: the rows are computed in parallel
-                // (`parallel`) and kept in order.
-                let rows = crate::par::try_map(PROJECTION_CHUNK, |k| self.row(family, start + k))?;
-                f(&rows)?;
+            let weights = combination.next_weights(256)?;
+            let rows = self.combined(family, &weights)?;
+            // The prover checks the combined rows, which vanish at the constant coefficient
+            // when the 256 rows do (and miss a row that does not with probability 1/q each).
+            if let Some(witness) = witness {
+                quad_eval::check_constants(&rows, witness, &mut quad::PairProducts::empty())?;
             }
+            combination.add_combined(rows, 256)?;
         }
         Ok(())
     }
@@ -624,11 +755,12 @@ fn projection_equations(
         ],
         matrices,
     )?;
-    let mut out = Vec::with_capacity(rows.count());
-    rows.try_for_each_chunk(&mut |chunk| {
-        out.extend_from_slice(chunk);
-        Ok(())
-    })?;
+    let mut out = rows.evals.to_vec();
+    for family in &rows.families {
+        for i in 0..256 {
+            out.push(rows.row(family, i)?);
+        }
+    }
     Ok(out)
 }
 /// A projection row $`\sum_j\sigma(r_j)f_j`$ of the forms $`f_j`$, with the rows
