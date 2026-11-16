@@ -802,7 +802,7 @@ fn gaussian_part(nu: usize, i: usize) -> bool {
 
 /// The bits of `x` in the Gaussian code of [`BitWriter::gaussian`] with parameter `p`: the
 /// unary quotient, its end bit and $`p+1`$ remainder bits.
-fn gaussian_bits(x: i128, p: u32) -> u64 {
+pub(crate) fn gaussian_bits(x: i128, p: u32) -> u64 {
     let scale = 1i128 << (p + 1);
     let r = x.rem_euclid(scale);
     let low = if r >= scale / 2 { r - scale } else { r };
@@ -837,7 +837,7 @@ fn unary_limit(half: u128, p: u32) -> usize {
 
 /// The number of digits of one chunk of the radix code in base `radix` at least 3, the
 /// largest $`k`$ with $`R^k<2^{128}`$.
-fn radix_chunk(radix: u128) -> usize {
+pub(crate) fn radix_chunk(radix: u128) -> usize {
     let (mut k, mut power) = (1, radix);
     while let Some(next) = power.checked_mul(radix) {
         power = next;
