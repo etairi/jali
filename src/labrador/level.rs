@@ -296,6 +296,77 @@ fn project_wide(
     Ok(p)
 }
 
+/// The most memory the prover spends on keeping the polynomials of [`for_each_projection_poly`]
+/// from the lifted polynomials $`b''`$ to [`complete`], instead of streaming them again.
+const KEEP_BUDGET: usize = 64 << 20;
+
+#[cfg(test)]
+thread_local! {
+    /// Test only: keep no polynomials, so that [`complete`] streams them a second time.
+    pub(crate) static STREAM_TWICE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The polynomials of [`for_each_projection_poly`] for every `(i, x)`, in its order, kept by the
+/// prover for [`complete`]: in words of 32 bits when $`q<2^{32}`$, of 64 otherwise. They are
+/// public (the projection and $`\omega`$ are), and [`complete`] reads exactly the values a
+/// second stream would give.
+enum Kept {
+    Narrow(Vec<u32>),
+    Wide(Vec<u64>),
+}
+impl Kept {
+    /// Room for `lambda` polynomials per `(i, x)` of `shape`, if that fits [`KEEP_BUDGET`].
+    fn new(ring: &Rq, lambda: usize, shape: &Shape) -> Option<Self> {
+        #[cfg(test)]
+        if STREAM_TWICE.with(|c| c.get()) {
+            return None;
+        }
+        let count = lambda
+            .checked_mul(shape.r)?
+            .checked_mul(shape.n)?
+            .checked_mul(ring.degree())?;
+        let narrow = ring.modulus() <= u64::from(u32::MAX);
+        if count.checked_mul(if narrow { 4 } else { 8 })? > KEEP_BUDGET {
+            return None;
+        }
+        Some(if narrow {
+            Kept::Narrow(Vec::with_capacity(count))
+        } else {
+            Kept::Wide(Vec::with_capacity(count))
+        })
+    }
+    fn push(&mut self, polys: &[Vec<u64>]) {
+        match self {
+            Kept::Narrow(kept) => {
+                for poly in polys {
+                    kept.extend(poly.iter().map(|&c| c as u32));
+                }
+            }
+            Kept::Wide(kept) => {
+                for poly in polys {
+                    kept.extend_from_slice(poly);
+                }
+            }
+        }
+    }
+    /// The polynomials pushed `index`-th, into `polys`.
+    fn read(&self, index: usize, polys: &mut [Vec<u64>]) {
+        let d = polys[0].len();
+        let start = index * polys.len() * d;
+        for (k, poly) in polys.iter_mut().enumerate() {
+            let at = start + k * d;
+            match self {
+                Kept::Narrow(kept) => {
+                    for (out, c) in poly.iter_mut().zip(&kept[at..at + d]) {
+                        *out = u64::from(*c);
+                    }
+                }
+                Kept::Wide(kept) => poly.copy_from_slice(&kept[at..at + d]),
+            }
+        }
+    }
+}
+
 /// Stream the coefficient polynomials of the aggregated projection constraints (BS23 Fig. 2,
 /// $`\varphi''`$): for each witness vector $`i`$ and polynomial $`x`$, call `f(i, x, polys)`
 /// with `polys[k]` the polynomial $`x`$ of $`\sigma_{-1}(\sum_j\omega^{(k)}_j\pi^{(j)}_i)`$,
@@ -396,16 +467,23 @@ fn gammas(ring: &Rq, beta: &[Vec<u64>], psi: &[Vec<u64>], count: usize) -> Vec<V
         .collect()
 }
 
+/// The projection of a level as [`complete`] needs it: its seed and $`\omega`$, and the
+/// polynomials of [`for_each_projection_poly`] if the prover kept them.
+struct Projected<'a> {
+    seed: &'a [u8; 32],
+    level: u32,
+    omega: &'a [Vec<u64>],
+    kept: Option<&'a Kept>,
+}
+
 /// Complete an aggregate with the projection constraints and the lifted polynomials:
 /// $`\varphi_i\mathrel{+}=\sum_k\beta_k\varphi''^{(k)}_i`$ and
-/// $`b\mathrel{+}=\sum_k\beta_kb''^{(k)}`$.
-#[allow(clippy::too_many_arguments)]
+/// $`b\mathrel{+}=\sum_k\beta_kb''^{(k)}`$. The polynomials $`\varphi''^{(k)}_i`$ are the kept
+/// ones if there are, the streamed ones otherwise: the same values.
 fn complete(
     ring: &Rq,
     agg: &mut Aggregate,
-    seed: &[u8; 32],
-    level: u32,
-    omega: &[Vec<u64>],
+    projection: &Projected<'_>,
     shape: &Shape,
     beta: &[Vec<u64>],
     bpp: &[Vec<u64>],
@@ -414,7 +492,7 @@ fn complete(
     let beta_hat: Vec<_> = beta.iter().map(|b| ring.ntt(b)).collect();
     let mut acc = vec![0u64; k];
     let mut poly = vec![0u64; d];
-    for_each_projection_poly(ring, seed, level, omega, shape, |i, x, polys| {
+    let mut add = |i: usize, x: usize, polys: &[Vec<u64>]| -> Result<(), Error> {
         acc.fill(0);
         for (p, b) in polys.iter().zip(&beta_hat) {
             ring.mac(&mut acc, b, &ring.ntt(p));
@@ -422,7 +500,26 @@ fn complete(
         ring.intt_into(&mut acc, &mut poly);
         ring.add_assign(&mut agg.phi[i][x * d..(x + 1) * d], &poly);
         Ok(())
-    })?;
+    };
+    match projection.kept {
+        Some(kept) => {
+            let mut polys = vec![vec![0u64; d]; projection.omega.len()];
+            for i in 0..shape.r {
+                for x in 0..shape.n {
+                    kept.read(i * shape.n + x, &mut polys);
+                    add(i, x, &polys)?;
+                }
+            }
+        }
+        None => for_each_projection_poly(
+            ring,
+            projection.seed,
+            projection.level,
+            projection.omega,
+            shape,
+            &mut add,
+        )?,
+    }
     for (b, l) in beta.iter().zip(bpp) {
         ring.add_assign(&mut agg.constant, &ring.poly_mul(b, l));
     }
@@ -598,9 +695,13 @@ fn attempt_level<R: Relation>(
     }
     let values = Zeroizing::new(rel.constant_term_values(hats, pairs));
     let mut accs = vec![vec![0u64; k]; ctx.lambda];
+    let mut kept = Kept::new(ring, ctx.lambda, &shape);
     for_each_projection_poly(ring, &jl_seed, level, &omega, &shape, |i, x, polys| {
         for (acc, poly) in accs.iter_mut().zip(polys) {
             ring.mac(acc, &ring.ntt(poly), &hats[i][x * k..(x + 1) * k]);
+        }
+        if let Some(kept) = &mut kept {
+            kept.push(polys);
         }
         Ok(())
     })?;
@@ -623,7 +724,14 @@ fn attempt_level<R: Relation>(
     let beta = squeeze_polys(t, ring, ctx.lambda)?;
     let gamma = gammas(ring, &beta, &psi, l_count);
     let mut agg = rel.aggregate(&alpha, &gamma)?;
-    complete(ring, &mut agg, &jl_seed, level, &omega, &shape, &beta, &bpp)?;
+    let projection = Projected {
+        seed: &jl_seed,
+        level,
+        omega: &omega,
+        kept: kept.as_ref(),
+    };
+    complete(ring, &mut agg, &projection, &shape, &beta, &bpp)?;
+    drop(kept);
     if evaluate_aggregate(ring, &agg, hats).iter().any(|x| *x != 0) {
         return Err(Error::Witness);
     }
@@ -757,7 +865,13 @@ pub(crate) fn verify<R: Relation>(
     let beta = squeeze_polys(transcript, ring, ctx.lambda)?;
     let gamma = gammas(ring, &beta, &psi, l_count);
     let mut agg = rel.aggregate(&alpha, &gamma)?;
-    complete(ring, &mut agg, &jl_seed, level, &omega, &shape, &beta, &bpp)?;
+    let projection = Projected {
+        seed: &jl_seed,
+        level,
+        omega: &omega,
+        kept: None,
+    };
+    complete(ring, &mut agg, &projection, &shape, &beta, &bpp)?;
 
     let bytes = take(input, sizes.u2)?;
     transcript.absorb(bytes);
