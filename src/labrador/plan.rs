@@ -1,5 +1,6 @@
 //! The prover's choice of a level's parameters: the heuristics of BS23 §5.4, made robust, and
-//! the size model of §5.7 to choose the splits and when to stop.
+//! the size model of §5.7, with a last witness at the bits of its codes, to choose the base of
+//! $`z`$, the splits and when to stop.
 //!
 //! The prover chooses each level when it starts it, knowing that level's witness: its norm, and
 //! its garbage $`g_{ij}=\langle s_i,s_j\rangle`$, which it decomposes exactly. Only the
@@ -10,6 +11,7 @@
 //! choice: it checks the conditions of [`LevelParams::validate`] only.
 use super::{
     decompose,
+    level::{gaussian_bits, radix_chunk},
     params::{LevelParams, PARAMS_BYTES, Policy, Shape, lambda, projection_max},
     ring::Rq,
     sample::ChallengeSet,
@@ -24,14 +26,46 @@ pub(crate) struct Stats<'a> {
     pub(crate) garbage: Option<&'a [Vec<u64>]>,
 }
 
-/// A level's parameters before the splits $`\nu,\mu`$, with the predicted coefficient widths
-/// of the next witness.
+/// A level's parameters before the splits $`\nu,\mu`$, with the predicted bits per
+/// coefficient of the next witness in the codes of a last witness (`level::encode_final`).
 #[derive(Clone, Copy, Debug)]
 struct Fit {
     params: LevelParams,
-    width_z0: u32,
-    width_z1: u32,
-    width_v: u32,
+    bits_z0: f64,
+    bits_z1: f64,
+    bits_v: f64,
+}
+
+/// The bits per digit of the radix code of base $`2h+1`$ (`level::write_radix`): $`k`$ digits
+/// in the bits of $`(2h+1)^k-1`$.
+fn radix_bits(h: u128) -> f64 {
+    if h == 0 {
+        return 0.0;
+    }
+    let radix = 2 * h + 1;
+    let k = radix_chunk(radix);
+    let power = (0..k).fold(1u128, |p, _| p * radix);
+    f64::from(128 - (power - 1).leading_zeros()) / k as f64
+}
+
+/// The expected bits per value of the Gaussian code with its best parameter
+/// (`level::gaussian_parameter`) for a discrete Gaussian of standard deviation `sigma`.
+fn gaussian_code_bits(sigma: f64) -> f64 {
+    let sigma = sigma.max(0.1);
+    let top = (12.0 * sigma).ceil() as i128;
+    let weights: Vec<(i128, f64)> = (-top..=top)
+        .map(|x| (x, (-((x * x) as f64) / (2.0 * sigma * sigma)).exp()))
+        .collect();
+    let total: f64 = weights.iter().map(|(_, w)| w).sum();
+    (0..=128 - (top as u128).leading_zeros())
+        .map(|p| {
+            weights
+                .iter()
+                .map(|(x, w)| w * gaussian_bits(*x, p) as f64)
+                .sum::<f64>()
+                / total
+        })
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// The width of the signed code of [`crate::codec::BitWriter::signed`] for magnitudes up to
@@ -100,6 +134,15 @@ fn garbage_digits(ring: &Rq, garbage: &[Vec<u64>], b2: u64, t2: usize) -> (f64, 
     (norm as f64, max)
 }
 
+/// The base of $`z=z_0+bz_1`$ of BS23 §5.4: about $`\sqrt{\sqrt{12}\sigma_z}`$, odd.
+fn heuristic_base(set: &ChallengeSet, shape: &Shape, stats: &Stats<'_>, d: usize) -> u64 {
+    let nd = (shape.n * d) as f64;
+    let tau = set.l2_squared() as f64;
+    let gamma_sq = 1.05 * tau * stats.norm_sq as f64 + 4.0 * tau * d as f64;
+    odd_round((12f64.sqrt() * (gamma_sq / nd).sqrt()).sqrt())
+}
+
+/// The parameters for the base `b` of $`z=z_0+bz_1`$, or the heuristic base of BS23 §5.4.
 fn fit(
     ring: &Rq,
     set: &ChallengeSet,
@@ -107,6 +150,7 @@ fn fit(
     shape: &Shape,
     stats: &Stats<'_>,
     last: bool,
+    base: Option<u64>,
 ) -> Option<Fit> {
     let (q, d) = (ring.modulus(), ring.degree());
     let (r, n) = (shape.r, shape.n);
@@ -118,11 +162,10 @@ fn fit(
     // The amortized opening: E||z||^2 = tau ||s||^2 for uniform signs.
     let gamma_sq = 1.05 * tau * w2 + 4.0 * tau * d as f64;
     let sigma_z = (gamma_sq / nd).sqrt();
-    let b = odd_round((12f64.sqrt() * sigma_z).sqrt());
+    let b = base.unwrap_or_else(|| odd_round((12f64.sqrt() * sigma_z).sqrt()));
     let (e0, v0) = uniform_moments(((b - 1) / 2) as f64);
     let z0 = 1.05 * (nd * e0).min(gamma_sq) + 6.0 * (nd * v0).sqrt();
     let z1 = 1.05 * gamma_sq / (b * b) as f64 + 1.0;
-    let z1_max = (6.0 * (gamma_sq / ((b * b) as f64 * nd)).sqrt()).ceil() as u128 + 1;
 
     // Inner commitments and h: residues modulo q, t1 centred digits base b1.
     let t1 = digits_for(u128::from(q), b);
@@ -159,7 +202,10 @@ fn fit(
             (b2, t2, norm, u128::from((b2 - 1) / 2))
         }
     };
-    let width_v = signed_width(u128::from((b1 - 1) / 2).max(htop as u128).max(g_digit));
+    let max_v = u128::from((b1 - 1) / 2).max(htop as u128).max(g_digit);
+    let bits_z0 = radix_bits(u128::from((b - 1) / 2));
+    let bits_z1 = gaussian_code_bits((gamma_sq / ((b * b) as f64 * nd)).sqrt());
+    let bits_v = radix_bits(max_v);
 
     for kappa in 1..=64 {
         let next = z0 + z1 + residues((r * kappa) as f64) + residues(pairs) + g_norm;
@@ -190,9 +236,9 @@ fn fit(
         params.kappa2 = kappa1;
         return Some(Fit {
             params,
-            width_z0: signed_width(u128::from((b - 1) / 2)),
-            width_z1: signed_width(z1_max),
-            width_v,
+            bits_z0,
+            bits_z1,
+            bits_v,
         });
     }
     None
@@ -208,15 +254,16 @@ fn level_bytes(ring: &Rq, shape: &Shape, params: &LevelParams) -> f64 {
     PARAMS_BYTES as f64 + (polys * qbits + 256.0 * wp) / 8.0 + 4.0
 }
 
-/// The bytes of the next witness sent in the clear: $`z_0`$ and $`z_1`$ in $`2\nu`$ parts of
-/// $`n'`$ polynomials, then the $`m`$ polynomials of $`v`$ in $`\lceil m/n'\rceil`$ parts.
+/// The bytes of the next witness sent in the clear (`level::encode_final`): $`z_0`$ and
+/// $`z_1`$ in $`2\nu`$ parts of $`n'`$ polynomials, then the $`m`$ polynomials of $`v`$ in
+/// $`\lceil m/n'\rceil`$ parts, each with a header of one byte (and the largest magnitude of a
+/// radix part, counted as one more).
 fn final_bytes(ring: &Rq, fit: &Fit, nu: usize, m: usize, n_next: usize) -> f64 {
     let d = ring.degree() as f64;
-    let part = |polys: usize, width: u32| 1.0 + (polys as f64 * d * f64::from(width) / 8.0).ceil();
     let mu = m.div_ceil(n_next);
-    nu as f64 * (part(n_next, fit.width_z0) + part(n_next, fit.width_z1))
-        + (mu - 1) as f64 * part(n_next, fit.width_v)
-        + part(m - (mu - 1) * n_next, fit.width_v)
+    let z = (nu * n_next) as f64 * d;
+    let bits = z * (fit.bits_z0 + fit.bits_z1) + m as f64 * d * fit.bits_v;
+    bits / 8.0 + (3 * nu + 2 * mu) as f64 + 1.0
 }
 
 /// The splits worth trying for a level: the divisors $`\nu\le256`$ of $`n`$, each with the
@@ -239,7 +286,7 @@ fn followup(ring: &Rq, set: &ChallengeSet, policy: &Policy, shape: &Shape) -> f6
         norm_sq: shape.norm_sq,
         garbage: None,
     };
-    let Some(fit) = fit(ring, set, policy, shape, &stats, true) else {
+    let Some(fit) = fit(ring, set, policy, shape, &stats, true, None) else {
         return f64::INFINITY;
     };
     let here = level_bytes(ring, shape, &fit.params);
@@ -269,8 +316,13 @@ pub(crate) fn choose(
 ) -> Result<LevelParams, Error> {
     super::params::projection_condition(shape.norm_sq, ring.modulus())?;
     let mut best: Option<(f64, LevelParams)> = None;
-    for last in [true, false] {
-        let Some(fit) = fit(ring, set, policy, shape, stats, last) else {
+    // The odd bases from 3 to four times the heuristic one.
+    let top = 4 * heuristic_base(set, shape, stats, ring.degree());
+    for (last, base) in [true, false]
+        .into_iter()
+        .flat_map(|last| (3..=top).step_by(2).map(move |b| (last, b)))
+    {
+        let Some(fit) = fit(ring, set, policy, shape, stats, last, Some(base)) else {
             continue;
         };
         let here = level_bytes(ring, shape, &fit.params);

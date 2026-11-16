@@ -99,8 +99,9 @@ level's witness and its exact garbage $`g_{ij}`$, with the heuristics of BS23 §
 It predicts the norms of $`z`$ and $`h`$, which depend on later challenges. A level whose next
 witness exceeds the bound it announced is restarted with the next attempt counter (64 at most).
 The bases are odd, so that centred digits are symmetric and the garbage of the next level has no
-systematic term. The prover also chooses the splits and when to stop, with a model of the proof
-size and a lookahead of one level.
+systematic term. The prover also chooses the base $`b`$ of $`z=z_0+bz_1`$ (the odd bases up to
+four times the heuristic one of §5.4), the splits and when to stop, with a model of the proof
+size, in which a last witness costs the bits of its codes, and a lookahead of one level.
 
 The parameters are sent in the proof, 55 bytes per level, and the verifier checks, for each
 level with input bound $`\beta`$, next bound $`\beta'`$, slack $`s=\sqrt{337/30}`$ when another
