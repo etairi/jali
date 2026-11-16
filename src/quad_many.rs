@@ -49,12 +49,8 @@ fn fold(
         equation.check(scheme.ring(), dim)?;
     }
     let weights = transcript.ring_elements(scheme.ring(), equations.len())?;
-    let mut folded = QuadEq::zero(scheme.ring().clone(), dim)?;
-    for (equation, weight) in equations.iter().zip(&weights) {
-        // In place: the keys and values of `folded.add(&equation.scale(weight)?)`.
-        folded.add_scaled_assign(equation, weight)?;
-    }
-    Ok(folded)
+    // The keys and values of `add_scaled_assign` of each equation in turn on a zero equation.
+    QuadEq::combination(scheme.ring(), dim, equations, &weights)
 }
 /// The transcript of the proof on its own, after its instance: the scheme, the commitment's
 /// serialization and the equations ([`absorb_equations`]).

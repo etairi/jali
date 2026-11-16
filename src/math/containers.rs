@@ -277,6 +277,16 @@ impl PolyMat {
             Entries::Sparse { listed, .. } => listed.capacity(),
         }
     }
+    /// The listed entries of `row` with their columns, in increasing order: every entry of a
+    /// dense matrix, the nonzero ones of a matrix built from them ([`PolyMat::sparse`]).
+    pub(crate) fn listed_in_row(&self, row: usize) -> impl Iterator<Item = (usize, &Poly)> {
+        let entries = &*self.entries;
+        let start = row * self.cols;
+        entries.range(start..start + self.cols).map(move |k| {
+            let (position, value) = entries.listed(k);
+            (position - start, value)
+        })
+    }
     /// Checked entry access.
     pub fn get(&self, row: usize, col: usize) -> Result<&Poly, Error> {
         if row >= self.rows || col >= self.cols {
@@ -530,6 +540,129 @@ impl SparsePolyMat {
         self.check_key(r, c)?;
         self.entries.entry((r, c)).or_insert(Slot::Zero);
         Ok(())
+    }
+    /// The sorted keys, each with its polynomial or `None` for an explicit zero.
+    pub(crate) fn slots(&self) -> impl Iterator<Item = ((u16, u16), Option<&Poly>)> {
+        self.entries.iter().map(|(key, slot)| {
+            let p = match slot {
+                Slot::Zero => None,
+                Slot::Value(p) => Some(p),
+            };
+            (*key, p)
+        })
+    }
+    /// The map of strictly increasing keys, each with its polynomial or `None` for an explicit
+    /// zero (as a zero polynomial is held too), built without a search per key.
+    pub(crate) fn from_sorted(
+        ring: Arc<Ring>,
+        dim: usize,
+        entries: Vec<((u16, u16), Option<Poly>)>,
+    ) -> Result<Self, Error> {
+        if dim > u16::MAX as usize + 1 {
+            return Err(Error::Dimension);
+        }
+        let mut out = Self {
+            ring,
+            dim,
+            entries: BTreeMap::new(),
+            zero: SharedZero::default(),
+        };
+        for (k, ((r, c), p)) in entries.iter().enumerate() {
+            out.check_key(*r, *c)?;
+            if k > 0 && entries[k - 1].0 >= (*r, *c) {
+                return Err(Error::Parameter("unsorted sparse entries"));
+            }
+            if p.as_ref().is_some_and(|p| p.ring() != &out.ring) {
+                return Err(Error::RingMismatch);
+            }
+        }
+        out.entries = entries
+            .into_iter()
+            .map(|(key, p)| (key, p.map_or(Slot::Zero, Slot::new)))
+            .collect();
+        Ok(out)
+    }
+    /// Insert as explicit zeros the absent keys $`(\min(i,j),\max(i,j))`$ for $`i`$ in `a` and
+    /// $`j`$ in `b`, both strictly increasing: the keys that `insert_key` on every pair inserts,
+    /// found by merging the columns of each row with that row's keys instead of a search per
+    /// pair.
+    pub(crate) fn insert_outer_keys(&mut self, a: &[u16], b: &[u16]) -> Result<(), Error> {
+        for list in [a, b] {
+            if list.windows(2).any(|w| w[0] >= w[1]) {
+                return Err(Error::Parameter("unsorted sparse keys"));
+            }
+            if list.last().is_some_and(|&c| usize::from(c) >= self.dim) {
+                return Err(Error::Index);
+            }
+        }
+        let mut missing = Vec::new();
+        let (mut x, mut y) = (0, 0);
+        // The rows are the keys of either list, in increasing order: row r takes the columns
+        // c >= r of `b` if r is in `a`, and those of `a` if r is in `b`.
+        while let Some(r) = match (a.get(x), b.get(y)) {
+            (Some(&i), Some(&j)) => Some(i.min(j)),
+            (Some(&i), None) => Some(i),
+            (None, Some(&j)) => Some(j),
+            (None, None) => None,
+        } {
+            let (in_a, in_b) = (a.get(x) == Some(&r), b.get(y) == Some(&r));
+            let from_b: &[u16] = if in_a { &b[y..] } else { &[] };
+            let from_a: &[u16] = if in_b { &a[x..] } else { &[] };
+            let mut present = self
+                .entries
+                .range((r, r)..=(r, u16::MAX))
+                .map(|(key, _)| key.1)
+                .peekable();
+            let (mut p, mut q) = (0, 0);
+            loop {
+                let c = match (from_a.get(p), from_b.get(q)) {
+                    (Some(&u), Some(&v)) => {
+                        p += usize::from(u <= v);
+                        q += usize::from(v <= u);
+                        u.min(v)
+                    }
+                    (Some(&u), None) => {
+                        p += 1;
+                        u
+                    }
+                    (None, Some(&v)) => {
+                        q += 1;
+                        v
+                    }
+                    (None, None) => break,
+                };
+                while present.next_if(|&e| e < c).is_some() {}
+                if present.peek() != Some(&c) {
+                    missing.push((r, c));
+                }
+            }
+            x += usize::from(in_a);
+            y += usize::from(in_b);
+        }
+        self.insert_absent_zeros(missing);
+        Ok(())
+    }
+    /// Insert explicit zeros at the strictly increasing keys `missing`, none of them present:
+    /// one at a time when they are few against the map, by rebuilding it from the merged sorted
+    /// keys otherwise.
+    fn insert_absent_zeros(&mut self, missing: Vec<(u16, u16)>) {
+        if missing.len() * 8 < self.entries.len() {
+            for key in missing {
+                self.entries.insert(key, Slot::Zero);
+            }
+            return;
+        }
+        let old = core::mem::take(&mut self.entries);
+        let mut new = missing.into_iter().peekable();
+        let mut merged = Vec::with_capacity(old.len() + new.len());
+        for (key, slot) in old {
+            while let Some(k) = new.next_if(|k| *k < key) {
+                merged.push((k, Slot::Zero));
+            }
+            merged.push((key, slot));
+        }
+        merged.extend(new.map(|k| (k, Slot::Zero)));
+        self.entries = merged.into_iter().collect();
     }
     /// Add `p` at $`(r,c)`$, inserting a copy if the entry is absent.
     pub(crate) fn add_at(&mut self, r: u16, c: u16, p: &Poly) -> Result<(), Error> {
@@ -812,6 +945,47 @@ impl SparsePolyVec {
         self.check_key(i)?;
         self.entries.entry(i).or_insert(Slot::Zero);
         Ok(())
+    }
+    /// The sorted keys, each with its polynomial or `None` for an explicit zero.
+    pub(crate) fn slots(&self) -> impl Iterator<Item = (u16, Option<&Poly>)> {
+        self.entries.iter().map(|(key, slot)| {
+            let p = match slot {
+                Slot::Zero => None,
+                Slot::Value(p) => Some(p),
+            };
+            (*key, p)
+        })
+    }
+    /// The vector of strictly increasing keys, each with its polynomial or `None` for an
+    /// explicit zero (as a zero polynomial is held too), built without a search per key.
+    pub(crate) fn from_sorted(
+        ring: Arc<Ring>,
+        dim: usize,
+        entries: Vec<(u16, Option<Poly>)>,
+    ) -> Result<Self, Error> {
+        if dim > u16::MAX as usize + 1 {
+            return Err(Error::Dimension);
+        }
+        let mut out = Self {
+            ring,
+            dim,
+            entries: BTreeMap::new(),
+            zero: SharedZero::default(),
+        };
+        for (k, (i, p)) in entries.iter().enumerate() {
+            out.check_key(*i)?;
+            if k > 0 && entries[k - 1].0 >= *i {
+                return Err(Error::Parameter("unsorted sparse entries"));
+            }
+            if p.as_ref().is_some_and(|p| p.ring() != &out.ring) {
+                return Err(Error::RingMismatch);
+            }
+        }
+        out.entries = entries
+            .into_iter()
+            .map(|(key, p)| (key, p.map_or(Slot::Zero, Slot::new)))
+            .collect();
+        Ok(out)
     }
     /// Add `p` at $`i`$, inserting a copy if the entry is absent.
     pub(crate) fn add_at(&mut self, i: u16, p: &Poly) -> Result<(), Error> {

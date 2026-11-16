@@ -11,7 +11,7 @@ use crate::{
     codec::{BitWriter, CodeWriter, SegmentWriter, Segments, fields},
     linhc,
     math::{
-        ConstantSum, Poly, PolyVec, Ring, SparsePolyMat, SparsePolyVec, U256, int,
+        ConstantSum, Poly, PolyNtt, PolyVec, Ring, SparsePolyMat, SparsePolyVec, U256, int,
         terms::{Accumulator, Shape, Term},
     },
     rand::take_seed,
@@ -34,6 +34,75 @@ mod in_place_tests;
 mod mask_tests;
 #[cfg(test)]
 mod substitute_tests;
+
+/// A weight of [`QuadEq::combination`]: classified once and, if general, transformed once.
+struct Weight<'a> {
+    poly: &'a Poly,
+    shape: Shape,
+    ntt: Option<PolyNtt>,
+}
+impl<'a> Weight<'a> {
+    fn new(poly: &'a Poly) -> Self {
+        let shape = Shape::of(poly);
+        let ntt = (shape == Shape::General).then(|| poly.to_ntt());
+        Self { poly, shape, ntt }
+    }
+}
+
+/// $`\sum_iw_ip_i`$ over the terms $`(i,p_i)`$, exactly: a product with a cheap factor in the
+/// coefficient domain, the general ones summed transformed ([`Accumulator`]).
+fn combine_terms<'p>(
+    ring: &Arc<Ring>,
+    weights: &[Weight<'_>],
+    terms: impl Iterator<Item = (usize, &'p Poly)>,
+) -> Result<Poly, Error> {
+    let mut out = Poly::zero(ring.clone());
+    let mut sum = Accumulator::new(ring);
+    for (i, p) in terms {
+        let w = &weights[i];
+        if w.shape.add_product_to(&mut out, p)? {
+            continue;
+        }
+        match Shape::of(p) {
+            Shape::General => {
+                let b = w.ntt.as_ref().expect("general weights are transformed");
+                sum.mac(&p.to_ntt(), b, &mut out)?;
+            }
+            cheap => {
+                cheap.add_product_to(&mut out, w.poly)?;
+            }
+        }
+    }
+    sum.finish_into(&mut out)?;
+    Ok(out)
+}
+
+/// Every key of the sorted maps `maps`, the `i`-th weighted by `weights[i]`, with
+/// [`combine_terms`] of its polynomials there, or `None` where each map that has the key holds
+/// an explicit zero.
+fn combine_maps<'p, K: Ord + Copy + Send + Sync>(
+    ring: &Arc<Ring>,
+    weights: &[Weight<'_>],
+    maps: impl Iterator<Item = impl Iterator<Item = (K, Option<&'p Poly>)>>,
+) -> Result<Vec<(K, Option<Poly>)>, Error> {
+    let mut slots: Vec<(K, usize, Option<&Poly>)> = maps
+        .enumerate()
+        .flat_map(|(i, map)| map.map(move |(key, p)| (key, i, p)))
+        .collect();
+    // A stable sort merges the sorted runs of the maps.
+    slots.sort_by_key(|slot| slot.0);
+    let groups: Vec<&[(K, usize, Option<&Poly>)]> = slots.chunk_by(|x, y| x.0 == y.0).collect();
+    crate::par::try_map_min(groups.len(), 16, |g| {
+        let group = groups[g];
+        let terms = group.iter().filter_map(|&(_, i, p)| p.map(|p| (i, p)));
+        let value = if group.iter().all(|slot| slot.2.is_none()) {
+            None
+        } else {
+            Some(combine_terms(ring, weights, terms)?)
+        };
+        Ok((group[0].0, value))
+    })
+}
 
 /// An affine form $`\sum_uc_uy_u+C`$ that [`QuadEq::substitute`] puts in place of a variable:
 /// `terms` lists the coordinates $`u`$ with their coefficients $`c_u`$.
@@ -335,6 +404,36 @@ impl QuadEq {
         pairs.push((&mut self.r0, &rhs.r0));
         crate::par::try_for_each_min(pairs, 64, |(entry, p)| add_product(entry, p))
     }
+    /// $`\sum_iw_ie_i`$ over `equations` and `weights`, with the keys and values that
+    /// [`QuadEq::add_scaled_assign`] of each pair in turn gives a zero equation: every key of
+    /// any equation, explicit zeros included. Each weight is classified once and, if general,
+    /// transformed once, and each key's general products are summed transformed and reduced
+    /// once per [`NADDS`](crate::params::moduli::NADDS) products instead of once each.
+    pub(crate) fn combination(
+        ring: &Arc<Ring>,
+        dim: usize,
+        equations: &[Self],
+        weights: &[Poly],
+    ) -> Result<Self, Error> {
+        if equations.len() != weights.len() {
+            return Err(Error::Dimension);
+        }
+        for equation in equations {
+            equation.check(ring, dim)?;
+        }
+        if weights.iter().any(|w| w.ring() != ring) {
+            return Err(Error::RingMismatch);
+        }
+        let weights: Vec<Weight<'_>> = weights.iter().map(Weight::new).collect();
+        let r2 = combine_maps(ring, &weights, equations.iter().map(|e| e.r2.slots()))?;
+        let r1 = combine_maps(ring, &weights, equations.iter().map(|e| e.r1.slots()))?;
+        let constants = equations.iter().enumerate().map(|(i, e)| (i, &e.r0));
+        Ok(Self {
+            r2: SparsePolyMat::from_sorted(ring.clone(), dim, r2)?,
+            r1: SparsePolyVec::from_sorted(ring.clone(), dim, r1)?,
+            r0: combine_terms(ring, &weights, constants)?,
+        })
+    }
     /// `self += a.product_affine(b)?`, in place, with the same keys, values and refusals: every
     /// pair of linear keys and every key of either form is kept, also where the product is
     /// zero, and zero products are not computed.
@@ -358,11 +457,23 @@ impl QuadEq {
         let b_values: Vec<&Poly> = b.r1.entries().map(|(_, p)| p).collect();
         let mut a_ntt = vec![None; a_values.len()];
         let mut b_ntt = vec![None; b_values.len()];
-        for (x, &(i, sa)) in a_shapes.iter().enumerate() {
-            for (y, &(j, sb)) in b_shapes.iter().enumerate() {
+        // Every pair's key, by one merge per row; then the products of the nonzero pairs.
+        let keys = |shapes: &[(u16, Shape)]| -> Vec<u16> { shapes.iter().map(|s| s.0).collect() };
+        self.r2
+            .insert_outer_keys(&keys(&a_shapes), &keys(&b_shapes))?;
+        let nonzero = |shapes: &[(u16, Shape)]| -> Vec<usize> {
+            (0..shapes.len())
+                .filter(|&x| shapes[x].1 != Shape::Zero)
+                .collect()
+        };
+        let (a_nonzero, b_nonzero) = (nonzero(&a_shapes), nonzero(&b_shapes));
+        for &x in &a_nonzero {
+            let (i, sa) = a_shapes[x];
+            for &y in &b_nonzero {
+                let (j, sb) = b_shapes[y];
                 let (r, c) = (i.min(j), i.max(j));
                 match (sa, sb) {
-                    (Shape::Zero, _) | (_, Shape::Zero) => self.r2.insert_key(r, c)?,
+                    (Shape::Zero, _) | (_, Shape::Zero) => {}
                     (Shape::General, Shape::General) => {
                         let pa = a_ntt[x].get_or_insert_with(|| a_values[x].to_ntt());
                         let pb = b_ntt[y].get_or_insert_with(|| b_values[y].to_ntt());
