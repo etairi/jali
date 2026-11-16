@@ -20,6 +20,25 @@ Not published yet. So far the proofs of the LNP22 modules are those of 0.2.0.
   (Apple M4, one thread). The proofs of the other modules and their transcripts are unchanged.
   The new transcript tag is `JALI-V02-LABRADOR-C1-SHAKE128`.
 
+### Changed
+
+- **Faster proving and verification, with byte-identical proofs.** Every proof and transcript
+  is unchanged. Measured on an Apple M4, one thread, against the first 0.3.0 commit:
+  - Moduli from $`2^{63}`$ to $`2^{126}`$ use native 128-bit arithmetic: Barrett products,
+    Shoup multipliers, residues and the CRT in words, instead of `crypto-bigint`'s generic
+    division. The lattice test of the predicate-credential system, whose attribute and
+    possession sets have $`q\approx2^{69.4}`$, needs 6.2 times fewer cycles, its attribute and
+    membership proofs about 7 times less time.
+  - The prover's witness checks compute only the constant coefficients they test, from witness
+    products shared by all equations. The exact integer evaluation behind lifted constraints
+    uses 64-bit coefficients when a bound shows that nothing overflows. NTT plans are built once
+    per process. The transforms of RNS products are merged negacyclic ones with lazy
+    reduction. Scalar products are fused, and the quadratic proof computes the witness-only
+    half of its products once instead of once per attempt. Kyber1024 proofs need 1.8 to 2.1
+    times fewer cycles, their verification 1.1 to 1.2 times.
+  - LaBRADOR multiplies by sparse challenges without 128-bit divisions and uses the faster
+    transforms: 1.3 times fewer cycles to prove, 1.35 times to verify.
+
 ## [0.2.0] - 2026-11-15
 
 The Fiat–Shamir transcripts and the proof encoding follow the CFRG drafts
