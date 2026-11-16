@@ -90,6 +90,10 @@ impl BitWriter {
     fn zero_bytes(&mut self, count: u64) {
         self.bytes.resize(self.bytes.len() + count as usize, 0);
     }
+    /// The number of bits written so far.
+    pub(crate) fn bit_len(&self) -> usize {
+        8 * self.bytes.len() + self.used as usize
+    }
     /// Write exactly `bits` low bits, rejecting truncation.
     pub fn unsigned(&mut self, value: u128, bits: u32) -> Result<(), Error> {
         if bits > 128 || (bits < 128 && value >> bits != 0) {
@@ -316,6 +320,10 @@ impl<'a> BitReader<'a> {
     /// Start at bit zero.
     pub fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, pos: 0 }
+    }
+    /// The number of bits read so far.
+    pub(crate) fn position(&self) -> usize {
+        self.pos
     }
     fn bit(&mut self) -> Result<bool, Error> {
         let byte = self.bytes.get(self.pos / 8).ok_or(Error::Encoding)?;
