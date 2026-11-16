@@ -15,7 +15,7 @@ use crate::{
     math::{
         SmallCrt,
         int::is_prime,
-        ntt::{NttPlan, add_mod, mul_mod, pow_mod, sub_mod},
+        ntt::{NttPlan, add_mod, mul_mod, pow_mod, shoup, shoup_mul, sub_mod},
     },
     params::moduli::NTT_PRIMES,
 };
@@ -312,17 +312,32 @@ impl Rq {
     /// `out += c·a` for a sparse polynomial `c` with small coefficients.
     pub(crate) fn mul_sparse_add(&self, c: &Sparse, a: &[u64], out: &mut [u64]) {
         debug_assert!(a.len() == self.d && out.len() == self.d);
-        let d = self.d;
+        let (d, q) = (self.d, self.q);
         for &(pos, value) in &c.terms {
-            let v = self.lift(value);
-            // X^pos a: coefficient j moves to j + pos, with a sign change past X^d.
-            for (j, x) in a.iter().enumerate() {
-                let t = mul_mod(*x, v, self.q);
-                let idx = j + pos;
-                if idx < d {
-                    out[idx] = add_mod(out[idx], t, self.q);
-                } else {
-                    out[idx - d] = sub_mod(out[idx - d], t, self.q);
+            debug_assert!(pos < d);
+            // X^pos a: coefficient j moves to j + pos, with a sign change past X^d. The first
+            // d - pos coefficients land on out[pos..], the others, negated, on out[..pos].
+            let (head, tail) = a.split_at(d - pos);
+            let (low, high) = out.split_at_mut(pos);
+            match value {
+                1 => {
+                    self.add_assign(high, head);
+                    self.sub_assign(low, tail);
+                }
+                -1 => {
+                    self.sub_assign(high, head);
+                    self.add_assign(low, tail);
+                }
+                _ => {
+                    // One Shoup constant per term, so no product divides.
+                    let v = self.lift(value);
+                    let v_shoup = shoup(v, q);
+                    for (o, x) in high.iter_mut().zip(head) {
+                        *o = add_mod(*o, shoup_mul(*x, v, v_shoup, q), q);
+                    }
+                    for (o, x) in low.iter_mut().zip(tail) {
+                        *o = sub_mod(*o, shoup_mul(*x, v, v_shoup, q), q);
+                    }
                 }
             }
         }

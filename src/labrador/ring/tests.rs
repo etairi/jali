@@ -187,6 +187,38 @@ fn sparse_products_match_dense_ones() {
 }
 
 #[test]
+fn sparse_products_match_dense_ones_for_every_degree_position_and_value() {
+    // The moduli near both ends of the range (q = 5 mod 8, prime), positions 0 and d - 1, the
+    // values +-1 (added or subtracted directly), +-2 to +-15, and values near +-q.
+    let mut rng = TestRng::new(5);
+    for q in [65557u64, 4294967197, 281474976710597] {
+        for d in [64, 128, 256] {
+            let ring = Rq::new(q, d).unwrap();
+            let big = (q - 3) as i64;
+            for round in 0..6 {
+                let mut terms: Vec<(usize, i64)> = vec![(0, 1), (d - 1, -1), (d / 2, 2), (1, -2)];
+                terms.extend((0..12).map(|_| {
+                    let pos = rng.below(d as u64) as usize;
+                    let value = match round % 3 {
+                        0 => rng.below(31) as i64 - 15,
+                        1 => [big, -big, 1 - big, big - 1][rng.below(4) as usize],
+                        _ => rng.below(5) as i64 - 2,
+                    };
+                    (pos, value)
+                }));
+                let c = Sparse { terms };
+                let a = random_poly(&ring, &mut rng);
+                let mut out = random_poly(&ring, &mut rng);
+                let mut want = out.clone();
+                ring.add_assign(&mut want, &ring.poly_mul(&c.dense(&ring), &a));
+                ring.mul_sparse_add(&c, &a, &mut out);
+                assert_eq!(out, want, "q {q} d {d} round {round}");
+            }
+        }
+    }
+}
+
+#[test]
 fn scalars_norms_and_centring() {
     let ring = Rq::new(65557, 64).unwrap();
     let q = 65557;
