@@ -11,7 +11,8 @@ use crate::{
     codec::{BitWriter, CodeWriter, SegmentWriter, Segments, fields},
     linhc,
     math::{
-        ConstantSum, Poly, PolyVec, Ring, SparsePolyMat, SparsePolyVec, U256, int, terms::Shape,
+        ConstantSum, Poly, PolyVec, Ring, SparsePolyMat, SparsePolyVec, U256, int,
+        terms::{Accumulator, Shape, Term},
     },
     rand::take_seed,
     transcript::{Protocol, Transcript},
@@ -29,6 +30,8 @@ mod expansion_tests;
 mod extraction_tests;
 #[cfg(test)]
 mod in_place_tests;
+#[cfg(test)]
+mod mask_tests;
 #[cfg(test)]
 mod substitute_tests;
 
@@ -822,6 +825,91 @@ pub(crate) fn prove_core<U: Send>(
     )?;
     Ok((proof, side))
 }
+/// The part of $`g_1`$ linear in an attempt's mask $`y`$, with coefficients that depend on
+/// the witness alone, computed once per proof instead of once per attempt:
+/// $`\mathrm{bilinear}(s,y)+\mathrm{bilinear}(y,s)+r_1\cdot y=\sum_ky_kw_k`$ with
+/// $`w_k=\sum_{r:(r,k)}s_rR_{rk}+\sum_{c:(k,c)}R_{kc}s_c+r_{1,k}`$, collecting each
+/// $`y_k`$'s terms (products commute). Each $`w_k`$ is exact, so $`g_1`$ is the canonical value
+/// of the three-term sum. The coefficients come from the witness and are wiped as `Poly`s are.
+struct MaskLinear {
+    ring: Arc<Ring>,
+    dim: usize,
+    /// The nonzero $`w_k`$, each classified and, if general, transformed once.
+    terms: Vec<(usize, Poly, Term)>,
+}
+impl MaskLinear {
+    fn new(equation: &QuadEq, s: &PolyVec) -> Result<Self, Error> {
+        let ring = s.ring().clone();
+        let dim = s.len();
+        equation.check(&ring, dim)?;
+        let mut w: Vec<Poly> = (0..dim).map(|_| Poly::zero(ring.clone())).collect();
+        for (i, p) in equation.r1.entries() {
+            w[usize::from(i)].add_assign(p)?;
+        }
+        let mut sums: Vec<Accumulator> = (0..dim).map(|_| Accumulator::new(&ring)).collect();
+        let s_terms: Vec<Term> = s.entries().iter().map(Term::new).collect();
+        // out += a b, for a and b with their terms.
+        let add_product = |out: &mut Poly,
+                           sum: &mut Accumulator,
+                           (a, at): (&Poly, &Term),
+                           (b, bt): (&Poly, &Term)|
+         -> Result<(), Error> {
+            match (at, bt) {
+                (Term::General(x), Term::General(y)) => sum.mac(x, y, out),
+                (Term::Cheap(shape), _) => shape.add_product_to(out, b).map(|_| ()),
+                (_, Term::Cheap(shape)) => shape.add_product_to(out, a).map(|_| ()),
+            }
+        };
+        for ((r, c), p) in equation.r2.entries() {
+            if p.is_zero() {
+                continue;
+            }
+            let (r, c) = (usize::from(r), usize::from(c));
+            let pt = Term::new(p);
+            let (sr, sc) = (&s.entries()[r], &s.entries()[c]);
+            // w_c += s_r R_rc and w_r += R_rc s_c.
+            add_product(&mut w[c], &mut sums[c], (sr, &s_terms[r]), (p, &pt))?;
+            add_product(&mut w[r], &mut sums[r], (p, &pt), (sc, &s_terms[c]))?;
+        }
+        let mut terms = Vec::new();
+        for (k, (mut wk, mut sum)) in w.into_iter().zip(sums).enumerate() {
+            sum.finish_into(&mut wk)?;
+            if !wk.is_zero() {
+                let term = Term::new(&wk);
+                terms.push((k, wk, term));
+            }
+        }
+        Ok(Self { ring, dim, terms })
+    }
+    /// $`\sum_ky_kw_k`$, with the refusals of the products it replaces.
+    fn apply(&self, y: &PolyVec) -> Result<Poly, Error> {
+        if y.len() != self.dim {
+            return Err(Error::Dimension);
+        }
+        if y.ring() != &self.ring {
+            return Err(Error::RingMismatch);
+        }
+        let mut out = Poly::zero(self.ring.clone());
+        let mut sum = Accumulator::new(&self.ring);
+        for (k, wk, term) in &self.terms {
+            let yk = &y.entries()[*k];
+            match term {
+                Term::Cheap(shape) => {
+                    shape.add_product_to(&mut out, yk)?;
+                }
+                Term::General(x) => match Shape::of(yk) {
+                    Shape::General => sum.mac(x, &yk.to_ntt(), &mut out)?,
+                    cheap => {
+                        cheap.add_product_to(&mut out, wk)?;
+                    }
+                },
+            }
+        }
+        sum.finish_into(&mut out)?;
+        Ok(out)
+    }
+}
+
 /// [`prove_core`] with the extractable commitment when `ext` is given: the challenge function
 /// also receives each attempt's LinHC mask commitment, and must absorb it.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -842,6 +930,7 @@ pub(crate) fn prove_core_ext<U: Send>(
     + Sync,
 ) -> Result<(QuadProof, Option<linhc::LinhcOpening>, U), Error> {
     let s = interleave(&opening.s1, &opening.m)?;
+    let linear = MaskLinear::new(equation, &s)?;
     let b = extra_row(scheme)?;
     let s21 = abdlop::part(&opening.s2, 0, scheme.a2.cols())?;
     let bs = b.dot(&s21)?;
@@ -862,11 +951,7 @@ pub(crate) fn prove_core_ext<U: Send>(
                 by.entries().iter().map(Poly::neg).collect(),
             )?;
             let y = interleave(y1, &minus_by)?;
-            let g1 = equation
-                .r2
-                .bilinear(&s, &y)?
-                .add(&equation.r2.bilinear(&y, &s)?)?
-                .add(&equation.r1.dot(&y)?)?;
+            let g1 = linear.apply(&y)?;
             let t = bs.add(&g1)?;
             let v = equation.r2.bilinear(&y, &y)?.add(&b.dot(y21)?)?;
             let (c, side) = challenge(&t, &v, w1, mask)?;
