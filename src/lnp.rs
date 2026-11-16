@@ -78,22 +78,25 @@ impl AffineBlock {
         self.check(ring, p.m1, p.l, self.rows)?;
         (0..self.rows)
             .map(|row| {
-                let mut entries = Vec::new();
-                if let Some(matrix) = &self.s {
-                    for j in 0..p.m1 {
-                        entries.push(((2 * j) as u16, matrix.get(row, j)?.clone()));
+                // Every column is a key, as the entries of `get` would give, the zero ones held
+                // without a polynomial buffer: only the listed nonzero entries are copied.
+                let mut r1 = SparsePolyVec::new(ring.clone(), dimension, Vec::new())?;
+                for (matrix, first, cols) in
+                    [(&self.s, 0, p.m1), (&self.m, scheme.bounded_len(), p.l)]
+                {
+                    let Some(matrix) = matrix else {
+                        continue;
+                    };
+                    let key = |j: usize| u16::try_from(2 * (first + j)).map_err(|_| Error::Index);
+                    for (j, value) in matrix.listed_in_row(row) {
+                        r1.add_at(key(j)?, value)?;
                     }
-                }
-                if let Some(matrix) = &self.m {
-                    for j in 0..p.l {
-                        entries.push((
-                            (2 * (scheme.bounded_len() + j)) as u16,
-                            matrix.get(row, j)?.clone(),
-                        ));
+                    for j in 0..cols {
+                        r1.insert_key(key(j)?)?;
                     }
                 }
                 let mut equation = QuadEq::zero(ring.clone(), dimension)?;
-                equation.r1 = SparsePolyVec::new(ring.clone(), dimension, entries)?;
+                equation.r1 = r1;
                 if let Some(offset) = &self.offset {
                     equation.r0 = offset.entries()[row].clone();
                 }
@@ -514,3 +517,6 @@ impl Verifier {
         )
     }
 }
+
+#[cfg(test)]
+mod forms_tests;

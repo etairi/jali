@@ -1,7 +1,8 @@
 //! In-place accumulation against the copying operations it fuses:
 //! `add_assign` ≡ `add`, `add_scaled_scalar_assign(w)` ≡ `add(scale(constant w))`,
 //! `add_scaled_assign(p)` ≡ `add(scale(p))`, `add_product_affine(a, b)` ≡
-//! `add(a.product_affine(b))`, `into_trace` ≡ a trace by copies and `resize` ≡ `resized`,
+//! `add(a.product_affine(b))`, `combination` ≡ a fold of `add(scale(w))`, `insert_outer_keys`
+//! ≡ `insert_key` on every pair, `into_trace` ≡ a trace by copies and `resize` ≡ `resized`,
 //! comparing keys and values, on random sparse forms with overlapping and disjoint keys, zero
 //! entries and every coefficient shape, at moduli on both sides of $`2^{63}`$ and $`2^{128}`$;
 //! refusals included, and the polynomial helpers against the operations they fuse.
@@ -311,4 +312,250 @@ fn trace_and_resize_equal_the_copying_ones() {
             assert_eq!(x.clone().resize(65537), Err(Error::Dimension));
         }
     }
+}
+
+/// A form with `entries` linear keys among `n`, most of them explicit zeros, as the statement
+/// forms of a credential have them.
+fn mostly_zero(rng: &mut Rng, ring: &Arc<Ring>, n: usize, entries: usize) -> QuadEq {
+    let mut linear = BTreeMap::new();
+    while linear.len() < entries {
+        let p = if rng.below(8) == 0 {
+            rng.poly(ring)
+        } else {
+            Poly::zero(ring.clone())
+        };
+        linear.insert(rng.below(n as u64) as u16, p);
+    }
+    let mut form = QuadEq::zero(ring.clone(), n).unwrap();
+    form.r1 = SparsePolyVec::new(ring.clone(), n, linear.into_iter().collect()).unwrap();
+    if rng.below(2) == 0 {
+        form.r0 = rng.poly(ring);
+    }
+    form
+}
+
+#[test]
+fn wide_products_equal_product_affine() {
+    // Forms of up to 60 keys, mostly explicit zeros, into accumulators that hold none, some or
+    // all of the product's keys: both ways of inserting the keys.
+    let mut rng = Rng(11);
+    let n = 128;
+    for ring in rings().into_iter().take(4) {
+        for case in 0..24 {
+            let (sa, sb) = (1 + rng.below(60) as usize, 1 + rng.below(60) as usize);
+            let a = mostly_zero(&mut rng, &ring, n, sa);
+            let b = if case % 3 == 0 {
+                a.clone()
+            } else {
+                mostly_zero(&mut rng, &ring, n, sb)
+            };
+            let product = a.product_affine(&b).unwrap();
+            let accumulators = [
+                QuadEq::zero(ring.clone(), n).unwrap(),
+                rng.form(&ring, n, 40, true),
+                product.clone(),
+            ];
+            for acc in accumulators {
+                let mut x = acc.clone();
+                x.add_product_affine(&a, &b).unwrap();
+                assert_eq!(x, acc.add(&product).unwrap(), "case {case}");
+            }
+        }
+    }
+}
+
+#[test]
+fn outer_keys_equal_a_key_per_pair() {
+    let mut rng = Rng(12);
+    let ring = Ring::new(1099511627917, 64).unwrap();
+    let n = 300u64;
+    let sorted = |rng: &mut Rng, len: u64| -> Vec<u16> {
+        let set: std::collections::BTreeSet<u16> = (0..len).map(|_| rng.below(n) as u16).collect();
+        set.into_iter().collect()
+    };
+    for case in 0..200 {
+        let len = rng.below(70);
+        let a = sorted(&mut rng, len);
+        let b = match case % 4 {
+            0 => a.clone(),
+            1 => Vec::new(),
+            _ => {
+                let len = rng.below(70);
+                sorted(&mut rng, len)
+            }
+        };
+        // A map with values and explicit zeros, with few or many keys against the pairs.
+        let mut present = Vec::new();
+        for _ in 0..[0, 3, 40, 4000][case % 4] {
+            let (i, j) = (rng.below(n) as u16, rng.below(n) as u16);
+            present.push((i.min(j), i.max(j)));
+        }
+        present.sort_unstable();
+        present.dedup();
+        let mut entries = Vec::new();
+        for (k, &(r, c)) in present.iter().enumerate() {
+            let p = if k % 2 == 0 {
+                rng.poly(&ring)
+            } else {
+                Poly::zero(ring.clone())
+            };
+            entries.push((r, c, p));
+        }
+        let map = SparsePolyMat::new(ring.clone(), n as usize, entries).unwrap();
+        let mut expected = map.clone();
+        for &i in &a {
+            for &j in &b {
+                expected.insert_key(i.min(j), i.max(j)).unwrap();
+            }
+        }
+        let mut x = map.clone();
+        x.insert_outer_keys(&a, &b).unwrap();
+        assert_eq!(x, expected, "case {case}");
+        let mut y = map.clone();
+        y.insert_outer_keys(&b, &a).unwrap();
+        assert_eq!(y, expected, "case {case}");
+    }
+    // Two absent keys against a large map: inserted one at a time.
+    let entries = (0..200u16).map(|c| (0, c, rng.poly(&ring))).collect();
+    let map = SparsePolyMat::new(ring.clone(), n as usize, entries).unwrap();
+    let mut x = map.clone();
+    x.insert_outer_keys(&[1], &[1, 250]).unwrap();
+    let mut expected = map.clone();
+    expected.insert_key(1, 1).unwrap();
+    expected.insert_key(1, 250).unwrap();
+    assert_eq!(x, expected);
+    assert_eq!(x.key_count(), 202);
+    // Unsorted, repeated and out-of-range keys are refused.
+    let mut map = SparsePolyMat::new(ring.clone(), 10, Vec::new()).unwrap();
+    assert!(map.insert_outer_keys(&[3, 2], &[1]).is_err());
+    assert!(map.insert_outer_keys(&[1], &[2, 2]).is_err());
+    assert_eq!(map.insert_outer_keys(&[1], &[10]), Err(Error::Index));
+    assert_eq!(map.key_count(), 0);
+}
+
+/// The fold by copying operations: `add(scale(w))` of each equation in turn.
+fn combination_by_copies(
+    ring: &Arc<Ring>,
+    n: usize,
+    equations: &[QuadEq],
+    weights: &[Poly],
+) -> QuadEq {
+    let mut out = QuadEq::zero(ring.clone(), n).unwrap();
+    for (e, w) in equations.iter().zip(weights) {
+        out = out.add(&e.scale(w).unwrap()).unwrap();
+    }
+    out
+}
+
+#[test]
+fn combinations_equal_the_folds_they_replace() {
+    let mut rng = Rng(13);
+    let n = 10;
+    for ring in rings() {
+        for case in 0..40 {
+            let count = rng.below(9) as usize;
+            let equations: Vec<QuadEq> = (0..count).map(|_| rng.form(&ring, n, 8, true)).collect();
+            let weights: Vec<Poly> = (0..count).map(|_| rng.poly(&ring)).collect();
+            let x = QuadEq::combination(&ring, n, &equations, &weights).unwrap();
+            assert_eq!(
+                x,
+                combination_by_copies(&ring, n, &equations, &weights),
+                "case {case}"
+            );
+            let mut y = QuadEq::zero(ring.clone(), n).unwrap();
+            for (e, w) in equations.iter().zip(&weights) {
+                y.add_scaled_assign(e, w).unwrap();
+            }
+            assert_eq!(x, y, "case {case}");
+        }
+    }
+    // More general products on one key than an accumulator holds before it reduces.
+    let mut rng = Rng(14);
+    for ring in rings().into_iter().take(4) {
+        let count = crate::params::moduli::NADDS + 12;
+        let dense = |rng: &mut Rng| loop {
+            let p = rng.poly(&ring);
+            if Shape::of(&p) == Shape::General {
+                break p;
+            }
+        };
+        let mut equations = Vec::new();
+        for _ in 0..count {
+            let mut e = QuadEq::zero(ring.clone(), 4).unwrap();
+            e.r2 = SparsePolyMat::new(ring.clone(), 4, vec![(1, 2, dense(&mut rng))]).unwrap();
+            e.r1 = SparsePolyVec::new(ring.clone(), 4, vec![(3, dense(&mut rng))]).unwrap();
+            e.r0 = dense(&mut rng);
+            equations.push(e);
+        }
+        let weights: Vec<Poly> = (0..count).map(|_| dense(&mut rng)).collect();
+        let x = QuadEq::combination(&ring, 4, &equations, &weights).unwrap();
+        let mut y = QuadEq::zero(ring.clone(), 4).unwrap();
+        for (e, w) in equations.iter().zip(&weights) {
+            y.add_scaled_assign(e, w).unwrap();
+        }
+        assert_eq!(x, y);
+    }
+    // Refusals: a weight per equation, the ring and the dimension of every equation.
+    let ring = Ring::new(1099511627917, 64).unwrap();
+    let other = Ring::new(3, 64).unwrap();
+    let e = QuadEq::zero(ring.clone(), 4).unwrap();
+    let w = Poly::constant(ring.clone(), 2);
+    assert_eq!(
+        QuadEq::combination(&ring, 4, std::slice::from_ref(&e), &[]).err(),
+        Some(Error::Dimension)
+    );
+    assert!(QuadEq::combination(&ring, 5, std::slice::from_ref(&e), &[w]).is_err());
+    assert_eq!(
+        QuadEq::combination(&ring, 4, &[e], &[Poly::constant(other, 2)]).err(),
+        Some(Error::RingMismatch)
+    );
+}
+
+#[test]
+fn sorted_constructors_build_what_new_builds() {
+    let ring = Ring::new(1099511627917, 64).unwrap();
+    let p = Poly::constant(ring.clone(), 5);
+    let zero = || Poly::zero(ring.clone());
+    let m = SparsePolyMat::from_sorted(
+        ring.clone(),
+        4,
+        vec![
+            ((0, 1), Some(p.clone())),
+            ((0, 3), None),
+            ((2, 2), Some(zero())),
+        ],
+    )
+    .unwrap();
+    let reference = SparsePolyMat::new(
+        ring.clone(),
+        4,
+        vec![(0, 1, p.clone()), (0, 3, zero()), (2, 2, zero())],
+    )
+    .unwrap();
+    assert_eq!(m, reference);
+    for bad in [
+        vec![((0, 1), None), ((0, 1), None)],
+        vec![((0, 2), None), ((0, 1), None)],
+        vec![((1, 0), None)],
+        vec![((0, 4), None)],
+    ] {
+        assert!(SparsePolyMat::from_sorted(ring.clone(), 4, bad).is_err());
+    }
+    let v =
+        SparsePolyVec::from_sorted(ring.clone(), 4, vec![(0, None), (3, Some(p.clone()))]).unwrap();
+    let reference = SparsePolyVec::new(ring.clone(), 4, vec![(0, zero()), (3, p.clone())]).unwrap();
+    assert_eq!(v, reference);
+    for bad in [
+        vec![(1, None), (1, None)],
+        vec![(2, None), (1, None)],
+        vec![(4, None)],
+    ] {
+        assert!(SparsePolyVec::from_sorted(ring.clone(), 4, bad).is_err());
+    }
+    let other = Ring::new(3, 64).unwrap();
+    let foreign = vec![(0, Some(Poly::constant(other, 1)))];
+    assert_eq!(
+        SparsePolyVec::from_sorted(ring.clone(), 4, foreign).err(),
+        Some(Error::RingMismatch)
+    );
 }

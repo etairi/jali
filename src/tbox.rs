@@ -772,11 +772,7 @@ fn projection(
     affines: &[QuadEq],
     rows: &[Poly],
 ) -> Result<QuadEq, Error> {
-    let mut projection = QuadEq::zero(ring.clone(), dim)?;
-    for (affine, row) in affines.iter().zip(rows) {
-        projection.add_scaled_assign(affine, row)?;
-    }
-    Ok(projection)
+    QuadEq::combination(ring, dim, affines, rows)
 }
 /// The forms of a range block prepared for its 256 projection rows: each coefficient is
 /// classified once and, if general, transformed once, and the coefficients are grouped by key.
