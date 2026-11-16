@@ -27,6 +27,8 @@ pub mod statement;
 pub mod tbox;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
+#[cfg(test)]
+mod test_words;
 mod transcript;
 #[cfg(test)]
 mod wide_tests;

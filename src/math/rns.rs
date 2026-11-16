@@ -194,19 +194,35 @@ fn centred_residues(ring: &Ring, coeffs: &[U256], i: usize) -> Vec<u64> {
                 }
             })
             .collect(),
-        None => coeffs
-            .iter()
-            .map(|x| {
-                let r = ring.residue(x, i);
-                if !ring.is_negative(x) {
-                    r
-                } else if r >= q {
-                    r - q
-                } else {
-                    r + (p - q)
-                }
-            })
-            .collect(),
+        None => match ring.narrow {
+            // 2^63 <= q < 2^128: the sign test and the remainder in words. As q > p, no
+            // value is its own residue.
+            Some(modulus) => {
+                let half = modulus >> 1;
+                let reducer = &ring.reducers[i];
+                coeffs
+                    .iter()
+                    .map(|x| {
+                        let v = int::low_u128(x);
+                        let r = reducer.reduce(v);
+                        if v > half { sub_mod(r, q, p) } else { r }
+                    })
+                    .collect()
+            }
+            None => coeffs
+                .iter()
+                .map(|x| {
+                    let r = ring.residue(x, i);
+                    if !ring.is_negative(x) {
+                        r
+                    } else if r >= q {
+                        r - q
+                    } else {
+                        r + (p - q)
+                    }
+                })
+                .collect(),
+        },
     }
 }
 fn reconstruct(ring: &Arc<Ring>, residues: &[Vec<u64>]) -> Result<Poly, Error> {

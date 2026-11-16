@@ -1,0 +1,120 @@
+//! The ring operations that have native paths for $`q<2^{128}`$ (products, Shoup multipliers,
+//! sign tests, magnitudes, centred values, residues, reduction) against big integers, on moduli
+//! at both sides of $`2^{63}`$, $`2^{64}`$, $`2^{126}`$ and $`2^{128}`$.
+use super::*;
+use num_bigint::{BigInt, BigUint};
+
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+    fn u256(&mut self) -> U256 {
+        crate::test_words::u256_from_u64s([self.next(), self.next(), self.next(), self.next()])
+    }
+}
+
+fn big(x: &U256) -> BigUint {
+    BigUint::from_bytes_le(&x.to_le_bytes())
+}
+fn u256(x: &BigUint) -> U256 {
+    let mut bytes = x.to_bytes_le();
+    bytes.resize(32, 0);
+    U256::from_le_slice(&bytes)
+}
+
+fn moduli() -> Vec<U256> {
+    let two = |k: u32| U256::ONE.shl_vartime(k);
+    vec![
+        two(63).wrapping_sub(&U256::from_u8(25)),
+        two(63),
+        two(63).wrapping_add(&U256::ONE),
+        two(64).wrapping_sub(&U256::from_u8(59)),
+        two(64),
+        two(64).wrapping_add(&U256::from_u8(13)),
+        two(100).wrapping_sub(&U256::from_u8(15)),
+        U256::from_u128(800602353498606932557),
+        two(125).wrapping_add(&U256::from_u8(2)),
+        two(126).wrapping_sub(&U256::ONE),
+        two(126),
+        two(127).wrapping_add(&U256::from_u8(45)),
+        two(128).wrapping_sub(&U256::ONE),
+        two(128).wrapping_add(&U256::from_u8(165)),
+        two(200).wrapping_sub(&U256::from_u8(75)),
+    ]
+}
+
+/// Canonical values: edges and random ones below $`q`$.
+fn values(q: &U256, rng: &mut Rng) -> Vec<U256> {
+    let half = q.shr_vartime(1);
+    let mut out = vec![
+        U256::ZERO,
+        U256::ONE,
+        half,
+        half.wrapping_add(&U256::ONE),
+        q.wrapping_sub(&U256::ONE),
+    ];
+    let qb = big(q);
+    out.extend((0..40).map(|_| u256(&(big(&rng.u256()) % &qb))));
+    out
+}
+
+#[test]
+fn native_ring_operations_equal_big_integer_ones() {
+    let mut rng = Rng(21);
+    for q in moduli() {
+        let ring = Ring::with_modulus(q, 64).unwrap();
+        let qb = big(&q);
+        let half = &qb >> 1u32;
+        let xs = values(&q, &mut rng);
+        for a in &xs {
+            let ab = big(a);
+            // sign, magnitude and centred value
+            let negative = ab > half;
+            assert_eq!(ring.is_negative(a), negative, "q {q} x {a}");
+            let magnitude = if negative { &qb - &ab } else { ab.clone() };
+            assert_eq!(big(&ring.magnitude(a)), magnitude, "q {q} x {a}");
+            let centred = if negative {
+                -BigInt::from(magnitude.clone())
+            } else {
+                BigInt::from(magnitude.clone())
+            };
+            assert_eq!(
+                ring.centred_i128(a),
+                i128::try_from(centred.clone()).ok(),
+                "q {q} x {a}"
+            );
+            // residues modulo every selected prime
+            for (i, plan) in ring.plans.iter().enumerate() {
+                let p = BigUint::from(plan.modulus());
+                assert_eq!(BigUint::from(ring.residue(a, i)), &ab % &p, "q {q} x {a}");
+            }
+            // products and Shoup multipliers
+            let multiplier = ring.scalar_multiplier(a);
+            let native = int::to_u128(&q).is_some_and(|v| v < 1 << 126);
+            assert_eq!(multiplier.is_some(), native, "q {q}");
+            let expect: Vec<U256> = xs.iter().map(|b| u256(&((&ab * big(b)) % &qb))).collect();
+            for (b, e) in xs.iter().zip(&expect) {
+                assert_eq!(ring.mul(a, b), *e, "q {q} a {a} b {b}");
+            }
+            if let Some(m) = &multiplier {
+                assert_eq!(m.apply_all(&xs), expect, "q {q} w {a}");
+                let mut in_place = xs.clone();
+                m.apply_in_place(&mut in_place);
+                assert_eq!(in_place, expect, "q {q} w {a}");
+                let mut zipped = vec![U256::ZERO; xs.len()];
+                m.zip_apply(&mut zipped, &xs, |o, p| *o = p);
+                assert_eq!(zipped, expect, "q {q} w {a}");
+            }
+        }
+        // reduction of arbitrary 256-bit values
+        for _ in 0..40 {
+            let y = rng.u256();
+            assert_eq!(big(&ring.reduce(&y)), big(&y) % &qb, "q {q} y {y}");
+        }
+    }
+}

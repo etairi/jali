@@ -171,9 +171,7 @@ impl Poly {
             return self.add_assign(rhs);
         }
         if let Some(multiplier) = ring.scalar_multiplier(scalar) {
-            for (a, b) in self.coeffs.iter_mut().zip(&rhs.coeffs) {
-                *a = ring.add(a, &multiplier.apply(b));
-            }
+            multiplier.zip_apply(&mut self.coeffs, &rhs.coeffs, |a, p| *a = ring.add(a, &p));
         } else {
             for (a, b) in self.coeffs.iter_mut().zip(&rhs.coeffs) {
                 *a = ring.add(a, &ring.mul(b, scalar));
@@ -197,17 +195,20 @@ impl Poly {
             return Ok(());
         }
         // X^k x_i is x_i at i + k, negated past X^d = -1.
-        let multiplier = ring.scalar_multiplier(c);
-        let product = |x: &U256| match &multiplier {
-            Some(m) => m.apply(x),
-            None => ring.mul(x, c),
-        };
         let (low, high) = rhs.coeffs.split_at(d - k);
-        for (a, b) in self.coeffs[k..].iter_mut().zip(low) {
-            *a = ring.add(a, &product(b));
-        }
-        for (a, b) in self.coeffs[..k].iter_mut().zip(high) {
-            *a = ring.sub(a, &product(b));
+        match ring.scalar_multiplier(c) {
+            Some(m) => {
+                m.zip_apply(&mut self.coeffs[k..], low, |a, p| *a = ring.add(a, &p));
+                m.zip_apply(&mut self.coeffs[..k], high, |a, p| *a = ring.sub(a, &p));
+            }
+            None => {
+                for (a, b) in self.coeffs[k..].iter_mut().zip(low) {
+                    *a = ring.add(a, &ring.mul(b, c));
+                }
+                for (a, b) in self.coeffs[..k].iter_mut().zip(high) {
+                    *a = ring.sub(a, &ring.mul(b, c));
+                }
+            }
         }
         Ok(())
     }
@@ -216,7 +217,7 @@ impl Poly {
         let ring = &self.ring;
         debug_assert!(scalar < &ring.q);
         match ring.scalar_multiplier(scalar) {
-            Some(m) => self.coeffs.iter_mut().for_each(|a| *a = m.apply(a)),
+            Some(m) => m.apply_in_place(&mut self.coeffs),
             None => self
                 .coeffs
                 .iter_mut()
@@ -252,7 +253,10 @@ impl Poly {
             return Ok(self.neg());
         }
         if let Some(multiplier) = self.ring.scalar_multiplier(&scalar) {
-            return Ok(self.map(|x| multiplier.apply(x)));
+            return Ok(Self::from_canonical(
+                self.ring.clone(),
+                multiplier.apply_all(&self.coeffs),
+            ));
         }
         Ok(self.map(|x| self.ring.mul(x, &scalar)))
     }
