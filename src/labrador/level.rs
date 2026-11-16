@@ -12,7 +12,7 @@ use super::{
     plan::{self, Stats, signed_width},
     recursion::{Next, next_witness},
     ring::{Rq, Sparse},
-    sample::{ChallengeSet, Matrix, Projection, purpose},
+    sample::{ChallengeSet, Matrix, PROJECTION_BLOCK, Projection, purpose},
     statement::{Aggregate, Relation, all_pairs},
 };
 use crate::{
@@ -234,36 +234,80 @@ fn project(
         .map(|x| ring.center(*x).unsigned_abs())
         .max()
         .unwrap_or(0);
-    if max > i32::MAX as u64 {
-        return project_wide(ring, seed, level, witness);
+    let flush = (max <= i32::MAX as u64).then(|| (i32::MAX as u64 / max.max(1)) as usize);
+    let total: usize = witness.iter().map(|v| v.len()).sum();
+    let per_block = BLOCK_BUFFERS * PROJECTION_BLOCK;
+    let blocks = total.div_ceil(per_block);
+    // Block by block, each on its own reader, and the exact integer sums of the blocks.
+    let mut p = [0i128; 256];
+    for wave in (0..blocks).step_by(WAVE) {
+        let parts = Zeroizing::new(crate::par::try_map(WAVE.min(blocks - wave), |w| {
+            let block = wave + w;
+            let range = block_range(block, per_block, total);
+            let mut projection = Projection::at(seed, level, block * BLOCK_BUFFERS)?;
+            let coefficients = coefficients(witness, range);
+            match flush {
+                Some(flush) => project_lanes(ring, &mut projection, coefficients, flush),
+                None => project_block_wide(ring, &mut projection, coefficients),
+            }
+        })?);
+        for part in parts.iter() {
+            for (t, x) in p.iter_mut().zip(part) {
+                *t += *x;
+            }
+        }
     }
-    let flush = (i32::MAX as u64 / max.max(1)) as usize;
-    let mut projection = Projection::new(seed, level);
+    Ok(p)
+}
+
+/// Blocks of the projection stream processed at once, in parallel with `parallel`: also the
+/// most results held at a time.
+const WAVE: usize = 64;
+
+/// The coefficients `range` of the witness vectors put end to end, in order.
+fn coefficients(
+    witness: &[Zeroizing<Vec<u64>>],
+    range: core::ops::Range<usize>,
+) -> impl Iterator<Item = &u64> {
+    let mut start = 0;
+    witness.iter().flat_map(move |v| {
+        let (s, e) = (start, start + v.len());
+        start = e;
+        v[range.start.clamp(s, e) - s..range.end.clamp(s, e) - s].iter()
+    })
+}
+
+/// The projection of `coefficients` with the columns of `projection`, in i32 lanes added into
+/// the i128 sums every `flush` steps.
+fn project_lanes<'a>(
+    ring: &Rq,
+    projection: &mut Projection,
+    coefficients: impl Iterator<Item = &'a u64>,
+    flush: usize,
+) -> Result<[i128; 256], Error> {
     let mut p = [0i128; 256];
     let mut lanes = Zeroizing::new([0i32; 256]);
     let mut steps = 0;
     let mut column = [0u8; 64];
-    for v in witness {
-        for x in v.iter() {
-            // Every coefficient takes its column from the stream, also a zero one.
-            projection.column_bytes(&mut column)?;
-            let s = ring.center(*x) as i32;
-            if s == 0 {
-                continue;
+    for x in coefficients {
+        // Every coefficient takes its column from the stream, also a zero one.
+        projection.column_bytes(&mut column)?;
+        let s = ring.center(*x) as i32;
+        if s == 0 {
+            continue;
+        }
+        for (acc, b) in lanes.as_chunks_mut::<4>().0.iter_mut().zip(column) {
+            for (a, e) in acc.iter_mut().zip(DECODE[usize::from(b)]) {
+                *a += i32::from(e) * s;
             }
-            for (acc, b) in lanes.as_chunks_mut::<4>().0.iter_mut().zip(column) {
-                for (a, e) in acc.iter_mut().zip(DECODE[usize::from(b)]) {
-                    *a += i32::from(e) * s;
-                }
+        }
+        steps += 1;
+        if steps == flush {
+            for (t, a) in p.iter_mut().zip(lanes.iter_mut()) {
+                *t += i128::from(*a);
+                *a = 0;
             }
-            steps += 1;
-            if steps == flush {
-                for (t, a) in p.iter_mut().zip(lanes.iter_mut()) {
-                    *t += i128::from(*a);
-                    *a = 0;
-                }
-                steps = 0;
-            }
+            steps = 0;
         }
     }
     for (t, a) in p.iter_mut().zip(lanes.iter()) {
@@ -272,31 +316,41 @@ fn project(
     Ok(p)
 }
 
-/// [`project`] in i128 throughout, for witnesses with coefficients beyond $`2^{31}`$.
-fn project_wide(
+/// [`project_lanes`] in i128 throughout, for witnesses with coefficients beyond $`2^{31}`$.
+fn project_block_wide<'a>(
     ring: &Rq,
-    seed: &[u8; 32],
-    level: u32,
-    witness: &[Zeroizing<Vec<u64>>],
+    projection: &mut Projection,
+    coefficients: impl Iterator<Item = &'a u64>,
 ) -> Result<[i128; 256], Error> {
-    let mut projection = Projection::new(seed, level);
     let mut p = [0i128; 256];
     let mut column = [0i8; 256];
-    for v in witness {
-        for x in v.iter() {
-            projection.column(&mut column)?;
-            let s = i128::from(ring.center(*x));
-            if s != 0 {
-                for (acc, e) in p.iter_mut().zip(column) {
-                    *acc += i128::from(e) * s;
-                }
+    for x in coefficients {
+        projection.column(&mut column)?;
+        let s = i128::from(ring.center(*x));
+        if s != 0 {
+            for (acc, e) in p.iter_mut().zip(column) {
+                *acc += i128::from(e) * s;
             }
         }
     }
     Ok(p)
 }
 
-/// The most memory the prover spends on keeping the polynomials of [`for_each_projection_poly`]
+/// Test only: the projection in i128 throughout from one reader of the whole stream, the
+/// reference of [`project`].
+#[cfg(test)]
+fn project_wide(
+    ring: &Rq,
+    seed: &[u8; 32],
+    level: u32,
+    witness: &[Zeroizing<Vec<u64>>],
+) -> Result<[i128; 256], Error> {
+    let total = witness.iter().map(|v| v.len()).sum();
+    let mut projection = Projection::new(seed, level);
+    project_block_wide(ring, &mut projection, coefficients(witness, 0..total))
+}
+
+/// The most memory the prover spends on keeping the polynomials of [`projection_blocks`]
 /// from the lifted polynomials $`b''`$ to [`complete`], instead of streaming them again.
 const KEEP_BUDGET: usize = 64 << 20;
 
@@ -306,7 +360,7 @@ thread_local! {
     pub(crate) static STREAM_TWICE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// The polynomials of [`for_each_projection_poly`] for every `(i, x)`, in its order, kept by the
+/// The polynomials of [`projection_blocks`] for every `(i, x)`, in its order, kept by the
 /// prover for [`complete`]: in words of 32 bits when $`q<2^{32}`$, of 64 otherwise. They are
 /// public (the projection and $`\omega`$ are), and [`complete`] reads exactly the values a
 /// second stream would give.
@@ -335,54 +389,100 @@ impl Kept {
             Kept::Wide(Vec::with_capacity(count))
         })
     }
-    fn push(&mut self, polys: &[Vec<u64>]) {
+    /// Append the polynomials of the next indices, each index's side by side.
+    fn push(&mut self, polys: &[u64]) {
         match self {
-            Kept::Narrow(kept) => {
-                for poly in polys {
-                    kept.extend(poly.iter().map(|&c| c as u32));
-                }
-            }
-            Kept::Wide(kept) => {
-                for poly in polys {
-                    kept.extend_from_slice(poly);
-                }
-            }
+            Kept::Narrow(kept) => kept.extend(polys.iter().map(|&c| c as u32)),
+            Kept::Wide(kept) => kept.extend_from_slice(polys),
         }
     }
-    /// The polynomials pushed `index`-th, into `polys`.
-    fn read(&self, index: usize, polys: &mut [Vec<u64>]) {
-        let d = polys[0].len();
-        let start = index * polys.len() * d;
-        for (k, poly) in polys.iter_mut().enumerate() {
-            let at = start + k * d;
-            match self {
-                Kept::Narrow(kept) => {
-                    for (out, c) in poly.iter_mut().zip(&kept[at..at + d]) {
-                        *out = u64::from(*c);
-                    }
+    /// The polynomials of index `index`, side by side, into `polys`.
+    fn read(&self, index: usize, polys: &mut [u64]) {
+        let (at, len) = (index * polys.len(), polys.len());
+        match self {
+            Kept::Narrow(kept) => {
+                for (out, c) in polys.iter_mut().zip(&kept[at..at + len]) {
+                    *out = u64::from(*c);
                 }
-                Kept::Wide(kept) => poly.copy_from_slice(&kept[at..at + d]),
             }
+            Kept::Wide(kept) => polys.copy_from_slice(&kept[at..at + len]),
         }
     }
 }
 
-/// Stream the coefficient polynomials of the aggregated projection constraints (BS23 Fig. 2,
-/// $`\varphi''`$): for each witness vector $`i`$ and polynomial $`x`$, call `f(i, x, polys)`
-/// with `polys[k]` the polynomial $`x`$ of $`\sigma_{-1}(\sum_j\omega^{(k)}_j\pi^{(j)}_i)`$,
-/// $`k<\lambda`$. Nothing of size proportional to the witness is held.
-fn for_each_projection_poly(
+/// Buffers of the projection stream per block of [`projection_blocks`] and [`project`]: work
+/// enough per reader that setting one up costs little.
+const BLOCK_BUFFERS: usize = 4;
+
+/// The polynomials of a block of [`projection_blocks`]: for each polynomial index from `first`
+/// on, its $`\lambda`$ polynomials side by side.
+struct BlockPolys {
+    first: usize,
+    stride: usize,
+    data: Vec<u64>,
+}
+impl BlockPolys {
+    fn len(&self) -> usize {
+        self.data.len() / self.stride
+    }
+    /// Each polynomial index of the block with its polynomials.
+    fn iter(&self) -> impl Iterator<Item = (usize, &[u64])> {
+        let first = self.first;
+        self.data
+            .chunks_exact(self.stride)
+            .enumerate()
+            .map(move |(j, polys)| (first + j, polys))
+    }
+}
+
+/// Indices `per_block` at a time, the last block possibly short: the indices of block `block`.
+fn block_range(block: usize, per_block: usize, total: usize) -> core::ops::Range<usize> {
+    block * per_block..((block + 1) * per_block).min(total)
+}
+
+/// The coefficient polynomials of the aggregated projection constraints (BS23 Fig. 2,
+/// $`\varphi''`$): for each witness vector $`i`$ and polynomial $`x`$, `polys[k]` the
+/// polynomial $`x`$ of $`\sigma_{-1}(\sum_j\omega^{(k)}_j\pi^{(j)}_i)`$, $`k<\lambda`$, computed
+/// one block of the stream at a time, each on its own reader ([`Projection::at`]). `work` maps
+/// the `(i, x, polys)` of a block, in order, to a result and `absorb` takes the results in block
+/// order. The blocks of a wave run in parallel with `parallel`, and at most a wave of results is
+/// held, nothing of size proportional to the witness.
+fn projection_blocks<T: Send>(
     ring: &Rq,
     seed: &[u8; 32],
     level: u32,
     omega: &[Vec<u64>],
     shape: &Shape,
-    mut f: impl FnMut(usize, usize, &[Vec<u64>]) -> Result<(), Error>,
+    work: impl Fn(BlockPolys) -> Result<T, Error> + Sync,
+    mut absorb: impl FnMut(T) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    let d = ring.degree();
-    let q = ring.modulus() as i64;
-    // For each group of 4 rows and each byte, the sums of the 4 weighted entries for every k,
-    // side by side, so that one lookup reads the λ sums of a byte.
+    let table = projection_table(omega);
+    let per_block = BLOCK_BUFFERS * PROJECTION_BLOCK / ring.degree();
+    let total = shape.r * shape.n;
+    let blocks = total.div_ceil(per_block);
+    for wave in (0..blocks).step_by(WAVE) {
+        let results = crate::par::try_map(WAVE.min(blocks - wave), |w| {
+            let block = wave + w;
+            let mut projection = Projection::at(seed, level, block * BLOCK_BUFFERS)?;
+            let indices = block_range(block, per_block, total);
+            work(block_polys(
+                ring,
+                &table,
+                omega.len(),
+                &mut projection,
+                indices,
+            )?)
+        })?;
+        for result in results {
+            absorb(result)?;
+        }
+    }
+    Ok(())
+}
+
+/// For each group of 4 rows and each byte, the sums of the 4 weighted entries for every k,
+/// side by side, so that one lookup reads the λ sums of a byte.
+fn projection_table(omega: &[Vec<u64>]) -> Vec<i64> {
     let lambda = omega.len();
     let mut table = vec![0i64; 64 * 256 * lambda];
     for (k, w) in omega.iter().enumerate() {
@@ -396,29 +496,44 @@ fn for_each_projection_poly(
             }
         }
     }
-    let mut projection = Projection::new(seed, level);
-    let mut polys = vec![vec![0u64; d]; lambda];
+    table
+}
+
+/// The polynomials of [`projection_blocks`] for the polynomial indices `indices` $`=in+x`$,
+/// whose columns `projection` reads in order.
+fn block_polys(
+    ring: &Rq,
+    table: &[i64],
+    lambda: usize,
+    projection: &mut Projection,
+    indices: core::ops::Range<usize>,
+) -> Result<BlockPolys, Error> {
+    let d = ring.degree();
+    let q = ring.modulus() as i64;
+    let stride = lambda * d;
+    let mut data = vec![0u64; indices.len() * stride];
     let mut tmp = vec![0u64; d];
     let mut column = [0u8; 64];
     let mut sums = vec![0i64; lambda];
-    for i in 0..shape.r {
-        for x in 0..shape.n {
-            for c in 0..d {
-                projection.column_bytes(&mut column)?;
-                // 64 terms below 2^50 in magnitude for each k.
-                column_sums(&table, lambda, &column, &mut sums);
-                for (poly, s) in polys.iter_mut().zip(&sums) {
-                    poly[c] = s.rem_euclid(q) as u64;
-                }
+    for polys in data.chunks_exact_mut(stride) {
+        for c in 0..d {
+            projection.column_bytes(&mut column)?;
+            // 64 terms below 2^50 in magnitude for each k.
+            column_sums(table, lambda, &column, &mut sums);
+            for (poly, s) in polys.chunks_exact_mut(d).zip(&sums) {
+                poly[c] = s.rem_euclid(q) as u64;
             }
-            for poly in &mut polys {
-                ring.sigma_minus_one(poly, &mut tmp);
-                poly.copy_from_slice(&tmp);
-            }
-            f(i, x, &polys)?;
+        }
+        for poly in polys.chunks_exact_mut(d) {
+            ring.sigma_minus_one(poly, &mut tmp);
+            poly.copy_from_slice(&tmp);
         }
     }
-    Ok(())
+    Ok(BlockPolys {
+        first: indices.start,
+        stride,
+        data,
+    })
 }
 
 /// `sums[k]` $`=\sum_g`$ `table[(256g + column[g])λ + k]` for $`k<\lambda`$, the λ sums
@@ -468,7 +583,7 @@ fn gammas(ring: &Rq, beta: &[Vec<u64>], psi: &[Vec<u64>], count: usize) -> Vec<V
 }
 
 /// The projection of a level as [`complete`] needs it: its seed and $`\omega`$, and the
-/// polynomials of [`for_each_projection_poly`] if the prover kept them.
+/// polynomials of [`projection_blocks`] if the prover kept them.
 struct Projected<'a> {
     seed: &'a [u8; 32],
     level: u32,
@@ -490,33 +605,62 @@ fn complete(
 ) -> Result<(), Error> {
     let (d, k) = (ring.degree(), ring.hat_len());
     let beta_hat: Vec<_> = beta.iter().map(|b| ring.ntt(b)).collect();
-    let mut acc = vec![0u64; k];
-    let mut poly = vec![0u64; d];
-    let mut add = |i: usize, x: usize, polys: &[Vec<u64>]| -> Result<(), Error> {
+    let n = shape.n;
+    // The polynomial of sum_k beta_k phi''^(k) at one index, from its polynomials side by side.
+    let term = |polys: &[u64], acc: &mut [u64], hat: &mut [u64], out: &mut [u64]| {
         acc.fill(0);
-        for (p, b) in polys.iter().zip(&beta_hat) {
-            ring.mac(&mut acc, b, &ring.ntt(p));
+        for (p, b) in polys.chunks_exact(d).zip(&beta_hat) {
+            ring.ntt_into(p, hat);
+            ring.mac(acc, b, hat);
         }
-        ring.intt_into(&mut acc, &mut poly);
-        ring.add_assign(&mut agg.phi[i][x * d..(x + 1) * d], &poly);
+        ring.intt_into(acc, out);
+    };
+    // The terms of a block, from its first index on.
+    let mut add = |(first, terms): (usize, Vec<u64>)| -> Result<(), Error> {
+        for (j, poly) in terms.chunks_exact(d).enumerate() {
+            let (i, x) = ((first + j) / n, (first + j) % n);
+            ring.add_assign(&mut agg.phi[i][x * d..(x + 1) * d], poly);
+        }
         Ok(())
     };
     match projection.kept {
         Some(kept) => {
-            let mut polys = vec![vec![0u64; d]; projection.omega.len()];
-            for i in 0..shape.r {
-                for x in 0..shape.n {
-                    kept.read(i * shape.n + x, &mut polys);
-                    add(i, x, &polys)?;
+            // The blocks of the stream's order, from the kept polynomials.
+            let per_block = BLOCK_BUFFERS * PROJECTION_BLOCK / d;
+            let total = shape.r * n;
+            let blocks = total.div_ceil(per_block);
+            let stride = projection.omega.len() * d;
+            for wave in (0..blocks).step_by(WAVE) {
+                let results = crate::par::try_map(WAVE.min(blocks - wave), |w| {
+                    let indices = block_range(wave + w, per_block, total);
+                    let (mut acc, mut hat) = (vec![0u64; k], vec![0u64; k]);
+                    let mut polys = vec![0u64; stride];
+                    let mut terms = vec![0u64; indices.len() * d];
+                    for (index, out) in indices.clone().zip(terms.chunks_exact_mut(d)) {
+                        kept.read(index, &mut polys);
+                        term(&polys, &mut acc, &mut hat, out);
+                    }
+                    Ok((indices.start, terms))
+                })?;
+                for result in results {
+                    add(result)?;
                 }
             }
         }
-        None => for_each_projection_poly(
+        None => projection_blocks(
             ring,
             projection.seed,
             projection.level,
             projection.omega,
             shape,
+            |block| {
+                let (mut acc, mut hat) = (vec![0u64; k], vec![0u64; k]);
+                let mut terms = vec![0u64; block.len() * d];
+                for ((_, polys), out) in block.iter().zip(terms.chunks_exact_mut(d)) {
+                    term(polys, &mut acc, &mut hat, out);
+                }
+                Ok((block.first, terms))
+            },
             &mut add,
         )?,
     }
@@ -694,17 +838,39 @@ fn attempt_level<R: Relation>(
         omega.push(squeeze_residues(t, q, 256)?);
     }
     let values = Zeroizing::new(rel.constant_term_values(hats, pairs));
-    let mut accs = vec![vec![0u64; k]; ctx.lambda];
-    let mut kept = Kept::new(ring, ctx.lambda, &shape);
-    for_each_projection_poly(ring, &jl_seed, level, &omega, &shape, |i, x, polys| {
-        for (acc, poly) in accs.iter_mut().zip(polys) {
-            ring.mac(acc, &ring.ntt(poly), &hats[i][x * k..(x + 1) * k]);
-        }
-        if let Some(kept) = &mut kept {
-            kept.push(polys);
-        }
-        Ok(())
-    })?;
+    let lambda = ctx.lambda;
+    let mut accs = vec![vec![0u64; k]; lambda];
+    let mut kept = Kept::new(ring, lambda, &shape);
+    let (keep, n) = (kept.is_some(), shape.n);
+    // Each block's sums, added in block order: the residues of one sum in any order.
+    projection_blocks(
+        ring,
+        &jl_seed,
+        level,
+        &omega,
+        &shape,
+        |block| {
+            let mut part = vec![0u64; lambda * k];
+            let mut hat = vec![0u64; k];
+            for (index, polys) in block.iter() {
+                let (i, x) = (index / n, index % n);
+                for (acc, poly) in part.chunks_exact_mut(k).zip(polys.chunks_exact(d)) {
+                    ring.ntt_into(poly, &mut hat);
+                    ring.mac(acc, &hat, &hats[i][x * k..(x + 1) * k]);
+                }
+            }
+            Ok((part, keep.then_some(block)))
+        },
+        |(part, block)| {
+            for (acc, p) in accs.iter_mut().zip(part.chunks_exact(k)) {
+                ring.hat_add_assign(acc, p);
+            }
+            if let (Some(kept), Some(block)) = (&mut kept, block) {
+                kept.push(&block.data);
+            }
+            Ok(())
+        },
+    )?;
     let mut bpp = Vec::with_capacity(ctx.lambda);
     for (acc, psi_k) in accs.into_iter().zip(&psi) {
         let mut b = ring.intt(acc);

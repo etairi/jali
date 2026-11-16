@@ -1,6 +1,7 @@
 //! The projection's fast paths against the code they replaced: `project` (i32 lanes) against
 //! `project_wide` (i128 throughout) for small, flush-boundary and large coefficients, and the
-//! interleaved tables of `for_each_projection_poly` against one table per k.
+//! interleaved tables of `projection_blocks` against one table per k, each from one reader of
+//! the whole stream, also over several blocks and waves of blocks.
 use super::*;
 use crate::labrador::{
     params::{Layout, Shape},
@@ -41,18 +42,22 @@ fn lane_projections_equal_wide_ones() {
     for q in [65557u64, 4294967197, 281474976710597] {
         let ring = Rq::new(q, 64).unwrap();
         for bound in [1u64, 1 << 15, (q - 1) / 2] {
-            let w = witness(&mut rng, q, 3, 64 * 5, bound);
-            let seed = [rng.below(256) as u8; 32];
-            assert_eq!(
-                project(&ring, &seed, 2, &w).unwrap(),
-                project_wide(&ring, &seed, 2, &w).unwrap(),
-                "q {q} bound {bound}"
-            );
+            // Within one block, then over several blocks, a partial last one and two waves.
+            for len in [64 * 5, 64 * 1400 + 3] {
+                let w = witness(&mut rng, q, 3, len, bound);
+                let seed = [rng.below(256) as u8; 32];
+                assert_eq!(
+                    project(&ring, &seed, 2, &w).unwrap(),
+                    project_wide(&ring, &seed, 2, &w).unwrap(),
+                    "q {q} bound {bound} len {len}"
+                );
+            }
         }
     }
 }
 
-/// `for_each_projection_poly` with one table per k, as before the tables were interleaved.
+/// `projection_blocks` with one table per k and one reader of the whole stream, as before the
+/// tables were interleaved and the stream read in blocks.
 fn projection_polys_reference(
     ring: &Rq,
     seed: &[u8; 32],
@@ -117,23 +122,35 @@ fn interleaved_tables_give_the_same_polynomials() {
             let omega: Vec<Vec<u64>> = (0..lambda)
                 .map(|_| (0..256).map(|_| rng.below(q)).collect())
                 .collect();
-            let shape = Shape {
-                r: 2,
-                n: 3,
-                norm_sq: 0,
+            // One block, a partial last block, and more blocks than a wave.
+            let shapes: &[(usize, usize)] = if lambda == 5 {
+                &[(2, 3), (2, 97), (3, 1400)]
+            } else {
+                &[(2, 3)]
             };
-            let seed = [rng.below(256) as u8; 32];
-            let mut got = Vec::new();
-            for_each_projection_poly(&ring, &seed, 1, &omega, &shape, |_, _, polys| {
-                got.push(polys.to_vec());
-                Ok(())
-            })
-            .unwrap();
-            assert_eq!(
-                got,
-                projection_polys_reference(&ring, &seed, 1, &omega, &shape),
-                "q {q} lambda {lambda}"
-            );
+            for &(r, n) in shapes {
+                let shape = Shape { r, n, norm_sq: 0 };
+                let seed = [rng.below(256) as u8; 32];
+                let mut got: Vec<Vec<Vec<u64>>> = Vec::new();
+                projection_blocks(&ring, &seed, 1, &omega, &shape, Ok, |block| {
+                    for (index, polys) in block.iter() {
+                        assert_eq!(index, got.len());
+                        got.push(
+                            polys
+                                .chunks_exact(ring.degree())
+                                .map(|p| p.to_vec())
+                                .collect(),
+                        );
+                    }
+                    Ok(())
+                })
+                .unwrap();
+                assert_eq!(
+                    got,
+                    projection_polys_reference(&ring, &seed, 1, &omega, &shape),
+                    "q {q} lambda {lambda} r {r} n {n}"
+                );
+            }
         }
     }
 }

@@ -225,9 +225,7 @@ impl Rq {
             plan.inverse_mont(block);
             residues.push(block.to_vec());
         }
-        for (j, x) in out.iter_mut().enumerate() {
-            *x = self.crt.reconstruct(&residues, j);
-        }
+        self.crt.reconstruct_into(&residues, out);
     }
 
     /// [`Rq::intt_into`] into a new vector.
@@ -259,7 +257,6 @@ impl Rq {
     }
 
     /// `acc += a` in the transform domain.
-    #[cfg(test)]
     pub(crate) fn hat_add_assign(&self, acc: &mut [u64], a: &[u64]) {
         debug_assert!(acc.len() == a.len() && acc.len().is_multiple_of(self.hat_len()));
         for (block, (x, y)) in acc

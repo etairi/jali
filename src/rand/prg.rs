@@ -1,6 +1,6 @@
 use crate::Error;
 use aes::Aes256;
-use ctr::cipher::{KeyIvInit, StreamCipher};
+use ctr::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use shake::{ExtendableOutput, Shake128, Shake128Reader, Update, XofReader};
 use zeroize::Zeroize;
 
@@ -83,6 +83,13 @@ impl AesPrg {
             buffer: [0; AES_BUFFER],
             pos: AES_BUFFER,
         }
+    }
+    /// The stream of [`AesPrg::new`] from keystream byte `offset` on: what that stream returns
+    /// after reads of `offset` bytes in total, whatever their sizes.
+    pub(crate) fn at(seed: &[u8; 32], domain: u64, offset: u64) -> Result<Self, Error> {
+        let mut prg = Self::new(seed, domain);
+        prg.cipher.try_seek(offset).map_err(|_| Error::Randomness)?;
+        Ok(prg)
     }
 }
 impl ByteStream for AesPrg {
@@ -219,6 +226,34 @@ mod tests {
     use super::ByteStream;
     /// The keystream through reads of every size around the buffer's, against one long read and
     /// against the cipher itself: the same bytes in the same order.
+    #[test]
+    fn readers_at_an_offset_continue_the_stream() {
+        use super::AesPrg;
+        let seed = [11u8; 32];
+        let mut all = vec![0u8; 200_000];
+        AesPrg::new(&seed, 7).fill(&mut all).unwrap();
+        for offset in [
+            0usize,
+            1,
+            15,
+            16,
+            17,
+            255,
+            256,
+            4096,
+            65536,
+            3 * 65536 + 64,
+            150_001,
+        ] {
+            let mut prg = AesPrg::at(&seed, 7, offset as u64).unwrap();
+            let mut got = vec![0u8; all.len() - offset];
+            // Short and long reads, as the buffered reader serves them.
+            let (head, tail) = got.split_at_mut(7.min(all.len() - offset));
+            prg.fill(head).unwrap();
+            prg.fill(tail).unwrap();
+            assert_eq!(&got[..], &all[offset..], "offset {offset}");
+        }
+    }
     #[test]
     fn buffered_reads_return_the_keystream() {
         use ctr::cipher::{KeyIvInit, StreamCipher};

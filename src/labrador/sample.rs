@@ -40,6 +40,17 @@ impl Bytes {
         }
     }
 
+    /// The reader of `new(seed, domain, buffer)` after `blocks` whole buffers, for streams whose
+    /// reads fill each buffer exactly: the keystream from byte `blocks * buffer` on.
+    fn at(seed: &[u8; 32], domain: u64, buffer: usize, blocks: u64) -> Result<Self, Error> {
+        let offset = blocks.checked_mul(buffer as u64).ok_or(Error::Randomness)?;
+        Ok(Self {
+            prg: AesPrg::at(seed, domain, offset)?,
+            buf: vec![0; buffer],
+            pos: buffer,
+        })
+    }
+
     /// The next `n` bytes, `n` at most the buffer length. A read that does not fit in the rest
     /// of the buffer refills it and skips that rest, in the same way for every reader.
     fn take(&mut self, n: usize) -> Result<&[u8], Error> {
@@ -102,15 +113,32 @@ impl Uniform {
 /// The columns of the projection matrices: for each witness coefficient in order, the 256
 /// entries of its column, 2 bits each with the centred binomial decoding of FIPS 203 for
 /// $`\eta=1`$ (the entry is $`b_0-b_1`$, so $`P(0)=1/2`$ and $`P(\pm1)=1/4`$), from 64 bytes.
+/// The bytes of one buffer of the projection stream.
+const PROJECTION_BUFFER: usize = 64 * 1024;
+/// The columns of one buffer of the projection stream, a block of [`Projection::at`].
+pub(crate) const PROJECTION_BLOCK: usize = PROJECTION_BUFFER / 64;
+
 pub(crate) struct Projection {
     bytes: Bytes,
 }
 
 impl Projection {
+    /// Test only: the whole stream from its first column, the reference of [`Projection::at`].
+    #[cfg(test)]
     pub(crate) fn new(seed: &[u8; 32], level: u32) -> Self {
         Self {
-            bytes: Bytes::new(seed, domain(purpose::PROJECTION, level), 64 * 1024),
+            bytes: Bytes::new(seed, domain(purpose::PROJECTION, level), PROJECTION_BUFFER),
         }
+    }
+
+    /// The stream of [`Projection::new`] from column `block` [`PROJECTION_BLOCK`] on: each
+    /// column takes 64 bytes and the buffer holds a whole number of them, so column $`c`$ is at
+    /// keystream byte $`64c`$ and the block starts on a buffer of its own.
+    pub(crate) fn at(seed: &[u8; 32], level: u32, block: usize) -> Result<Self, Error> {
+        let domain = domain(purpose::PROJECTION, level);
+        Ok(Self {
+            bytes: Bytes::at(seed, domain, PROJECTION_BUFFER, block as u64)?,
+        })
     }
 
     /// The next column as its 64 bytes: entry $`4g+e`$ is in bits $`2e`$ and $`2e+1`$ of
