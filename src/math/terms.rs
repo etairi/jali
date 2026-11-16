@@ -6,7 +6,7 @@
 //! as transformed products and reduced together. Every step is exact modulo $`q`$, as
 //! [`Poly::mul`] and [`Poly::add`] are, so a sum computed this way is the canonical value that
 //! a fold of `add` and `mul` returns, in whatever order its terms come.
-use super::{Poly, PolyNtt, Ring, RnsProduct};
+use super::{Poly, PolyNtt, Ring, rns::LazySum};
 use crate::{Error, params::moduli::NADDS};
 use crypto_bigint::U256;
 use std::sync::Arc;
@@ -81,10 +81,11 @@ impl Term {
 }
 
 /// A sum of transformed products, reduced into a polynomial whenever [`NADDS`] products are
-/// pending, so that every reduction is exact (`Ring::with_modulus` sizes the RNS for that).
+/// pending, so that every reduction is exact (`Ring::with_modulus` sizes the RNS for that). The
+/// products are added as 128-bit integers ([`LazySum`]).
 pub(crate) struct Accumulator {
     ring: Arc<Ring>,
-    sum: Option<RnsProduct>,
+    sum: Option<LazySum>,
 }
 impl Accumulator {
     pub(crate) fn new(ring: &Arc<Ring>) -> Self {
@@ -96,10 +97,10 @@ impl Accumulator {
     /// Add $`ab`$ to the pending sum; when it already holds [`NADDS`] products, they are
     /// reduced and added to `spill` first.
     pub(crate) fn mac(&mut self, a: &PolyNtt, b: &PolyNtt, spill: &mut Poly) -> Result<(), Error> {
-        let sum = self.sum.get_or_insert_with(|| RnsProduct::zero(&self.ring));
+        let sum = self.sum.get_or_insert_with(|| LazySum::new(&self.ring));
         if sum.count() == NADDS {
             spill.add_assign(&sum.reduce()?)?;
-            *sum = RnsProduct::zero(&self.ring);
+            *sum = LazySum::new(&self.ring);
         }
         sum.mac(a, b)
     }

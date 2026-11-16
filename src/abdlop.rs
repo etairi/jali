@@ -9,7 +9,10 @@ use crate::{
     codec::{BitReader, BitWriter, fields},
     dcompress::Compression,
     linhc,
-    math::{I256, Poly, PolyMat, PolyVec, Ring, U256, int},
+    math::{
+        I256, Poly, PolyMat, PolyVec, Ring, U256, int,
+        terms::{Shape, Term},
+    },
     params::{CheckedParams, TboxParams, response_width},
     rand::{
         AesPrg, ByteStream, bounded, derive_key, domain, gaussian,
@@ -316,13 +319,31 @@ pub(crate) fn sub(a: &PolyVec, b: &PolyVec) -> Result<PolyVec, Error> {
             .collect::<Result<_, _>>()?,
     )
 }
+/// $`(a_ib)_i`$, the values of `a_i.mul(b)`: `b` classified once and, if general, transformed
+/// once, and each general $`a_i`$ transformed once.
 pub(crate) fn scale(a: &PolyVec, b: &Poly) -> Result<PolyVec, Error> {
+    if b.ring() != a.ring() {
+        return Err(Error::RingMismatch);
+    }
+    let term = Term::new(b);
+    let product = |x: &Poly| -> Result<Poly, Error> {
+        let mut out = Poly::zero(a.ring().clone());
+        match &term {
+            Term::Cheap(shape) => {
+                shape.add_product_to(&mut out, x)?;
+            }
+            Term::General(b_ntt) => match Shape::of(x) {
+                Shape::General => return x.to_ntt().product(b_ntt)?.reduce(),
+                cheap => {
+                    cheap.add_product_to(&mut out, b)?;
+                }
+            },
+        }
+        Ok(out)
+    };
     PolyVec::new(
         a.ring().clone(),
-        a.entries()
-            .iter()
-            .map(|a| a.mul(b))
-            .collect::<Result<_, _>>()?,
+        a.entries().iter().map(product).collect::<Result<_, _>>()?,
     )
 }
 pub(crate) fn part(a: &PolyVec, start: usize, end: usize) -> Result<PolyVec, Error> {
