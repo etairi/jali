@@ -386,9 +386,11 @@ fn combine(
     message: &PolyVec,
 ) -> Result<(PolyVec, PolyVec), Error> {
     let p = U256::from_u128(params.plaintext);
-    let u = abdlop::scale_scalar(&abdlop::add(&key.a.mul(x[0])?, x[1])?, &p)?;
+    // A x_0 and B x_0 with one transform of x_0.
+    let (ax, bx) = key.a.mul_pair(&key.b, x[0])?;
+    let u = abdlop::scale_scalar(&abdlop::add(&ax, x[1])?, &p)?;
     let v = abdlop::add(
-        &abdlop::scale_scalar(&abdlop::add(&key.b.mul(x[0])?, x[2])?, &p)?,
+        &abdlop::scale_scalar(&abdlop::add(&bx, x[2])?, &p)?,
         message,
     )?;
     Ok((u, v))

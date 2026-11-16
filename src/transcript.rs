@@ -167,7 +167,7 @@ impl Transcript {
         if count > 1 << 24 {
             return Err(Error::Dimension);
         }
-        let narrow = int::to_u64(modulus);
+        let narrow = int::to_u64(modulus).map(Barrett64::new);
         let mut out = Vec::with_capacity(count);
         // Squeezed in pieces of at most 64 KiB: consecutive squeezes continue one stream, so the
         // bytes are those of one squeeze of the whole length.
@@ -179,7 +179,7 @@ impl Transcript {
             self.squeeze(piece);
             for chunk in piece.chunks_exact(width) {
                 out.push(match narrow {
-                    Some(m) => U256::from_u64(reduce_le(chunk, m)),
+                    Some(m) => U256::from_u64(m.reduce_le(chunk)),
                     None => {
                         decode_uint(chunk, modulus).ok_or(Error::Parameter("decoding modulus"))?
                     }
@@ -268,13 +268,48 @@ pub(crate) fn ternary_entry(bytes: &[u8], i: usize) -> i8 {
 /// $`\mathrm{LE2IP}(buf)\bmod m`$ for a nonzero 64-bit $`m`$, by Horner's rule on the 64-bit
 /// words of `buf` (bytes $`8j`$ to $`8j+7`$ for word $`j`$, the last one possibly shorter) from
 /// the most significant one: the `DecodeUint` value for moduli below $`2^{64}`$.
+#[cfg(test)]
 pub(crate) fn reduce_le(buf: &[u8], m: u64) -> u64 {
-    let m = u128::from(m);
-    let mut r = 0u128;
-    for word in buf.chunks(8).rev() {
-        let mut le = [0u8; 8];
-        le[..word.len()].copy_from_slice(word);
-        r = ((r << 64) | u128::from(u64::from_le_bytes(le))) % m;
+    Barrett64::new(m).reduce_le(buf)
+}
+
+/// Remainders modulo a 64-bit $`m\ge2`$ of 128-bit values, by Barrett's reduction with
+/// $`\mu=\lfloor(2^{128}-1)/m\rfloor`$.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Barrett64 {
+    m: u128,
+    mu: u128,
+}
+impl Barrett64 {
+    pub(crate) fn new(m: u64) -> Self {
+        assert!(m >= 2, "Barrett64 needs a modulus of at least 2");
+        let m = u128::from(m);
+        Self {
+            m,
+            mu: u128::MAX / m,
+        }
     }
-    r as u64
+    /// $`x\bmod m`$. As $`\mu\le2^{128}/m`$, the estimate $`\hat q=\lfloor x\mu/2^{128}\rfloor`$
+    /// is at most $`\lfloor x/m\rfloor`$. From $`\mu>2^{128}/m-2`$ and $`x<2^{128}`$ it is
+    /// above $`x/m-3`$, so $`x-\hat qm<4m`$ and at most three subtractions follow.
+    #[inline]
+    pub(crate) fn reduce(&self, x: u128) -> u128 {
+        let q = crate::math::mod128::mul_wide(x, self.mu).1;
+        let mut r = x - q * self.m;
+        while r >= self.m {
+            r -= self.m;
+        }
+        r
+    }
+    /// $`\mathrm{LE2IP}(buf)\bmod m`$ by Horner's rule on the 64-bit words from the most
+    /// significant one ([`reduce_le`]).
+    pub(crate) fn reduce_le(&self, buf: &[u8]) -> u64 {
+        let mut r = 0u128;
+        for word in buf.chunks(8).rev() {
+            let mut le = [0u8; 8];
+            le[..word.len()].copy_from_slice(word);
+            r = self.reduce((r << 64) | u128::from(u64::from_le_bytes(le)));
+        }
+        r as u64
+    }
 }

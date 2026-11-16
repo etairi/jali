@@ -293,33 +293,74 @@ impl PolyMat {
     /// $`q`$, so each row is the exact dot product of the row with the vector. A matrix built
     /// from its nonzero entries visits those only.
     pub fn mul(&self, vector: &PolyVec) -> Result<PolyVec, Error> {
+        self.check_vector(vector)?;
+        let shapes: Zeroizing<Vec<Shape>> =
+            Zeroizing::new(vector.entries.iter().map(Shape::of).collect());
+        let transformed = transform_where(vector, &shapes, &self.meets_general());
+        self.rows_with(vector, &shapes, &transformed)
+    }
+    /// The products of `self` and `other` with one vector, which is classified and transformed
+    /// once for both: each product takes the arithmetic of [`PolyMat::mul`], so the results
+    /// are those of two calls.
+    pub(crate) fn mul_pair(
+        &self,
+        other: &Self,
+        vector: &PolyVec,
+    ) -> Result<(PolyVec, PolyVec), Error> {
+        self.check_vector(vector)?;
+        other.check_vector(vector)?;
+        let shapes: Zeroizing<Vec<Shape>> =
+            Zeroizing::new(vector.entries.iter().map(Shape::of).collect());
+        let meets: Vec<bool> = self
+            .meets_general()
+            .iter()
+            .zip(other.meets_general())
+            .map(|(a, b)| *a || b)
+            .collect();
+        let transformed = transform_where(vector, &shapes, &meets);
+        Ok((
+            self.rows_with(vector, &shapes, &transformed)?,
+            other.rows_with(vector, &shapes, &transformed)?,
+        ))
+    }
+    fn check_vector(&self, vector: &PolyVec) -> Result<(), Error> {
         if vector.len() != self.cols {
             return Err(Error::Dimension);
         }
         if vector.ring != self.ring {
             return Err(Error::RingMismatch);
         }
+        Ok(())
+    }
+    /// The terms of the listed entries, computed on the first product of any clone.
+    fn terms(&self) -> &[Term] {
         let entries = &*self.entries;
-        let terms = self.terms.get_or_init(|| {
+        self.terms.get_or_init(|| {
             (0..entries.len())
                 .map(|k| Term::new(entries.listed(k).1))
                 .collect()
-        });
-        let shapes: Zeroizing<Vec<Shape>> =
-            Zeroizing::new(vector.entries.iter().map(Shape::of).collect());
-        // Transform a vector entry only if it is general and meets a general entry.
-        let mut meets_general = vec![false; self.cols];
-        for (k, term) in terms.iter().enumerate() {
+        })
+    }
+    /// The columns with a general entry, where a general vector entry is worth transforming.
+    fn meets_general(&self) -> Vec<bool> {
+        let mut meets = vec![false; self.cols];
+        for (k, term) in self.terms().iter().enumerate() {
             if matches!(term, Term::General(_)) {
-                meets_general[entries.listed(k).0 % self.cols] = true;
+                meets[self.entries.listed(k).0 % self.cols] = true;
             }
         }
-        let transformed: Vec<Option<PolyNtt>> = (0..self.cols)
-            .map(|j| {
-                let needed = shapes[j] == Shape::General && meets_general[j];
-                needed.then(|| vector.entries[j].to_ntt())
-            })
-            .collect();
+        meets
+    }
+    /// The rows of the product with `vector`, whose entries have the shapes `shapes` and, where
+    /// `transformed` holds them, transforms.
+    fn rows_with(
+        &self,
+        vector: &PolyVec,
+        shapes: &[Shape],
+        transformed: &[Option<PolyNtt>],
+    ) -> Result<PolyVec, Error> {
+        let entries = &*self.entries;
+        let terms = self.terms();
         let compute_row = |i: usize| -> Result<Poly, Error> {
             let mut out = Poly::zero(self.ring.clone());
             let mut sum = Accumulator::new(&self.ring);
@@ -343,6 +384,13 @@ impl PolyMat {
         let out = crate::par::try_map(self.rows, compute_row)?;
         PolyVec::new(self.ring.clone(), out)
     }
+}
+
+/// The transforms of the general entries of `vector` in the columns that `needed` marks.
+fn transform_where(vector: &PolyVec, shapes: &[Shape], needed: &[bool]) -> Vec<Option<PolyNtt>> {
+    (0..vector.entries.len())
+        .map(|j| (shapes[j] == Shape::General && needed[j]).then(|| vector.entries[j].to_ntt()))
+        .collect()
 }
 
 /// An entry of a sparse map. An explicit zero entry holds no polynomial of its own: reads of
