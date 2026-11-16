@@ -85,35 +85,97 @@ impl PolyVec {
 }
 
 /// Dense row-major matrix with checked shape and ring membership.
+///
+/// A matrix built from its nonzero entries ([`PolyMat::sparse`]) holds only those: a selector
+/// or a block of a statement has mostly zero entries, each of which would otherwise hold a
+/// polynomial buffer of its own.
 #[derive(Clone)]
 pub struct PolyMat {
     ring: Arc<Ring>,
     rows: usize,
     cols: usize,
     /// The entries, which cannot change after construction: clones share them.
-    entries: Arc<Vec<Poly>>,
-    /// The entries classified and, if general, transformed, on the first product of any clone;
-    /// clones share it, also when they were made before it. It is never stale, since the
-    /// entries cannot change. Not part of the value: equality and `Debug` ignore it.
+    entries: Arc<Entries>,
+    /// The listed entries ([`Entries`]) classified and, if general, transformed, on the first
+    /// product of any clone; clones share it, also clones made before it. It is never stale,
+    /// since the entries cannot change. Not part of the value: equality and `Debug` ignore it.
     terms: Arc<OnceLock<Vec<Term>>>,
+}
+/// The entries of a [`PolyMat`].
+enum Entries {
+    /// Every entry, row-major. All of them are listed.
+    Dense(Vec<Poly>),
+    /// The listed entries with their row-major positions, increasing: the nonzero ones. Every
+    /// other entry is `zero`. The row-major entries are built on the first call of
+    /// [`PolyMat::entries`] only.
+    Sparse {
+        listed: Vec<(usize, Poly)>,
+        zero: Poly,
+        dense: OnceLock<Vec<Poly>>,
+    },
+}
+impl Entries {
+    /// The number of listed entries.
+    fn len(&self) -> usize {
+        match self {
+            Entries::Dense(entries) => entries.len(),
+            Entries::Sparse { listed, .. } => listed.len(),
+        }
+    }
+    /// Listed entry `k`: its row-major position and value.
+    #[inline]
+    fn listed(&self, k: usize) -> (usize, &Poly) {
+        match self {
+            Entries::Dense(entries) => (k, &entries[k]),
+            Entries::Sparse { listed, .. } => (listed[k].0, &listed[k].1),
+        }
+    }
+    /// The listed entries of the positions `range`, as indices of listed entries.
+    fn range(&self, range: core::ops::Range<usize>) -> core::ops::Range<usize> {
+        match self {
+            Entries::Dense(_) => range,
+            Entries::Sparse { listed, .. } => {
+                listed.partition_point(|(p, _)| *p < range.start)
+                    ..listed.partition_point(|(p, _)| *p < range.end)
+            }
+        }
+    }
+    /// The entry at a row-major position.
+    fn at(&self, position: usize) -> &Poly {
+        match self {
+            Entries::Dense(entries) => &entries[position],
+            Entries::Sparse { listed, zero, .. } => {
+                match listed.binary_search_by_key(&position, |(p, _)| *p) {
+                    Ok(k) => &listed[k].1,
+                    Err(_) => zero,
+                }
+            }
+        }
+    }
 }
 impl PartialEq for PolyMat {
     fn eq(&self, rhs: &Self) -> bool {
         self.ring == rhs.ring
             && self.rows == rhs.rows
             && self.cols == rhs.cols
-            && self.entries == rhs.entries
+            && match (&*self.entries, &*rhs.entries) {
+                (Entries::Dense(a), Entries::Dense(b)) => a == b,
+                (a, b) => (0..self.rows * self.cols).all(|p| a.at(p) == b.at(p)),
+            }
     }
 }
 impl Eq for PolyMat {}
 impl core::fmt::Debug for PolyMat {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("PolyMat")
-            .field("ring", &self.ring)
+        let mut out = f.debug_struct("PolyMat");
+        out.field("ring", &self.ring)
             .field("rows", &self.rows)
-            .field("cols", &self.cols)
-            .field("entries", &self.entries)
-            .finish()
+            .field("cols", &self.cols);
+        match &*self.entries {
+            Entries::Dense(entries) => out.field("entries", entries),
+            Entries::Sparse { listed, .. } => out.field("nonzero", listed),
+        };
+        out.finish()
     }
 }
 impl PolyMat {
@@ -134,7 +196,44 @@ impl PolyMat {
             ring,
             rows,
             cols,
-            entries: Arc::new(entries),
+            entries: Arc::new(Entries::Dense(entries)),
+            terms: Arc::new(OnceLock::new()),
+        })
+    }
+    /// The matrix with the entries `(row, column, value)`, at most one per position, and
+    /// zero entries elsewhere. Only the nonzero entries are held.
+    pub(crate) fn sparse(
+        ring: Arc<Ring>,
+        rows: usize,
+        cols: usize,
+        entries: Vec<(usize, usize, Poly)>,
+    ) -> Result<Self, Error> {
+        rows.checked_mul(cols).ok_or(Error::Dimension)?;
+        let mut listed = Vec::with_capacity(entries.len());
+        for (row, col, value) in entries {
+            if row >= rows || col >= cols {
+                return Err(Error::Index);
+            }
+            if value.ring() != &ring {
+                return Err(Error::RingMismatch);
+            }
+            listed.push((row * cols + col, value));
+        }
+        listed.sort_by_key(|(p, _)| *p);
+        if listed.windows(2).any(|w| w[0].0 == w[1].0) {
+            return Err(Error::Parameter("duplicate sparse entry"));
+        }
+        listed.retain(|(_, value)| !value.is_zero());
+        listed.shrink_to_fit();
+        Ok(Self {
+            entries: Arc::new(Entries::Sparse {
+                listed,
+                zero: Poly::zero(ring.clone()),
+                dense: OnceLock::new(),
+            }),
+            ring,
+            rows,
+            cols,
             terms: Arc::new(OnceLock::new()),
         })
     }
@@ -150,21 +249,38 @@ impl PolyMat {
     pub fn ring(&self) -> &Arc<Ring> {
         &self.ring
     }
-    /// Row-major entries.
+    /// Row-major entries. A matrix built from its nonzero entries builds them on the first
+    /// call, and keeps them.
     pub fn entries(&self) -> &[Poly] {
-        &self.entries
+        match &*self.entries {
+            Entries::Dense(entries) => entries,
+            Entries::Sparse {
+                listed,
+                zero,
+                dense,
+            } => dense.get_or_init(|| {
+                let mut out = vec![zero.clone(); self.rows * self.cols];
+                for (position, value) in listed {
+                    out[*position] = value.clone();
+                }
+                out
+            }),
+        }
     }
-    /// The number of entries that the entries' buffer has room for.
+    /// The number of entries that the entries' buffer has room for: the listed entries.
     #[cfg(test)]
     pub(crate) fn capacity(&self) -> usize {
-        self.entries.capacity()
+        match &*self.entries {
+            Entries::Dense(entries) => entries.capacity(),
+            Entries::Sparse { listed, .. } => listed.capacity(),
+        }
     }
     /// Checked entry access.
     pub fn get(&self, row: usize, col: usize) -> Result<&Poly, Error> {
         if row >= self.rows || col >= self.cols {
             return Err(Error::Index);
         }
-        Ok(&self.entries[row * self.cols + col])
+        Ok(self.entries.at(row * self.cols + col))
     }
     /// Matrix-vector multiplication with bounded RNS accumulation.
     ///
@@ -172,7 +288,8 @@ impl PolyMat {
     /// the vector once per product; zero entries are skipped, products with a scalar or
     /// monomial factor are taken in the coefficient domain, and each row sums its other
     /// products transformed, reducing once per [`NADDS`] products. Every step is exact modulo
-    /// $`q`$, so each row is the exact dot product of the row with the vector.
+    /// $`q`$, so each row is the exact dot product of the row with the vector. A matrix built
+    /// from its nonzero entries visits those only.
     pub fn mul(&self, vector: &PolyVec) -> Result<PolyVec, Error> {
         if vector.len() != self.cols {
             return Err(Error::Dimension);
@@ -180,29 +297,34 @@ impl PolyMat {
         if vector.ring != self.ring {
             return Err(Error::RingMismatch);
         }
-        let terms = self
-            .terms
-            .get_or_init(|| self.entries.iter().map(Term::new).collect());
+        let entries = &*self.entries;
+        let terms = self.terms.get_or_init(|| {
+            (0..entries.len())
+                .map(|k| Term::new(entries.listed(k).1))
+                .collect()
+        });
         let shapes: Zeroizing<Vec<Shape>> =
             Zeroizing::new(vector.entries.iter().map(Shape::of).collect());
         // Transform a vector entry only if it is general and meets a general entry.
+        let mut meets_general = vec![false; self.cols];
+        for (k, term) in terms.iter().enumerate() {
+            if matches!(term, Term::General(_)) {
+                meets_general[entries.listed(k).0 % self.cols] = true;
+            }
+        }
         let transformed: Vec<Option<PolyNtt>> = (0..self.cols)
             .map(|j| {
-                let needed = shapes[j] == Shape::General
-                    && (0..self.rows).any(|i| matches!(terms[i * self.cols + j], Term::General(_)));
+                let needed = shapes[j] == Shape::General && meets_general[j];
                 needed.then(|| vector.entries[j].to_ntt())
             })
             .collect();
         let compute_row = |i: usize| -> Result<Poly, Error> {
             let mut out = Poly::zero(self.ring.clone());
             let mut sum = Accumulator::new(&self.ring);
-            let row = i * self.cols..(i + 1) * self.cols;
-            for (j, (term, entry)) in terms[row.clone()]
-                .iter()
-                .zip(&self.entries[row])
-                .enumerate()
-            {
-                match (term, transformed[j].as_ref()) {
+            for k in entries.range(i * self.cols..(i + 1) * self.cols) {
+                let (position, entry) = entries.listed(k);
+                let j = position - i * self.cols;
+                match (&terms[k], transformed[j].as_ref()) {
                     (Term::Cheap(shape), _) => {
                         shape.add_product_to(&mut out, &vector.entries[j])?;
                     }
