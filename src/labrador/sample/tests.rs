@@ -107,3 +107,26 @@ fn only_degree_64_has_a_challenge_set() {
         assert!(ChallengeSet::for_degree(d).is_err());
     }
 }
+
+#[test]
+fn projection_blocks_start_where_the_stream_reaches_them() {
+    let seed = [5u8; 32];
+    let mut whole = Projection::new(&seed, 3);
+    let mut columns = Vec::new();
+    let mut column = [0u8; 64];
+    for _ in 0..5 * PROJECTION_BLOCK + 17 {
+        whole.column_bytes(&mut column).unwrap();
+        columns.push(column);
+    }
+    for block in [0usize, 1, 2, 5] {
+        let mut part = Projection::at(&seed, 3, block).unwrap();
+        for want in columns
+            .iter()
+            .skip(block * PROJECTION_BLOCK)
+            .take(PROJECTION_BLOCK + 17)
+        {
+            part.column_bytes(&mut column).unwrap();
+            assert_eq!(&column, want, "block {block}");
+        }
+    }
+}

@@ -218,35 +218,41 @@ impl SmallCrt {
     /// [`SmallCrt::reconstruct`] of every coefficient, with the constants of one to four
     /// primes in arrays.
     pub(crate) fn reconstruct_all(&self, residues: &[Vec<u64>]) -> Vec<U256> {
+        let mut out = vec![0; residues[0].len()];
+        self.reconstruct_into(residues, &mut out);
+        out.into_iter().map(U256::from_u64).collect()
+    }
+    /// [`SmallCrt::reconstruct`] of the first `out.len()` coefficients, into `out`.
+    pub(crate) fn reconstruct_into(&self, residues: &[Vec<u64>], out: &mut [u64]) {
         match self.garner.primes.len() {
-            1 => self.reconstruct_fixed::<1>(residues),
-            2 => self.reconstruct_fixed::<2>(residues),
-            3 => self.reconstruct_fixed::<3>(residues),
-            4 => self.reconstruct_fixed::<4>(residues),
-            _ => (0..residues[0].len())
-                .map(|j| U256::from_u64(self.reconstruct(residues, j)))
-                .collect(),
+            1 => self.reconstruct_fixed::<1>(residues, out),
+            2 => self.reconstruct_fixed::<2>(residues, out),
+            3 => self.reconstruct_fixed::<3>(residues, out),
+            4 => self.reconstruct_fixed::<4>(residues, out),
+            _ => {
+                for (j, x) in out.iter_mut().enumerate() {
+                    *x = self.reconstruct(residues, j);
+                }
+            }
         }
     }
-    fn reconstruct_fixed<const K: usize>(&self, residues: &[Vec<u64>]) -> Vec<U256> {
+    fn reconstruct_fixed<const K: usize>(&self, residues: &[Vec<u64>], out: &mut [u64]) {
         let garner = self.garner.fixed::<K>();
         let columns = columns::<K>(residues);
         let prefixes: [(u64, u64); K] = core::array::from_fn(|i| self.prefixes_q[i]);
         let q = self.q;
-        (0..columns[0].len())
-            .map(|j| {
-                let (digits, negative) = garner.digits(&columns, j);
-                let mut x = 0;
-                for (v, (w, w_shoup)) in digits.iter().zip(&prefixes) {
-                    x = add_mod(x, shoup_mul(*v, *w, *w_shoup, q), q);
-                }
-                U256::from_u64(if negative {
-                    sub_mod(x, self.product_q, q)
-                } else {
-                    x
-                })
-            })
-            .collect()
+        for (j, out) in out.iter_mut().enumerate() {
+            let (digits, negative) = garner.digits(&columns, j);
+            let mut x = 0;
+            for (v, (w, w_shoup)) in digits.iter().zip(&prefixes) {
+                x = add_mod(x, shoup_mul(*v, *w, *w_shoup, q), q);
+            }
+            *out = if negative {
+                sub_mod(x, self.product_q, q)
+            } else {
+                x
+            };
+        }
     }
     /// The canonical representative modulo $`q`$ of the centred integer whose residues modulo
     /// the primes are `residues[i][j]`, each in $`[0,p_i)`$.
