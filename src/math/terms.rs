@@ -111,3 +111,6 @@ impl Accumulator {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

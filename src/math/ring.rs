@@ -292,22 +292,28 @@ impl ScalarMul {
                 for (o, x) in out.iter_mut().zip(xs) {
                     let t = shoup_mul(int::low_u64(x), w, w_shoup, q);
                     let a = int::low_u64(o);
-                    *o = U256::from_u64(if SUBTRACT {
-                        sub_mod(a, t, q)
-                    } else {
-                        add_mod(a, t, q)
-                    });
+                    int::set_low_u64(
+                        o,
+                        if SUBTRACT {
+                            sub_mod(a, t, q)
+                        } else {
+                            add_mod(a, t, q)
+                        },
+                    );
                 }
             }
             ScalarMul::Wide { w, w_shoup, q } => {
                 for (o, x) in out.iter_mut().zip(xs) {
                     let t = shoup_mul128(int::low_u128(x), w, w_shoup, q);
                     let a = int::low_u128(o);
-                    *o = U256::from_u128(if SUBTRACT {
-                        sub_mod128(a, t, q)
-                    } else {
-                        add_mod128(a, t, q)
-                    });
+                    int::set_low_u128(
+                        o,
+                        if SUBTRACT {
+                            sub_mod128(a, t, q)
+                        } else {
+                            add_mod128(a, t, q)
+                        },
+                    );
                 }
             }
         }
@@ -398,6 +404,8 @@ pub struct Ring {
     pub(crate) reducers: Vec<WordReducer>,
     /// Number of 64-bit words that canonical values can occupy.
     pub(crate) words: usize,
+    /// The same in limbs of `crypto-bigint` (64 or 32 bits): the limbs that wipes must clear.
+    pub(crate) limbs: usize,
     pub(crate) d: usize,
     pub(crate) plans: Vec<NttPlan>,
     /// The selected primes as divisors.
@@ -501,6 +509,9 @@ impl Ring {
             wide,
             reducers: primes.iter().map(|p| WordReducer::new(*p)).collect(),
             words: int::bits(&(q.wrapping_sub(&U256::ONE))).div_ceil(64).max(1) as usize,
+            limbs: int::bits(&(q.wrapping_sub(&U256::ONE)))
+                .div_ceil(crypto_bigint::Word::BITS)
+                .max(1) as usize,
             d,
             plans,
             divisors,

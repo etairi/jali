@@ -1,6 +1,6 @@
 //! Checked integer operations for norms and modular arithmetic.
 use crate::Error;
-use crypto_bigint::{CheckedAdd, Limb, NonZero, U64, U128, U256, Uint};
+use crypto_bigint::{CheckedAdd, Limb, NonZero, U64, U128, U256, Uint, Word};
 
 /// Reduce to $`(-q/2,q/2]`$. The modulus must be positive.
 pub fn center(x: i128, q: i128) -> Result<i128, Error> {
@@ -90,6 +90,33 @@ pub(crate) fn low_u64<const L: usize>(x: &Uint<L>) -> u64 {
 #[inline]
 pub(crate) fn low_u128<const L: usize>(x: &Uint<L>) -> u128 {
     u128::from(x.resize::<{ U128::LIMBS }>())
+}
+
+/// Overwrite the low 64 bits of a value whose higher bits are zero, as those of a canonical
+/// value below $`q\le2^{64}`$ are: the higher limbs are left as they are, unwritten.
+#[inline(always)]
+pub(crate) fn set_low_u64(x: &mut U256, v: u64) {
+    let words = x.as_mut_words();
+    for (i, w) in words
+        .iter_mut()
+        .take((64 / Word::BITS) as usize)
+        .enumerate()
+    {
+        *w = (v >> (i as u32 * Word::BITS)) as Word;
+    }
+}
+
+/// Overwrite the low 128 bits of a value whose higher bits are zero (see [`set_low_u64`]).
+#[inline(always)]
+pub(crate) fn set_low_u128(x: &mut U256, v: u128) {
+    let words = x.as_mut_words();
+    for (i, w) in words
+        .iter_mut()
+        .take((128 / Word::BITS) as usize)
+        .enumerate()
+    {
+        *w = (v >> (i as u32 * Word::BITS)) as Word;
+    }
 }
 
 /// The value as `u64`, if it fits.
