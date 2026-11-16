@@ -150,6 +150,7 @@ impl NttPlan {
         })
     }
     /// The transform modulus.
+    #[inline]
     pub fn modulus(&self) -> u64 {
         self.p
     }

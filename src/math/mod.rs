@@ -1,4 +1,5 @@
 //! Exact arithmetic in $`\mathbb Z_q[X]/(X^d+1)`$.
+mod constant;
 mod containers;
 pub mod int;
 pub mod iso;
@@ -9,6 +10,7 @@ mod ring;
 mod rns;
 pub(crate) mod terms;
 
+pub(crate) use constant::ConstantSum;
 pub use containers::{PolyMat, PolyVec, SparsePolyMat, SparsePolyVec};
 /// The 256-bit integer types of the coefficient and modulus API, from `crypto-bigint`.
 pub use crypto_bigint::{I256, U256};

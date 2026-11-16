@@ -81,22 +81,26 @@ pub fn is_prime_u256(n: &U256) -> bool {
 // other 32-bit targets such as i686 (its `cpubits!` rule). The helpers below hold for both.
 
 /// The low 64 bits.
+#[inline]
 pub(crate) fn low_u64<const L: usize>(x: &Uint<L>) -> u64 {
     u64::from(x.resize::<{ U64::LIMBS }>())
 }
 
 /// The low 128 bits.
+#[inline]
 pub(crate) fn low_u128<const L: usize>(x: &Uint<L>) -> u128 {
     u128::from(x.resize::<{ U128::LIMBS }>())
 }
 
 /// The value as `u64`, if it fits.
+#[inline]
 pub(crate) fn to_u64(x: &U256) -> Option<u64> {
     let high = &x.as_words()[U64::LIMBS..];
     high.iter().all(|w| *w == 0).then(|| low_u64(x))
 }
 
 /// The value as `u128`, if it fits.
+#[inline]
 pub(crate) fn to_u128(x: &U256) -> Option<u128> {
     let high = &x.as_words()[U128::LIMBS..];
     high.iter().all(|w| *w == 0).then(|| low_u128(x))

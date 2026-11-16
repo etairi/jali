@@ -10,13 +10,17 @@ use crate::{
     abdlop::{self, Abdlop, Caller, Commitment, Opening, OpeningProof},
     codec::{BitWriter, CodeWriter, SegmentWriter, Segments, fields},
     linhc,
-    math::{Poly, PolyVec, Ring, SparsePolyMat, SparsePolyVec, U256, int, terms::Shape},
+    math::{
+        ConstantSum, Poly, PolyVec, Ring, SparsePolyMat, SparsePolyVec, U256, int, terms::Shape,
+    },
     rand::take_seed,
     transcript::{Protocol, Transcript},
 };
 use std::{collections::BTreeMap, sync::Arc};
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+mod constant_tests;
 #[cfg(test)]
 pub(crate) mod encoding_tests;
 #[cfg(test)]
@@ -485,6 +489,18 @@ impl QuadEq {
             .bilinear(witness, witness)?
             .add(&self.r1.dot(witness)?)?
             .add(&self.r0)
+    }
+    /// The constant coefficient of [`QuadEq::evaluate`], exactly, with the same refusals:
+    /// each product contributes only its constant coefficient, a dot product of length
+    /// $`d`$, so no product by a witness polynomial is computed in full (see
+    /// `SparsePolyMat::bilinear_constant`).
+    pub(crate) fn evaluate_constant(&self, witness: &PolyVec) -> Result<U256, Error> {
+        self.check(witness.ring(), witness.len())?;
+        let mut sum = ConstantSum::new(self.r0.ring());
+        self.r2.bilinear_constant(witness, &mut sum)?;
+        self.r1.dot_constant(witness, &mut sum)?;
+        sum.add(&self.r0.coefficients()[0]);
+        Ok(sum.finish())
     }
     /// Canonical, dimension-bound encoding for statement hashing.
     ///
