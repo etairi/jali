@@ -146,7 +146,16 @@ fn forge(
         };
         let empty = PolyVec::zero(ring.clone(), 0);
         let (ze, zd) = if exact { (z, empty) } else { (empty, z) };
-        let evals = projection_equations(&extended, &forms, &matrices, &ze, &zd).unwrap();
+        let evals = ProjectionRows::new(
+            &extended,
+            &forms.evals,
+            [
+                (true, &forms.exact[..], &forms.sign_e, forms.mask_e, &ze),
+                (false, &forms.approx[..], &forms.sign_d, forms.mask_d, &zd),
+            ],
+            &matrices,
+        )
+        .unwrap();
         transcript.absorb(&range_message(scheme, &ze, &zd).unwrap());
         let mut proof_seed = Zeroizing::new([0u8; 32]);
         random.fill(&mut *proof_seed).unwrap();
@@ -154,7 +163,7 @@ fn forge(
             &extended,
             &commitment,
             &full_opening,
-            &forms.eqs,
+            std::borrow::Cow::Borrowed(&forms.eqs[..]),
             &evals,
             transcript,
             &proof_seed,
