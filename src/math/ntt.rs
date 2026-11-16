@@ -48,6 +48,14 @@ pub(crate) fn shoup_mul(x: u64, w: u64, w_shoup: u64, p: u64) -> u64 {
     if r >= p { r - p } else { r }
 }
 
+/// [`shoup_mul`] without its final subtraction: a value in $`[0,2p)`$ congruent to $`xw`$, for
+/// any $`x<2^{64}`$ (the bound of `shoup_mul`'s proof before the subtraction).
+#[inline(always)]
+pub(crate) fn shoup_lazy(x: u64, w: u64, w_shoup: u64, p: u64) -> u64 {
+    let k = ((u128::from(x) * u128::from(w_shoup)) >> 64) as u64;
+    x.wrapping_mul(w).wrapping_sub(k.wrapping_mul(p))
+}
+
 /// $`(a+b)\bmod p`$ for $`a,b<p<2^{63}`$.
 #[inline(always)]
 pub(crate) fn add_mod(a: u64, b: u64, p: u64) -> u64 {
@@ -76,9 +84,17 @@ pub struct NttPlan {
     /// $`\psi^i`$ and $`\psi^{-i}d^{-1}`$: the twist and untwist of the public transforms.
     twist: Vec<(u64, u64)>,
     untwist: Vec<(u64, u64)>,
-    /// $`\psi^iR`$ and $`\psi^{-i}d^{-1}R^{-1}`$ with $`R=2^{64}`$: the Montgomery-form twists.
-    twist_mont: Vec<(u64, u64)>,
-    untwist_mont: Vec<(u64, u64)>,
+    /// The merged negacyclic transforms of the Montgomery path, with Shoup constants:
+    /// $`\zeta_k=\psi^{\mathrm{brv}(k)}`$ for $`1\le k<d`$ (index 0 unused), the twiddle of the
+    /// $`k`$-th butterfly group in Cooley-Tukey order, and $`\zeta_k^{-1}`$.
+    zetas: Vec<(u64, u64)>,
+    inv_zetas: Vec<(u64, u64)>,
+    /// $`R=2^{64}\bmod p`$ and $`\zeta_1R`$: the first forward stage puts the factor $`R`$ in.
+    r: (u64, u64),
+    first: (u64, u64),
+    /// $`c=d^{-1}R^{-1}`$ and $`\zeta_1^{-1}c`$: the last inverse stage takes $`dR`$ out.
+    scale: (u64, u64),
+    last: (u64, u64),
     /// The bit-reversal permutation of $`[0,d)`$.
     bit_reverse: Vec<u32>,
 }
@@ -126,18 +142,25 @@ impl NttPlan {
         };
         let mut twist = Vec::with_capacity(d);
         let mut untwist = Vec::with_capacity(d);
-        let mut twist_mont = Vec::with_capacity(d);
-        let mut untwist_mont = Vec::with_capacity(d);
         let (mut t, mut u) = (1u64, inv_d);
         for _ in 0..d {
             twist.push(pair(t));
             untwist.push(pair(u));
-            twist_mont.push(pair(mul_mod(t, r, p)));
-            untwist_mont.push(pair(mul_mod(u, r_inv, p)));
             t = mul_mod(t, psi, p);
             u = mul_mod(u, inv_psi, p);
         }
         let bits = d.trailing_zeros();
+        let bit_reverse: Vec<u32> = (0..d as u32)
+            .map(|i| i.reverse_bits() >> (32 - bits))
+            .collect();
+        let mut zetas = vec![(0, 0); d];
+        let mut inv_zetas = vec![(0, 0); d];
+        for k in 1..d {
+            let z = pow_mod(psi, u64::from(bit_reverse[k]), p);
+            zetas[k] = pair(z);
+            inv_zetas[k] = pair(pow_mod(z, p - 2, p));
+        }
+        let c = mul_mod(inv_d, r_inv, p);
         Ok(Self {
             p,
             d,
@@ -146,11 +169,13 @@ impl NttPlan {
             inverse_twiddles: stages(pow_mod(root, p - 2, p)),
             twist,
             untwist,
-            twist_mont,
-            untwist_mont,
-            bit_reverse: (0..d as u32)
-                .map(|i| i.reverse_bits() >> (32 - bits))
-                .collect(),
+            r: pair(r),
+            first: pair(mul_mod(zetas[1].0, r, p)),
+            scale: pair(c),
+            last: pair(mul_mod(inv_zetas[1].0, c, p)),
+            zetas,
+            inv_zetas,
+            bit_reverse,
         })
     }
     /// The plan of [`NttPlan::new`], built once per process for each $`(p,d,\psi)`$ and shared.
@@ -242,19 +267,92 @@ impl NttPlan {
         self.scale(a, &self.untwist);
         Ok(())
     }
-    /// [`NttPlan::forward`] times $`R=2^{64}`$ (the Montgomery form), for `d` residues in
-    /// $`[0,p)`$.
+    /// The forward transform of the crate's RNS products: evaluations at the roots of
+    /// $`X^d+1`$, times $`R=2^{64}`$ (the Montgomery form), in the order of the merged
+    /// negacyclic Cooley-Tukey transform (bit-reversed). Only [`NttPlan::inverse_mont`] and
+    /// pointwise operations read the values, so their order is internal. For `d` residues in
+    /// $`[0,p)`$, returned in $`[0,p)`$.
+    ///
+    /// The stage of half-length `len` splits each factor $`X^{2len}-\zeta^2`$ into
+    /// $`(X^{len}-\zeta)(X^{len}+\zeta)`$ by the butterflies $`(x,y)\mapsto(x+\zeta y,x-\zeta y)`$,
+    /// with $`\zeta=\zeta_k`$ for the $`k`$-th group, starting from $`X^d+1=X^d-\psi^d`$. The
+    /// first stage multiplies both inputs, by $`R`$ and $`\zeta_1R`$, so every output carries
+    /// $`R`$ by linearity. Values stay below $`4p<2^{64}`$ between stages (Harvey's lazy
+    /// butterflies: the upper input is reduced below $`2p`$, lazy Shoup products are below $`2p`$).
     pub(crate) fn forward_mont(&self, a: &mut [u64]) {
         debug_assert!(a.len() == self.d && a.iter().all(|x| *x < self.p));
-        self.scale(a, &self.twist_mont);
-        self.cyclic(a, &self.forward_twiddles);
+        let (p, d) = (self.p, self.d);
+        let two_p = 2 * p;
+        let half = d / 2;
+        let (r, r_shoup) = self.r;
+        let (z, z_shoup) = self.first;
+        let (low, high) = a.split_at_mut(half);
+        for (x, y) in low.iter_mut().zip(high.iter_mut()) {
+            let u = shoup_lazy(*x, r, r_shoup, p);
+            let t = shoup_lazy(*y, z, z_shoup, p);
+            *x = u + t;
+            *y = u + two_p - t;
+        }
+        let mut len = half / 2;
+        let mut k = 2;
+        while len >= 1 {
+            for block in a.chunks_exact_mut(2 * len) {
+                let (w, w_shoup) = self.zetas[k];
+                k += 1;
+                let (low, high) = block.split_at_mut(len);
+                for (x, y) in low.iter_mut().zip(high.iter_mut()) {
+                    let u = if *x >= two_p { *x - two_p } else { *x };
+                    let t = shoup_lazy(*y, w, w_shoup, p);
+                    *x = u + t;
+                    *y = u + two_p - t;
+                }
+            }
+            len /= 2;
+        }
+        for x in a.iter_mut() {
+            let mut v = *x;
+            if v >= two_p {
+                v -= two_p;
+            }
+            if v >= p {
+                v -= p;
+            }
+            *x = v;
+        }
     }
-    /// [`NttPlan::inverse`] of values in Montgomery form, which removes the factor $`R`$, for
-    /// `d` residues in $`[0,p)`$.
+    /// The inverse of [`NttPlan::forward_mont`] that also removes the factor $`R`$: the
+    /// Gentleman-Sande butterflies $`(x,y)\mapsto(x+y,(x-y)\zeta_k^{-1})`$ undo the stages in
+    /// reverse order, each group with the inverse of its forward twiddle, which leaves the factor
+    /// $`d`$, and the last stage multiplies by $`c=d^{-1}R^{-1}`$. For `d` residues in $`[0,p)`$,
+    /// returned in $`[0,p)`$. Values stay below $`2p`$ between stages.
     pub(crate) fn inverse_mont(&self, a: &mut [u64]) {
         debug_assert!(a.len() == self.d && a.iter().all(|x| *x < self.p));
-        self.cyclic(a, &self.inverse_twiddles);
-        self.scale(a, &self.untwist_mont);
+        let (p, d) = (self.p, self.d);
+        let two_p = 2 * p;
+        let half = d / 2;
+        let mut len = 1;
+        while len < half {
+            let k0 = d / (2 * len);
+            for (g, block) in a.chunks_exact_mut(2 * len).enumerate() {
+                let (w, w_shoup) = self.inv_zetas[k0 + g];
+                let (low, high) = block.split_at_mut(len);
+                for (x, y) in low.iter_mut().zip(high.iter_mut()) {
+                    let (u, v) = (*x, *y);
+                    let s = u + v;
+                    *x = if s >= two_p { s - two_p } else { s };
+                    *y = shoup_lazy(u + two_p - v, w, w_shoup, p);
+                }
+            }
+            len *= 2;
+        }
+        let (c, c_shoup) = self.scale;
+        let (z, z_shoup) = self.last;
+        let (low, high) = a.split_at_mut(half);
+        for (x, y) in low.iter_mut().zip(high.iter_mut()) {
+            let (u, v) = (*x, *y);
+            *x = shoup_mul(u + v, c, c_shoup, p);
+            *y = shoup_mul(u + two_p - v, z, z_shoup, p);
+        }
     }
     /// The Montgomery product $`abR^{-1}\bmod p`$ of $`a,b<p`$, in $`[0,p)`$.
     ///
