@@ -1,5 +1,6 @@
 use super::{
     Poly, PolyNtt, Ring,
+    constant::ConstantSum,
     terms::{Accumulator, Shape, Term},
 };
 use crate::{Error, params::moduli::NADDS};
@@ -445,10 +446,69 @@ impl SparsePolyMat {
         let ring = &self.ring;
         // With x = y (an evaluation), x_r shares the transforms of y.
         let same = std::ptr::eq(x, y);
-        let mut y_shapes: Zeroizing<Vec<Option<Shape>>> = Zeroizing::new(vec![None; y.len()]);
-        let mut y_ntt: Vec<Option<PolyNtt>> = vec![None; y.len()];
         let mut out = Poly::zero(ring.clone());
         let mut outer = Accumulator::new(ring);
+        self.for_each_row_sum(y, |r, inner, y_ntt| {
+            // The row is complete: out += x_r (sum_c R_rc y_c).
+            let xr = &x.entries[r];
+            match (Shape::of(xr), Shape::of(inner)) {
+                (Shape::Zero, _) | (_, Shape::Zero) => {}
+                (Shape::General, Shape::General) => {
+                    let own;
+                    let a = if same {
+                        &*y_ntt[r].get_or_insert_with(|| xr.to_ntt())
+                    } else {
+                        own = xr.to_ntt();
+                        &own
+                    };
+                    outer.mac(a, &inner.to_ntt(), &mut out)?;
+                }
+                (Shape::General, cheap) => {
+                    cheap.add_product_to(&mut out, xr)?;
+                }
+                (cheap, _) => {
+                    cheap.add_product_to(&mut out, inner)?;
+                }
+            }
+            Ok(())
+        })?;
+        outer.finish_into(&mut out)?;
+        Ok(out)
+    }
+    /// The constant coefficient of [`SparsePolyMat::bilinear`] with $`x=y`$, exactly: each row's
+    /// inner sum as `bilinear` computes it, then only the constant coefficient of its product by
+    /// $`y_r`$, a dot product, instead of the product.
+    pub(crate) fn bilinear_constant(
+        &self,
+        y: &PolyVec,
+        sum: &mut ConstantSum<'_>,
+    ) -> Result<(), Error> {
+        if y.len() != self.dim {
+            return Err(Error::Dimension);
+        }
+        if y.ring != self.ring {
+            return Err(Error::RingMismatch);
+        }
+        self.for_each_row_sum(y, |r, inner, _| {
+            let yr = &y.entries[r];
+            if !yr.is_zero() && !inner.is_zero() {
+                sum.add_product(yr, inner);
+            }
+            Ok(())
+        })
+    }
+    /// For each row $`r`$ that has an entry, in order, `f(r, inner, y_ntt)` with
+    /// $`\mathit{inner}=\sum_cR_{rc}y_c`$: zero entries skipped, scalar and monomial products in
+    /// the coefficient domain, the others as transformed products, each $`y_c`$ transformed at
+    /// most once into `y_ntt`, which `f` may fill and use as well.
+    fn for_each_row_sum(
+        &self,
+        y: &PolyVec,
+        mut f: impl FnMut(usize, &Poly, &mut [Option<PolyNtt>]) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let ring = &self.ring;
+        let mut y_shapes: Zeroizing<Vec<Option<Shape>>> = Zeroizing::new(vec![None; y.len()]);
+        let mut y_ntt: Vec<Option<PolyNtt>> = vec![None; y.len()];
         let mut inner = Poly::zero(ring.clone());
         let mut inner_sum = Accumulator::new(ring);
         let mut entries = self.entries.iter().peekable();
@@ -479,32 +539,11 @@ impl SparsePolyMat {
             {
                 continue;
             }
-            // The row is complete: out += x_r (sum_c R_rc y_c).
             inner_sum.finish_into(&mut inner)?;
-            let xr = &x.entries[r];
-            match (Shape::of(xr), Shape::of(&inner)) {
-                (Shape::Zero, _) | (_, Shape::Zero) => {}
-                (Shape::General, Shape::General) => {
-                    let own;
-                    let a = if same {
-                        &*y_ntt[r].get_or_insert_with(|| xr.to_ntt())
-                    } else {
-                        own = xr.to_ntt();
-                        &own
-                    };
-                    outer.mac(a, &inner.to_ntt(), &mut out)?;
-                }
-                (Shape::General, cheap) => {
-                    cheap.add_product_to(&mut out, xr)?;
-                }
-                (cheap, _) => {
-                    cheap.add_product_to(&mut out, &inner)?;
-                }
-            }
+            f(r, &inner, &mut y_ntt)?;
             inner = Poly::zero(ring.clone());
         }
-        outer.finish_into(&mut out)?;
-        Ok(out)
+        Ok(())
     }
 }
 
@@ -700,6 +739,26 @@ impl SparsePolyVec {
         }
         sum.finish_into(&mut out)?;
         Ok(out)
+    }
+    /// The constant coefficient of [`SparsePolyVec::dot`], added to `sum`: a dot product of
+    /// length $`d`$ per nonzero entry instead of a product.
+    pub(crate) fn dot_constant(&self, x: &PolyVec, sum: &mut ConstantSum<'_>) -> Result<(), Error> {
+        if x.len() != self.dim {
+            return Err(Error::Dimension);
+        }
+        if x.ring != self.ring {
+            return Err(Error::RingMismatch);
+        }
+        for (i, slot) in &self.entries {
+            let Slot::Value(p) = slot else {
+                continue;
+            };
+            let xi = &x.entries[usize::from(*i)];
+            if !p.is_zero() && !xi.is_zero() {
+                sum.add_product(p, xi);
+            }
+        }
+        Ok(())
     }
 }
 

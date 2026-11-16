@@ -503,6 +503,7 @@ impl Ring {
         }))
     }
     /// The native CRT, when $`q<2^{63}`$.
+    #[inline]
     pub(crate) fn small_crt(&self) -> Option<&SmallCrt> {
         match &self.crt {
             RingCrt::Small(small) => Some(small),
@@ -543,6 +544,7 @@ impl Ring {
         if x < 0 { self.neg(&r) } else { r }
     }
     /// $`x\bmod q`$ for any 256-bit value.
+    #[inline]
     pub(crate) fn reduce(&self, x: &U256) -> U256 {
         if x.cmp_vartime(&self.q).is_lt() {
             *x
@@ -561,6 +563,7 @@ impl Ring {
         }
     }
     // Canonical inputs. Below 2^128 native arithmetic suffices; the sum can carry out of u128.
+    #[inline]
     pub(crate) fn add(&self, a: &U256, b: &U256) -> U256 {
         match self.narrow {
             Some(q) => {
@@ -574,6 +577,7 @@ impl Ring {
             None => a.add_mod(b, &self.nonzero),
         }
     }
+    #[inline]
     pub(crate) fn sub(&self, a: &U256, b: &U256) -> U256 {
         match self.narrow {
             Some(q) => {
@@ -583,6 +587,7 @@ impl Ring {
             None => a.sub_mod(b, &self.nonzero),
         }
     }
+    #[inline]
     pub(crate) fn neg(&self, a: &U256) -> U256 {
         match self.narrow {
             Some(q) => {
@@ -592,6 +597,7 @@ impl Ring {
             None => a.neg_mod(&self.nonzero),
         }
     }
+    #[inline]
     pub(crate) fn mul(&self, a: &U256, b: &U256) -> U256 {
         // Below 2^64 the native remainder is faster than a one-limb reciprocal.
         if let Some(q) = &self.small {
@@ -625,6 +631,7 @@ impl Ring {
         })
     }
     /// Whether a canonical value is negative when centred in $`(-q/2,q/2]`$.
+    #[inline]
     pub(crate) fn is_negative(&self, x: &U256) -> bool {
         match self.narrow {
             Some(q) => int::low_u128(x) > q >> 1,
@@ -632,6 +639,7 @@ impl Ring {
         }
     }
     /// Absolute value of the centred representative.
+    #[inline]
     pub(crate) fn magnitude(&self, x: &U256) -> U256 {
         if let Some(q) = self.narrow {
             let v = int::low_u128(x);
@@ -648,6 +656,7 @@ impl Ring {
         }
     }
     /// The centred representative, if it fits `i128`.
+    #[inline]
     pub(crate) fn centred_i128(&self, x: &U256) -> Option<i128> {
         if let Some(q) = self.narrow {
             // Both magnitudes are at most q/2 < 2^127, so both conversions succeed.
@@ -675,6 +684,7 @@ impl Ring {
         }
     }
     /// $`x\bmod p_i`$ for a canonical value, reading only the words that $`q`$ can occupy.
+    #[inline]
     pub(crate) fn residue(&self, x: &U256, i: usize) -> u64 {
         let p = &self.divisors[i];
         match self.words {

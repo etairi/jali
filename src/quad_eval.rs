@@ -203,7 +203,7 @@ pub(crate) fn prove_in(
     let witness = quad::interleave(&opening.s1, &opening.m)?;
     // Evaluated in parallel (`parallel`); the first failure in order is returned.
     crate::par::try_map(evals.len(), |i| {
-        match evals[i].evaluate(&witness)?.coefficients()[0].is_zero_vartime() {
+        match evals[i].evaluate_constant(&witness)?.is_zero_vartime() {
             true => Ok(()),
             false => Err(Error::Witness),
         }

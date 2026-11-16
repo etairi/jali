@@ -183,7 +183,7 @@ impl Statement {
         crate::par::try_map(quadratic.len() + evaluation.len(), |i| {
             let holds = match i.checked_sub(quadratic.len()) {
                 None => quadratic[i].evaluate(&witness)?.is_zero(),
-                Some(j) => evaluation[j].evaluate(&witness)?.coefficients()[0].is_zero_vartime(),
+                Some(j) => evaluation[j].evaluate_constant(&witness)?.is_zero_vartime(),
             };
             match holds {
                 true => Ok(()),

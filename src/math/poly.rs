@@ -76,10 +76,12 @@ impl Poly {
         out
     }
     /// Shared ring parameters.
+    #[inline]
     pub fn ring(&self) -> &Arc<Ring> {
         &self.ring
     }
     /// Canonical coefficients in $`[0,q)`$.
+    #[inline]
     pub fn coefficients(&self) -> &[U256] {
         &self.coeffs
     }
@@ -104,6 +106,7 @@ impl Poly {
         *self.coeffs.get_mut(i).ok_or(Error::Index)? = self.ring.reduce_i128(value);
         Ok(())
     }
+    #[inline]
     pub(crate) fn compatible(&self, rhs: &Self) -> Result<(), Error> {
         if self.ring != rhs.ring {
             Err(Error::RingMismatch)
