@@ -202,8 +202,78 @@ fn matvec(
     Ok(out)
 }
 
+/// The four entries in $`\{-1,0,1\}`$ of each projection byte (entry $`e`$ in bits $`2e`$ and
+/// $`2e+1`$, as `Projection::column` decodes them).
+const DECODE: [[i8; 4]; 256] = {
+    let mut out = [[0i8; 4]; 256];
+    let mut b = 0;
+    while b < 256 {
+        let mut e = 0;
+        while e < 4 {
+            out[b][e] = ((b >> (2 * e)) & 1) as i8 - ((b >> (2 * e + 1)) & 1) as i8;
+            e += 1;
+        }
+        b += 1;
+    }
+    out
+};
+
 /// The projection $`p=\sum_i\Pi_is_i`$ of all witness coefficients, in vector order.
 fn project(
+    ring: &Rq,
+    seed: &[u8; 32],
+    level: u32,
+    witness: &[Zeroizing<Vec<u64>>],
+) -> Result<[i128; 256], Error> {
+    // With every centred coefficient at most M in magnitude, a lane of i32 takes
+    // floor((2^31 - 1)/M) steps of at most M before it could overflow, so the lanes are added
+    // into the i128 sums that often. The same integers as summing in i128 throughout.
+    let max = witness
+        .iter()
+        .flat_map(|v| v.iter())
+        .map(|x| ring.center(*x).unsigned_abs())
+        .max()
+        .unwrap_or(0);
+    if max > i32::MAX as u64 {
+        return project_wide(ring, seed, level, witness);
+    }
+    let flush = (i32::MAX as u64 / max.max(1)) as usize;
+    let mut projection = Projection::new(seed, level);
+    let mut p = [0i128; 256];
+    let mut lanes = Zeroizing::new([0i32; 256]);
+    let mut steps = 0;
+    let mut column = [0u8; 64];
+    for v in witness {
+        for x in v.iter() {
+            // Every coefficient takes its column from the stream, also a zero one.
+            projection.column_bytes(&mut column)?;
+            let s = ring.center(*x) as i32;
+            if s == 0 {
+                continue;
+            }
+            for (acc, b) in lanes.as_chunks_mut::<4>().0.iter_mut().zip(column) {
+                for (a, e) in acc.iter_mut().zip(DECODE[usize::from(b)]) {
+                    *a += i32::from(e) * s;
+                }
+            }
+            steps += 1;
+            if steps == flush {
+                for (t, a) in p.iter_mut().zip(lanes.iter_mut()) {
+                    *t += i128::from(*a);
+                    *a = 0;
+                }
+                steps = 0;
+            }
+        }
+    }
+    for (t, a) in p.iter_mut().zip(lanes.iter()) {
+        *t += i128::from(*a);
+    }
+    Ok(p)
+}
+
+/// [`project`] in i128 throughout, for witnesses with coefficients beyond $`2^{31}`$.
+fn project_wide(
     ring: &Rq,
     seed: &[u8; 32],
     level: u32,
@@ -240,39 +310,33 @@ fn for_each_projection_poly(
 ) -> Result<(), Error> {
     let d = ring.degree();
     let q = ring.modulus() as i64;
-    // For each k, each group of 4 rows and each byte, the sum of the 4 weighted entries.
-    let tables: Vec<Vec<i64>> = omega
-        .iter()
-        .map(|w| {
-            let mut table = vec![0i64; 64 * 256];
-            for group in 0..64 {
-                for byte in 0..256usize {
-                    let mut s = 0i64;
-                    for e in 0..4 {
-                        let v = ((byte >> (2 * e)) & 1) as i64 - ((byte >> (2 * e + 1)) & 1) as i64;
-                        s += v * w[4 * group + e] as i64;
-                    }
-                    table[group * 256 + byte] = s;
+    // For each group of 4 rows and each byte, the sums of the 4 weighted entries for every k,
+    // side by side, so that one lookup reads the λ sums of a byte.
+    let lambda = omega.len();
+    let mut table = vec![0i64; 64 * 256 * lambda];
+    for (k, w) in omega.iter().enumerate() {
+        for group in 0..64 {
+            for byte in 0..256usize {
+                let mut s = 0i64;
+                for (e, v) in DECODE[byte].iter().enumerate() {
+                    s += i64::from(*v) * w[4 * group + e] as i64;
                 }
+                table[(group * 256 + byte) * lambda + k] = s;
             }
-            table
-        })
-        .collect();
+        }
+    }
     let mut projection = Projection::new(seed, level);
-    let mut polys = vec![vec![0u64; d]; omega.len()];
+    let mut polys = vec![vec![0u64; d]; lambda];
     let mut tmp = vec![0u64; d];
     let mut column = [0u8; 64];
+    let mut sums = vec![0i64; lambda];
     for i in 0..shape.r {
         for x in 0..shape.n {
             for c in 0..d {
                 projection.column_bytes(&mut column)?;
-                for (poly, table) in polys.iter_mut().zip(&tables) {
-                    // 64 terms below 2^50 in magnitude.
-                    let s: i64 = column
-                        .iter()
-                        .enumerate()
-                        .map(|(g, b)| table[g * 256 + usize::from(*b)])
-                        .sum();
+                // 64 terms below 2^50 in magnitude for each k.
+                column_sums(&table, lambda, &column, &mut sums);
+                for (poly, s) in polys.iter_mut().zip(&sums) {
                     poly[c] = s.rem_euclid(q) as u64;
                 }
             }
@@ -284,6 +348,39 @@ fn for_each_projection_poly(
         }
     }
     Ok(())
+}
+
+/// `sums[k]` $`=\sum_g`$ `table[(256g + column[g])λ + k]` for $`k<\lambda`$, the λ sums
+/// side by side in `table`. Specialized for each λ of the supported moduli (3 to 8), so that
+/// the sums stay in registers, with the general loop for any other.
+fn column_sums(table: &[i64], lambda: usize, column: &[u8; 64], sums: &mut [i64]) {
+    fn fixed<const L: usize>(table: &[i64], column: &[u8; 64], sums: &mut [i64]) {
+        let table = table.as_chunks::<L>().0;
+        let mut acc = [0i64; L];
+        for (g, b) in column.iter().enumerate() {
+            for (a, t) in acc.iter_mut().zip(&table[g * 256 + usize::from(*b)]) {
+                *a += *t;
+            }
+        }
+        sums.copy_from_slice(&acc);
+    }
+    match lambda {
+        3 => fixed::<3>(table, column, sums),
+        4 => fixed::<4>(table, column, sums),
+        5 => fixed::<5>(table, column, sums),
+        6 => fixed::<6>(table, column, sums),
+        7 => fixed::<7>(table, column, sums),
+        8 => fixed::<8>(table, column, sums),
+        _ => {
+            sums.fill(0);
+            for (g, b) in column.iter().enumerate() {
+                let at = (g * 256 + usize::from(*b)) * lambda;
+                for (s, t) in sums.iter_mut().zip(&table[at..at + lambda]) {
+                    *s += *t;
+                }
+            }
+        }
+    }
 }
 
 /// $`\gamma_l=\sum_k\beta_k\psi^{(k)}_l`$.
@@ -751,3 +848,6 @@ pub(crate) fn decode_final(
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests;
