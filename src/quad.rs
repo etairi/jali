@@ -490,6 +490,32 @@ impl QuadEq {
             .add(&self.r1.dot(witness)?)?
             .add(&self.r0)
     }
+    /// [`QuadEq::evaluate_constant`] with the witness products of `pairs`: each quadratic
+    /// entry contributes $`\mathrm{ct}(R_{rc}\cdot s_rs_c)`$, a dot product, and no transform.
+    pub(crate) fn evaluate_constant_with(
+        &self,
+        witness: &PolyVec,
+        pairs: &PairProducts,
+    ) -> Result<U256, Error> {
+        self.check(witness.ring(), witness.len())?;
+        let mut sum = ConstantSum::new(self.r0.ring());
+        for ((r, c), a) in self.r2.entries() {
+            if a.is_zero() {
+                continue;
+            }
+            match pairs.products.get(&(r, c)) {
+                Some(product) => sum.add_product(a, product),
+                None => {
+                    let w = witness.entries();
+                    let product = w[usize::from(r)].mul(&w[usize::from(c)])?;
+                    sum.add_product(a, &product);
+                }
+            }
+        }
+        self.r1.dot_constant(witness, &mut sum)?;
+        sum.add(&self.r0.coefficients()[0]);
+        Ok(sum.finish())
+    }
     /// The constant coefficient of [`QuadEq::evaluate`], exactly, with the same refusals:
     /// each product contributes only its constant coefficient, a dot product of length
     /// $`d`$, so no product by a witness polynomial is computed in full (see
@@ -541,6 +567,50 @@ impl QuadEq {
             encode_poly(w, p)?;
         }
         encode_poly(w, &self.r0)
+    }
+}
+/// The products $`s_rs_c`$ of witness polynomials for the pairs that the quadratic parts of a
+/// batch of equations use, each computed once. A quadratic entry then contributes
+/// $`\mathrm{ct}(R_{rc}\cdot s_rs_c)`$ to an equation's constant coefficient, a dot product
+/// of length $`d`$, instead of transformed products and a reduced row sum: the self-check of a
+/// Kyber1024 statement has 33,313 quadratic entries on 99 distinct pairs (counted 2026-11-16).
+/// The products are canonical, so every constant coefficient is the one of
+/// [`QuadEq::evaluate_constant`]. They are secret, and `Poly` wipes them on drop.
+pub(crate) struct PairProducts {
+    products: BTreeMap<(u16, u16), Poly>,
+}
+impl PairProducts {
+    /// The products for `eqs`, or `None` when an equation does not fit the witness (the
+    /// per-equation evaluation then reports it, in order) or when the entries do not outnumber
+    /// the distinct pairs twice, so that the products hold at most half the memory of the
+    /// equations' own entries.
+    pub(crate) fn for_equations(eqs: &[QuadEq], witness: &PolyVec) -> Result<Option<Self>, Error> {
+        let ring = witness.ring();
+        let mut pairs = BTreeMap::new();
+        let mut entries = 0usize;
+        for eq in eqs {
+            if eq.check(ring, witness.len()).is_err() {
+                return Ok(None);
+            }
+            for ((r, c), a) in eq.r2.entries() {
+                if !a.is_zero() {
+                    entries += 1;
+                    pairs.insert((r, c), ());
+                }
+            }
+        }
+        if pairs.is_empty() || entries < 2 * pairs.len() {
+            return Ok(None);
+        }
+        let keys: Vec<(u16, u16)> = pairs.into_keys().collect();
+        let w = witness.entries();
+        let values = crate::par::try_map(keys.len(), |k| {
+            let (r, c) = keys[k];
+            w[usize::from(r)].mul(&w[usize::from(c)])
+        })?;
+        Ok(Some(Self {
+            products: keys.into_iter().zip(values).collect(),
+        }))
     }
 }
 fn encode_poly(w: &mut impl CodeWriter, p: &Poly) -> Result<(), Error> {

@@ -96,3 +96,68 @@ fn constant_evaluations_equal_full_evaluations() {
         }
     }
 }
+
+#[test]
+fn pair_products_give_the_same_constants() {
+    let two = |k: u32| U256::ONE.shl_vartime(k);
+    let moduli = [
+        U256::from_u8(13),
+        U256::from_u64(1099511627917),
+        U256::from_u128(800602353498606932557),
+        two(128).wrapping_add(&U256::from_u8(165)),
+    ];
+    let mut rng = Rng(42);
+    for q in moduli {
+        let ring = Ring::with_modulus(q, 64).unwrap();
+        let dim = 4;
+        let witness = PolyVec::new(
+            ring.clone(),
+            (0..dim)
+                .map(|i| shaped(&ring, &mut rng, i as u64 + 3))
+                .collect(),
+        )
+        .unwrap();
+        // Twelve equations on the same few pairs, so that the products are shared.
+        let eqs: Vec<QuadEq> = (0..12)
+            .map(|_| {
+                let mut eq = QuadEq::zero(ring.clone(), dim).unwrap();
+                let mut r2 = Vec::new();
+                for (r, c) in [(0u16, 1u16), (1, 1), (2, 3), (0, 3)] {
+                    let kind = rng.next();
+                    r2.push((r, c, shaped(&ring, &mut rng, kind)));
+                }
+                eq.r2 = SparsePolyMat::new(ring.clone(), dim, r2).unwrap();
+                let kind = rng.next();
+                eq.r1 =
+                    SparsePolyVec::new(ring.clone(), dim, vec![(2, shaped(&ring, &mut rng, kind))])
+                        .unwrap();
+                eq.r0 = shaped(&ring, &mut rng, 3);
+                eq
+            })
+            .collect();
+        let pairs = PairProducts::for_equations(&eqs, &witness)
+            .unwrap()
+            .expect("entries outnumber the pairs");
+        for eq in &eqs {
+            assert_eq!(
+                eq.evaluate_constant_with(&witness, &pairs).unwrap(),
+                eq.evaluate_constant(&witness).unwrap(),
+                "q {q}"
+            );
+        }
+        // No products for a single equation (no sharing), or for an equation of another size.
+        assert!(
+            PairProducts::for_equations(&eqs[..1], &witness)
+                .unwrap()
+                .is_none()
+        );
+        let other = QuadEq::zero(ring.clone(), dim + 1).unwrap();
+        let mut mixed = eqs.clone();
+        mixed.push(other);
+        assert!(
+            PairProducts::for_equations(&mixed, &witness)
+                .unwrap()
+                .is_none()
+        );
+    }
+}

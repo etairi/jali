@@ -202,8 +202,13 @@ pub(crate) fn prove_in(
 ) -> Result<(EvalProof, Option<linhc::LinhcOpening>), Error> {
     let witness = quad::interleave(&opening.s1, &opening.m)?;
     // Evaluated in parallel (`parallel`); the first failure in order is returned.
+    let pairs = quad::PairProducts::for_equations(evals, &witness)?;
     crate::par::try_map(evals.len(), |i| {
-        match evals[i].evaluate_constant(&witness)?.is_zero_vartime() {
+        let constant = match &pairs {
+            Some(pairs) => evals[i].evaluate_constant_with(&witness, pairs)?,
+            None => evals[i].evaluate_constant(&witness)?,
+        };
+        match constant.is_zero_vartime() {
             true => Ok(()),
             false => Err(Error::Witness),
         }
