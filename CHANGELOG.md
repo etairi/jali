@@ -5,8 +5,6 @@ versioning](https://semver.org); before 1.0, a minor version may break the API.
 
 ## [0.3.1] - 2026-11-17
 
-Made for Hachi-Co's Greyhound tail, which runs LaBRADOR at moduli of 48 to 62 bits.
-
 ### Changed
 
 - **LaBRADOR moduli up to $`2^{62}`$** (from $`2^{48}`$). The norms of witnesses and last

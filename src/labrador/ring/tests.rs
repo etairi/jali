@@ -6,7 +6,7 @@ use crate::labrador::test_rng::TestRng;
 
 /// Moduli $`\equiv5\pmod8`$, prime: the smallest above $`2^{16}`$, the largest below
 /// $`2^{20}`$, $`2^{32}`$, $`2^{40}`$, $`2^{47}`$ and $`2^{48}`$, $`2^{36}-243`$,
-/// $`2^{38}-107`$, and three moduli of Hachi-Co's presets (53.3, 56.4 and 61.1 bits).
+/// $`2^{38}-107`$, and three moduli of 53.3, 56.4 and 61.1 bits.
 const MODULI: [u64; 11] = [
     65557,
     1048573,
