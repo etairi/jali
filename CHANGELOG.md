@@ -3,6 +3,13 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
+## [0.3.2] - 2026-11-17
+
+### Changed
+
+- Documentation only: the notes of 0.3.1 and a comment in the ring's tests are reworded. The
+  code is that of 0.3.1.
+
 ## [0.3.1] - 2026-11-17
 
 ### Changed
