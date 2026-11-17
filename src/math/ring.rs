@@ -145,9 +145,8 @@ impl<const K: usize> FixedGarner<K> {
         for i in 0..K {
             let p = self.primes[i];
             let mut sum = 0;
-            for t in 0..i {
-                let (w, w_shoup) = self.prefixes[i][t];
-                sum = add_mod(sum, shoup_mul(digits[t], w, w_shoup, p), p);
+            for (&d, &(w, w_shoup)) in digits[..i].iter().zip(&self.prefixes[i]) {
+                sum = add_mod(sum, shoup_mul(d, w, w_shoup, p), p);
             }
             let (w, w_shoup) = self.inverses[i];
             digits[i] = shoup_mul(sub_mod(residues[i][j], sum, p), w, w_shoup, p);
