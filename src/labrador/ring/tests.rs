@@ -1,13 +1,13 @@
 //! The ring arithmetic against an `i128` schoolbook oracle: products, accumulated inner
 //! products, sparse products and $`\sigma_{-1}`$, at every supported degree and at moduli from
-//! just above $`2^{16}`$ to just below $`2^{48}`$, on random and extreme operands.
+//! just above $`2^{16}`$ to just below $`2^{62}`$, on random and extreme operands.
 use super::*;
 use crate::labrador::test_rng::TestRng;
 
 /// Moduli $`\equiv5\pmod8`$, prime: the smallest above $`2^{16}`$, the largest below
-/// $`2^{20}`$, $`2^{32}`$, $`2^{40}`$, $`2^{47}`$ and $`2^{48}`$, and $`2^{36}-243`$,
-/// $`2^{38}-107`$.
-const MODULI: [u64; 8] = [
+/// $`2^{20}`$, $`2^{32}`$, $`2^{40}`$, $`2^{47}`$ and $`2^{48}`$, $`2^{36}-243`$,
+/// $`2^{38}-107`$, and three moduli of Hachi-Co's presets (53.3, 56.4 and 61.1 bits).
+const MODULI: [u64; 11] = [
     65557,
     1048573,
     4294967197,
@@ -16,14 +16,20 @@ const MODULI: [u64; 8] = [
     1099511627581,
     140737488355213,
     281474976710597,
+    10916536653611741,
+    93266870910952069,
+    2402958527344632421,
 ];
 
+/// The product modulo $`X^d+1`$, each term reduced modulo $`q`$ (exact products of centred
+/// 61-bit residues overflow `i128` once 128 of them are added).
 fn schoolbook(ring: &Rq, a: &[u64], b: &[u64]) -> Vec<i128> {
     let d = ring.degree();
+    let q = i128::from(ring.modulus());
     let mut acc = vec![0i128; d];
     for i in 0..d {
         for j in 0..d {
-            let p = i128::from(ring.center(a[i])) * i128::from(ring.center(b[j]));
+            let p = (i128::from(ring.center(a[i])) * i128::from(ring.center(b[j]))).rem_euclid(q);
             if i + j < d {
                 acc[i + j] += p;
             } else {
@@ -55,7 +61,7 @@ fn construction_accepts_exactly_the_supported_moduli_and_degrees() {
         }
     }
     // Composite, 1 or 3 mod 8, out of range, and unsupported degrees.
-    for q in [65557 * 3, 65537, 4294967291, 13, 1 << 48, (1 << 48) + 5] {
+    for q in [65557 * 3, 65537, 4294967291, 13, 1 << 62, (1 << 62) + 5] {
         assert_eq!(
             Rq::new(q, 64).err(),
             Some(Error::Parameter("LaBRADOR modulus")),

@@ -338,7 +338,11 @@ impl LevelParams {
 /// $`\sqrt{337/30}\,\beta\le q/125`$, in integers: $`337\cdot125^2\beta^2\le30q^2`$.
 pub(crate) fn projection_condition(norm_sq: u128, q: u64) -> Result<(), Error> {
     let lhs = norm_sq.checked_mul(337 * 125 * 125);
-    let rhs = 30 * u128::from(q) * u128::from(q);
+    // 30 q^2 exceeds u128 for q above 2^61.5, and then every representable lhs passes.
+    let rhs = u128::from(q)
+        .checked_mul(u128::from(q))
+        .and_then(|x| x.checked_mul(30))
+        .unwrap_or(u128::MAX);
     match lhs {
         Some(l) if l <= rhs => Ok(()),
         _ => Err(Error::Parameter(

@@ -1,5 +1,5 @@
 //! Arithmetic in $`\mathcal R_q=\mathbb Z_q[X]/(X^d+1)`$ for a prime $`q\equiv5\pmod8`$ below
-//! $`2^{48}`$, the single-precision setting of LaBRADOR (BS23 §2, §6.1).
+//! $`2^{62}`$, the single-precision setting of LaBRADOR (BS23 §2, §6.1).
 //!
 //! Coefficients are canonical `u64` residues in $`[0,q)`$. Products go through the negacyclic
 //! NTTs of [`crate::math::ntt`] over the first $`k`$ primes of [`NTT_PRIMES`], in Montgomery
@@ -8,7 +8,7 @@
 //! magnitude at most $`((q-1)/2)^2`$. The ring takes the least $`k`$ for which the product
 //! $`P`$ of its primes satisfies $`P/2>2^{32}d((q-1)/2)^2`$, so that up to $`2^{32}`$ products
 //! accumulated in the transform domain reconstruct exactly: two primes for $`q<2^{40}`$ at
-//! $`d\le256`$, three up to $`2^{48}`$. This arithmetic is separate from the 256-bit
+//! $`d\le256`$, three up to $`2^{62}`$. This arithmetic is separate from the 256-bit
 //! arithmetic of the LNP22 proofs, which it does not change.
 use crate::{
     Error,
@@ -23,8 +23,10 @@ use std::sync::Arc;
 
 /// Moduli must exceed $`2^{16}`$.
 pub const MIN_MODULUS: u64 = 1 << 16;
-/// Moduli must be below $`2^{48}`$.
-pub const MAX_MODULUS_BITS: u32 = 48;
+/// Moduli must be below $`2^{62}`$: centred residues and their differences stay within `i64`,
+/// Shoup products within `u64`, and three transform primes reconstruct $`2^{32}`$ accumulated
+/// products exactly (the rule of [`Rq::new`]).
+pub const MAX_MODULUS_BITS: u32 = 62;
 
 /// The ring $`\mathbb Z_q[X]/(X^d+1)`$ with its transform plans and CRT constants.
 #[derive(Debug)]
@@ -44,7 +46,7 @@ pub(crate) struct Sparse {
 
 impl Rq {
     /// The ring of degree `d` (64, 128 or 256) modulo `q`, a prime with $`q\equiv5\pmod8`$ and
-    /// $`2^{16}<q<2^{48}`$. Then $`X^d+1`$ splits into two irreducible factors modulo $`q`$,
+    /// $`2^{16}<q<2^{62}`$. Then $`X^d+1`$ splits into two irreducible factors modulo $`q`$,
     /// the setting of BS23 §2.
     pub fn new(q: u64, d: usize) -> Result<Arc<Self>, Error> {
         if !matches!(d, 64 | 128 | 256) {
@@ -340,14 +342,14 @@ impl Rq {
         }
     }
 
-    /// The squared Euclidean norm of the centred coefficients.
+    /// The squared Euclidean norm of the centred coefficients, saturating at `u128::MAX`: a
+    /// square is below $`2^{122}`$ for $`q<2^{62}`$, so sums of more than 64 of them could wrap,
+    /// and a saturated norm is above every bound.
     pub(crate) fn norm_sq(&self, a: &[u64]) -> u128 {
-        a.iter()
-            .map(|x| {
-                let c = i128::from(self.center(*x));
-                (c * c) as u128
-            })
-            .sum()
+        a.iter().fold(0u128, |acc, x| {
+            let c = u128::from(self.center(*x).unsigned_abs());
+            acc.saturating_add(c * c)
+        })
     }
 
     /// The largest centred coefficient magnitude.

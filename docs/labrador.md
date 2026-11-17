@@ -13,7 +13,7 @@ aggregating signatures, or under a zero-knowledge layer.
 
 A `Statement` holds the principal relation of BS23 §5.1 over
 $`\mathcal R_q=\mathbb Z_q[X]/(X^{64}+1)`$, for a prime $`q\equiv5\pmod8`$ with
-$`2^{16}<q<2^{48}`$, so that $`X^{64}+1`$ splits into two irreducible factors modulo $`q`$. A
+$`2^{16}<q<2^{62}`$, so that $`X^{64}+1`$ splits into two irreducible factors modulo $`q`$. A
 witness is $`r`$ vectors $`s_1,\dots,s_r\in\mathcal R_q^n`$ with
 $`\sum_i\|s_i\|^2\le\beta^2`$ (centred coefficients). A constraint is
 

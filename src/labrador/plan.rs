@@ -314,16 +314,49 @@ pub(crate) fn choose(
     shape: &Shape,
     stats: &Stats<'_>,
 ) -> Result<LevelParams, Error> {
+    choose_with_cost(ring, set, policy, shape, stats).map(|(params, _)| params)
+}
+
+/// The odd bases that [`choose`] tries: every odd base from 3 to `top` while there are at most
+/// [`EXHAUSTIVE_BASES`] of them (as before, so that such levels choose what they chose), and
+/// otherwise [`COARSE_BASES`] spread geometrically over that range together with `heuristic`,
+/// which [`choose`] then refines around the best.
+fn coarse_bases(top: u64, heuristic: u64) -> Vec<u64> {
+    if top.saturating_sub(1) / 2 <= EXHAUSTIVE_BASES {
+        return (3..=top).step_by(2).collect();
+    }
+    let ratio = (top as f64 / 3.0).ln() / (COARSE_BASES - 1) as f64;
+    let mut bases: Vec<u64> = (0..COARSE_BASES)
+        .map(|k| odd_round((3.0 * (ratio * k as f64).exp()).min(top as f64)))
+        .chain([heuristic.clamp(3, top) | 1])
+        .filter(|b| (3..=top).contains(b))
+        .collect();
+    bases.sort_unstable();
+    bases.dedup();
+    bases
+}
+
+/// Odd bases tried exhaustively: up to 160, as for every level of a witness with small digits.
+const EXHAUSTIVE_BASES: u64 = 160;
+/// Bases of the coarse grid beyond that, and of the refinement around its best.
+const COARSE_BASES: usize = 24;
+const FINE_BASES: usize = 12;
+
+/// [`choose`] with its predicted proof size from this level on (this level's bytes and the
+/// lookahead's). Every candidate base is one the verifier accepts, so the bounded search of
+/// [`coarse_bases`] only affects how close to the planner's optimum a large witness gets.
+pub(crate) fn choose_with_cost(
+    ring: &Rq,
+    set: &ChallengeSet,
+    policy: &Policy,
+    shape: &Shape,
+    stats: &Stats<'_>,
+) -> Result<(LevelParams, f64), Error> {
     super::params::projection_condition(shape.norm_sq, ring.modulus())?;
     let mut best: Option<(f64, LevelParams)> = None;
-    // The odd bases from 3 to four times the heuristic one.
-    let top = 4 * heuristic_base(set, shape, stats, ring.degree());
-    for (last, base) in [true, false]
-        .into_iter()
-        .flat_map(|last| (3..=top).step_by(2).map(move |b| (last, b)))
-    {
+    let consider = |last: bool, base: u64, best: &mut Option<(f64, LevelParams)>| {
         let Some(fit) = fit(ring, set, policy, shape, stats, last, Some(base)) else {
-            continue;
+            return;
         };
         let here = level_bytes(ring, shape, &fit.params);
         for (nu, mu) in splits(shape, &fit.params) {
@@ -347,12 +380,73 @@ pub(crate) fn choose(
             };
             let cost = here + rest;
             if best.as_ref().is_none_or(|(c, _)| cost < *c) {
-                best = Some((cost, params));
+                *best = Some((cost, params));
+            }
+        }
+    };
+    // The odd bases from 3 to four times the heuristic one (all of them, or a grid).
+    let heuristic = heuristic_base(set, shape, stats, ring.degree());
+    let top = 4 * heuristic;
+    let bases = coarse_bases(top, heuristic);
+    let exhaustive = bases.len() as u64 == top.saturating_sub(1) / 2;
+    for (last, base) in [true, false]
+        .into_iter()
+        .flat_map(|last| bases.iter().map(move |b| (last, *b)))
+    {
+        consider(last, base, &mut best);
+    }
+    if !exhaustive {
+        // Refine around the best base of the grid, between its neighbours there.
+        if let Some((_, p)) = best {
+            let at = bases.partition_point(|b| *b < p.b);
+            let lo = bases[at.saturating_sub(1)].max(3);
+            let hi = bases[(at + 1).min(bases.len() - 1)].max(lo);
+            let ratio = (hi as f64 / lo as f64).ln() / (FINE_BASES - 1) as f64;
+            let fine: Vec<u64> = (0..FINE_BASES)
+                .map(|k| odd_round(lo as f64 * (ratio * k as f64).exp()))
+                .filter(|b| (3..=top).contains(b) && !bases.contains(b))
+                .collect();
+            for last in [true, false] {
+                for b in &fine {
+                    consider(last, *b, &mut best);
+                }
             }
         }
     }
-    best.map(|(_, p)| p)
-        .ok_or(Error::Parameter("no LaBRADOR parameters meet the policy"))
+    best.ok_or(Error::Parameter("no LaBRADOR parameters meet the policy"))
+        .map(|(c, p)| (p, c))
+}
+
+/// The proof size the planner predicts for a statement of `shape`, from its shape and bound
+/// alone: the levels [`choose_with_cost`] picks with the bound as the witness's norm and the
+/// garbage unknown, each level's bytes ([`level_bytes`]) and, at the last, its prediction of
+/// the witness sent in the clear.
+pub(crate) fn predict_bytes(
+    ring: &Rq,
+    set: &ChallengeSet,
+    policy: &Policy,
+    shape: &Shape,
+) -> Result<f64, Error> {
+    let mut shape = *shape;
+    let mut total = 0.0;
+    for _ in 0..super::MAX_LEVELS {
+        let stats = Stats {
+            norm_sq: shape.norm_sq,
+            garbage: None,
+        };
+        let (params, cost) = choose_with_cost(ring, set, policy, &shape, &stats)?;
+        if params.last {
+            return Ok(total + cost);
+        }
+        total += level_bytes(ring, &shape, &params);
+        let layout = params.layout(&shape)?;
+        shape = Shape {
+            r: layout.r_next,
+            n: layout.n_next,
+            norm_sq: params.next_norm_sq,
+        };
+    }
+    Err(Error::Parameter("too many LaBRADOR levels"))
 }
 
 #[cfg(test)]
