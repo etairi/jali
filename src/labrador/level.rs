@@ -484,7 +484,7 @@ fn projection_blocks<T: Send>(
     work: impl Fn(BlockPolys) -> Result<T, Error> + Sync,
     mut absorb: impl FnMut(T) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    let table = projection_table(omega);
+    let table = projection_table(ring, omega);
     let per_block = BLOCK_BUFFERS * PROJECTION_BLOCK / ring.degree();
     let total = shape.r * shape.n;
     let blocks = total.div_ceil(per_block);
@@ -509,18 +509,23 @@ fn projection_blocks<T: Send>(
 }
 
 /// For each group of 4 rows and each byte, the sums of the 4 weighted entries for every k,
-/// side by side, so that one lookup reads the λ sums of a byte.
-fn projection_table(omega: &[Vec<u64>]) -> Vec<i64> {
+/// side by side, so that one lookup reads the λ sums of a byte. Each sum is stored as its
+/// centred residue modulo $`q`$ (at most $`q/2`$ in magnitude, while the sum of 4 canonical
+/// residues reaches $`4q`$, beyond `i64` for $`q>2^{61}`$); the polynomials of [`block_polys`]
+/// only take residues of sums of entries, so they do not change.
+fn projection_table(ring: &Rq, omega: &[Vec<u64>]) -> Vec<i64> {
     let lambda = omega.len();
+    let q = i128::from(ring.modulus());
     let mut table = vec![0i64; 64 * 256 * lambda];
     for (k, w) in omega.iter().enumerate() {
         for group in 0..64 {
             for byte in 0..256usize {
-                let mut s = 0i64;
+                let mut s = 0i128;
                 for (e, v) in DECODE[byte].iter().enumerate() {
-                    s += i64::from(*v) * w[4 * group + e] as i64;
+                    s += i128::from(*v) * i128::from(w[4 * group + e]);
                 }
-                table[(group * 256 + byte) * lambda + k] = s;
+                let s = s.rem_euclid(q);
+                table[(group * 256 + byte) * lambda + k] = if 2 * s > q { s - q } else { s } as i64;
             }
         }
     }
@@ -538,6 +543,8 @@ fn block_polys(
 ) -> Result<BlockPolys, Error> {
     let d = ring.degree();
     let q = ring.modulus() as i64;
+    // 64 centred residues of at most q/2 each: `i64` sums while q < 2^58, `i128` from there.
+    let wide = (ring.modulus() >= 1 << 58).then(|| i128::from(ring.modulus()));
     let stride = lambda * d;
     let mut data = vec![0u64; indices.len() * stride];
     let mut tmp = vec![0u64; d];
@@ -546,8 +553,7 @@ fn block_polys(
     for polys in data.chunks_exact_mut(stride) {
         for c in 0..d {
             projection.column_bytes(&mut column)?;
-            // 64 terms below 2^50 in magnitude for each k.
-            column_sums(table, lambda, &column, &mut sums);
+            column_sums(table, lambda, &column, &mut sums, wide);
             for (poly, s) in polys.chunks_exact_mut(d).zip(&sums) {
                 poly[c] = s.rem_euclid(q) as u64;
             }
@@ -566,8 +572,29 @@ fn block_polys(
 
 /// `sums[k]` $`=\sum_g`$ `table[(256g + column[g])λ + k]` for $`k<\lambda`$, the λ sums
 /// side by side in `table`. Specialized for each λ of the supported moduli (3 to 8), so that
-/// the sums stay in registers, with the general loop for any other.
-fn column_sums(table: &[i64], lambda: usize, column: &[u8; 64], sums: &mut [i64]) {
+/// the sums stay in registers, with the general loop for any other. With `wide` $`=q`$ the
+/// sums are taken in `i128` and returned modulo $`q`$ (for $`q\ge2^{58}`$, where 64 entries of
+/// $`q/2`$ leave `i64`).
+fn column_sums(
+    table: &[i64],
+    lambda: usize,
+    column: &[u8; 64],
+    sums: &mut [i64],
+    wide: Option<i128>,
+) {
+    if let Some(q) = wide {
+        let mut acc = vec![0i128; lambda];
+        for (g, b) in column.iter().enumerate() {
+            let at = (g * 256 + usize::from(*b)) * lambda;
+            for (s, t) in acc.iter_mut().zip(&table[at..at + lambda]) {
+                *s += i128::from(*t);
+            }
+        }
+        for (s, a) in sums.iter_mut().zip(acc) {
+            *s = a.rem_euclid(q) as i64;
+        }
+        return;
+    }
     fn fixed<const L: usize>(table: &[i64], column: &[u8; 64], sums: &mut [i64]) {
         let table = table.as_chunks::<L>().0;
         let mut acc = [0i64; L];
@@ -745,7 +772,10 @@ pub(crate) fn prove<R: Relation>(
     let hats: Zeroizing<Vec<Vec<u64>>> =
         Zeroizing::new(witness.iter().map(|v| ring.ntt_many(v)).collect());
     let pairs = Zeroizing::new(all_pairs(ring, &hats));
-    let norm_sq: u128 = witness.iter().map(|v| ring.norm_sq(v)).sum();
+    let norm_sq: u128 = witness
+        .iter()
+        .map(|v| ring.norm_sq(v))
+        .fold(0, u128::saturating_add);
     if norm_sq > shape.norm_sq {
         return Err(Error::Witness);
     }
@@ -973,7 +1003,10 @@ fn attempt_level<R: Relation>(
         }
     }
     let next_wit = next_witness(ring, params, &layout, &z, &v);
-    let next_norm: u128 = next_wit.iter().map(|w| ring.norm_sq(w)).sum();
+    let next_norm: u128 = next_wit
+        .iter()
+        .map(|w| ring.norm_sq(w))
+        .fold(0, u128::saturating_add);
     if next_norm > params.next_norm_sq {
         return Ok(None);
     }

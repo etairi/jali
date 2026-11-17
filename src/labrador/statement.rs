@@ -222,25 +222,31 @@ impl Statement {
         {
             return Err(Error::Dimension);
         }
-        let norm: u128 = witness.vectors.iter().map(|v| ring.norm_sq(v)).sum();
+        let norm: u128 = witness
+            .vectors
+            .iter()
+            .map(|v| ring.norm_sq(v))
+            .fold(0, u128::saturating_add);
         if norm > self.norm_sq {
             return Err(Error::Witness);
         }
-        let hats: Zeroizing<Vec<Vec<u64>>> =
-            Zeroizing::new(witness.vectors.iter().map(|v| ring.ntt_many(v)).collect());
+        let hats: Zeroizing<Vec<Vec<u64>>> = Zeroizing::new(crate::par::map(self.r, |i| {
+            ring.ntt_many(&witness.vectors[i])
+        }));
         let pairs = Zeroizing::new(all_pairs(ring, &hats));
-        for c in &self.full {
+        // Each constraint on its own (in parallel with `parallel`).
+        let full_ok = crate::par::map(self.full.len(), |j| {
+            let c = &self.full[j];
             let mut value = evaluate(ring, c, &hats, &pairs, self.r);
             ring.sub_assign(&mut value, &c.constant);
-            if value.iter().any(|x| *x != 0) {
-                return Err(Error::Witness);
-            }
-        }
-        for c in &self.constant_term {
-            let value = evaluate(ring, c, &hats, &pairs, self.r);
-            if value[0] != c.constant[0] {
-                return Err(Error::Witness);
-            }
+            value.iter().all(|x| *x == 0)
+        });
+        let constant_ok = crate::par::map(self.constant_term.len(), |j| {
+            let c = &self.constant_term[j];
+            evaluate(ring, c, &hats, &pairs, self.r)[0] == c.constant[0]
+        });
+        if full_ok.iter().chain(&constant_ok).any(|ok| !ok) {
+            return Err(Error::Witness);
         }
         Ok(())
     }
@@ -354,12 +360,15 @@ impl Relation for Statement {
     }
 
     fn constant_term_values(&self, hats: &[Vec<u64>], pairs: &[Vec<u64>]) -> Vec<Vec<u64>> {
-        self.constant_term
-            .iter()
-            .map(|c| evaluate(&self.ring, c, hats, pairs, self.r))
-            .collect()
+        crate::par::map(self.constant_term.len(), |j| {
+            evaluate(&self.ring, &self.constant_term[j], hats, pairs, self.r)
+        })
     }
 
+    /// The weighted sum of the constraints. The linear terms, which hold almost all of the
+    /// work (a transform per polynomial of every $`\varphi`$), are summed vector by vector, in
+    /// parallel with `parallel`: each vector's sums are those of the sequential order, and the
+    /// sums are exact residues, so the result does not depend on the threads.
     fn aggregate(&self, alpha: &[Vec<u64>], gamma: &[Vec<u64>]) -> Result<Aggregate, Error> {
         if alpha.len() != self.full.len() || gamma.len() != self.constant_term.len() {
             return Err(Error::Dimension);
@@ -367,16 +376,19 @@ impl Relation for Statement {
         let ring = &self.ring;
         let (d, k, r, n) = (ring.degree(), ring.hat_len(), self.r, self.n);
         let mut quad: Vec<(usize, usize, Vec<u64>)> = Vec::new();
-        let mut phi_hat = vec![vec![0u64; n * k]; r];
-        let mut touched = vec![false; r];
         let mut constant = vec![0u64; d];
-        let weighted = self
+        let weighted: Vec<(&Constraint, &Vec<u64>)> = self
             .full
             .iter()
             .zip(alpha)
-            .chain(self.constant_term.iter().zip(gamma));
-        for (index, (c, weight)) in weighted.enumerate() {
-            if weight.iter().all(|x| *x == 0) {
+            .chain(self.constant_term.iter().zip(gamma))
+            .collect();
+        let live: Vec<bool> = weighted
+            .iter()
+            .map(|(_, w)| w.iter().any(|x| *x != 0))
+            .collect();
+        for (index, ((c, weight), live)) in weighted.iter().zip(&live).enumerate() {
+            if !live {
                 continue;
             }
             for (i, j, a) in &c.quadratic {
@@ -387,33 +399,38 @@ impl Relation for Statement {
                     None => quad.push((lo, hi, product)),
                 }
             }
-            if !c.linear.is_empty() {
-                let w = ring.ntt(weight);
-                for (i, offset, phi) in &c.linear {
-                    touched[*i] = true;
-                    for (x, poly) in phi.chunks_exact(d).enumerate() {
-                        let at = (offset + x) * k;
-                        ring.mac(&mut phi_hat[*i][at..at + k], &w, &ring.ntt(poly));
-                    }
-                }
-            }
             if index < self.full.len() {
                 ring.add_assign(&mut constant, &ring.poly_mul(weight, &c.constant));
             }
         }
-        let phi = phi_hat
-            .into_iter()
-            .zip(touched)
-            .map(|(mut hat, touched)| {
-                let mut out = vec![0u64; n * d];
-                if touched {
-                    for (h, o) in hat.chunks_exact_mut(k).zip(out.chunks_exact_mut(d)) {
-                        ring.intt_into(h, o);
+        let weights: Vec<Option<Vec<u64>>> = crate::par::map(weighted.len(), |j| {
+            let (c, w) = weighted[j];
+            (live[j] && !c.linear.is_empty()).then(|| ring.ntt(w))
+        });
+        let phi = crate::par::map(r, |i| {
+            let mut hat = vec![0u64; n * k];
+            let mut touched = false;
+            for ((c, _), w) in weighted.iter().zip(&weights) {
+                let Some(w) = w else { continue };
+                for (vector, offset, phi) in &c.linear {
+                    if *vector != i {
+                        continue;
+                    }
+                    touched = true;
+                    for (x, poly) in phi.chunks_exact(d).enumerate() {
+                        let at = (offset + x) * k;
+                        ring.mac(&mut hat[at..at + k], w, &ring.ntt(poly));
                     }
                 }
-                out
-            })
-            .collect();
+            }
+            let mut out = vec![0u64; n * d];
+            if touched {
+                for (h, o) in hat.chunks_exact_mut(k).zip(out.chunks_exact_mut(d)) {
+                    ring.intt_into(h, o);
+                }
+            }
+            out
+        });
         Ok(Aggregate {
             quad,
             phi,

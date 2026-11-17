@@ -3,6 +3,34 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
+## [Unreleased]
+
+Made for Hachi-Co's Greyhound tail, which runs LaBRADOR at moduli of 48 to 62 bits.
+
+### Changed
+
+- **LaBRADOR moduli up to $`2^{62}`$** (from $`2^{48}`$). The norms of witnesses and last
+  witnesses are summed with saturation (squares of centred 61-bit residues reach $`2^{122}`$, so
+  sums of more than 64 of them could wrap in release builds), the projection condition
+  computes $`30q^2`$ without overflow, and the projection table holds centred residues (at most
+  $`q/2`$ in magnitude, where its sums of 4 weighted entries reached $`4q`$), so that the
+  column sums of 64 table entries stay in `i64` below $`2^{58}`$, and from $`2^{58}`$ they are
+  taken in `i128`. The projection constraints only take residues of these sums, so they do not
+  change. The ring's tests run at three more moduli (53.3, 56.4 and 61.1 bits) with an oracle
+  that reduces each product.
+- **A bounded base search in the level planner.** It tried every odd base up to four times
+  its heuristic one, which takes minutes for witnesses with large coefficients. It still does
+  when there are at most 160 of them (so those levels choose what they chose), and otherwise
+  tries 24 bases spread geometrically and 12 more between the best one's neighbours.
+- **Parallel aggregation and statement checks** with `parallel`: the aggregation sums the
+  linear terms vector by vector, and the check evaluates the constraints apart. Results do not
+  depend on the threads.
+
+### Added
+
+- `labrador::predicted_proof_bytes`: the proof size the planner predicts for a statement's
+  shape and bound.
+
 ## [0.3.0] - 2026-11-16
 
 The proofs of the LNP22 modules and their transcripts are those of 0.2.0, in both modes.

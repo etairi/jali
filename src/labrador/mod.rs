@@ -46,6 +46,7 @@ use crate::{
 use level::Ctx;
 use sample::ChallengeSet;
 use statement::Relation;
+use std::sync::Arc;
 
 /// The most levels a proof may have.
 pub const MAX_LEVELS: u32 = 32;
@@ -148,6 +149,33 @@ pub fn prove(
     Proof::from_bytes(out)
 }
 
+/// The proof size in bytes that the prover's planner predicts for a statement of
+/// `multiplicity` vectors of `rank` polynomials over `ring` with the bound
+/// `norm_bound_squared`, from these alone: the levels it picks with the bound as the witness's
+/// norm and its garbage unknown, their bytes, and its model of the last witness. A proof
+/// differs from it by the choices made with the actual statistics and by the codes of the
+/// last witness, which depend on its values.
+///
+/// Fails with [`Error::Parameter`] if the ring has no challenge set or no parameters meet the
+/// policy.
+pub fn predicted_proof_bytes(
+    ring: &Arc<Rq>,
+    multiplicity: usize,
+    rank: usize,
+    norm_bound_squared: u128,
+    policy: &Policy,
+) -> Result<usize, Error> {
+    policy.check()?;
+    let set = ChallengeSet::for_degree(ring.degree())?;
+    let shape = params::Shape {
+        r: multiplicity,
+        n: rank,
+        norm_sq: norm_bound_squared,
+    };
+    let bytes = plan::predict_bytes(ring, &set, policy, &shape)?;
+    Ok(bytes.ceil() as usize)
+}
+
 /// Verify `proof` for `statement` with the same public seed, context and policy as the
 /// prover. Fails with [`Error::InvalidProof`] or [`Error::Encoding`].
 pub fn verify(
@@ -176,7 +204,10 @@ pub fn verify(
         return Err(Error::Encoding);
     }
     transcript.absorb(&before[..before.len() - input.len()]);
-    let norm: u128 = wit.iter().map(|w| ctx.ring.norm_sq(w)).sum();
+    let norm: u128 = wit
+        .iter()
+        .map(|w| ctx.ring.norm_sq(w))
+        .fold(0, u128::saturating_add);
     if norm > next.params.next_norm_sq {
         return Err(Error::InvalidProof);
     }
