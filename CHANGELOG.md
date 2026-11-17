@@ -3,7 +3,7 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
-## [Unreleased]
+## [0.3.1] - 2026-11-17
 
 Made for Hachi-Co's Greyhound tail, which runs LaBRADOR at moduli of 48 to 62 bits.
 
