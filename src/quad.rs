@@ -104,6 +104,56 @@ fn combine_maps<'p, K: Ord + Copy + Send + Sync>(
     })
 }
 
+/// The term of the constant of `map[k]`, made on first use.
+fn map_constant<'t>(constants: &'t mut [Option<Term>], map: &[Affine], k: usize) -> &'t Term {
+    constants[k].get_or_insert_with(|| Term::new(&map[k].constant))
+}
+
+/// $`xy`$ exactly, the value of [`Poly::mul`]: two general factors multiply transformed, from
+/// `ty` and the term of `x` in `tx` (made here if it is not yet), a cheap one in the coefficient
+/// domain.
+fn product_of(x: &Poly, tx: &mut Option<Term>, y: &Poly, ty: &Term) -> Result<Poly, Error> {
+    if let Term::General(b) = ty
+        && let Term::General(a) = tx.get_or_insert_with(|| Term::new(x))
+    {
+        return a.product(b)?.reduce();
+    }
+    x.mul(y)
+}
+
+/// `out += xy` exactly: in place when `y` is zero, a scalar or a monomial, else by
+/// [`Poly::mul`].
+fn add_product(out: &mut Poly, x: &Poly, y: &Poly) -> Result<(), Error> {
+    if !Shape::of(y).add_product_to(out, x)? {
+        out.add_assign(&x.mul(y)?)?;
+    }
+    Ok(())
+}
+
+/// `out += xy` exactly, `ty` the term of `y`: a cheap factor in place, two general ones summed
+/// transformed into `sum`, which adds its products to `out` when it is full.
+fn add_to_sum(
+    sum: &mut Accumulator,
+    out: &mut Poly,
+    x: &Poly,
+    y: &Poly,
+    ty: &Term,
+) -> Result<(), Error> {
+    match ty {
+        Term::Cheap(shape) => {
+            shape.add_product_to(out, x)?;
+            Ok(())
+        }
+        Term::General(b) => match Shape::of(x) {
+            Shape::General => sum.mac(&x.to_ntt(), b, out),
+            shape => {
+                shape.add_product_to(out, y)?;
+                Ok(())
+            }
+        },
+    }
+}
+
 /// An affine form $`\sum_uc_uy_u+C`$ that [`QuadEq::substitute`] puts in place of a variable:
 /// `terms` lists the coordinates $`u`$ with their coefficients $`c_u`$.
 #[derive(Clone, Debug)]
@@ -218,49 +268,60 @@ impl QuadEq {
         let mut matrix = BTreeMap::new();
         let mut vector = BTreeMap::new();
         let mut constant = self.r0.clone();
-        let add = |entry: &mut Poly, value: &Poly| -> Result<(), Error> {
-            *entry = entry.add(value)?;
-            Ok(())
-        };
         let zero = || Poly::zero(ring.clone());
+        // Every product is exact modulo q, so the sums below are the canonical values that a
+        // fold of `mul` and `add` gives. The constants of the map meet every entry that names
+        // their variable: each is classified and, if general, transformed once, on first use.
+        // The products that land on the constant term are summed transformed and reduced
+        // together, and a product with a cheap factor is added in place.
+        let mut constants: Vec<Option<Term>> = (0..map.len()).map(|_| None).collect();
+        let mut constant_sum = Accumulator::new(&ring);
         for ((i, j), a) in self.r2.entries() {
             let (x, y) = (&map[usize::from(i)], &map[usize::from(j)]);
             for (u, cu) in &x.terms {
                 let acu = a.mul(cu)?;
                 for (v, cv) in &y.terms {
-                    add(
+                    add_product(
                         matrix
                             .entry(((*u).min(*v), (*u).max(*v)))
                             .or_insert_with(zero),
-                        &acu.mul(cv)?,
+                        &acu,
+                        cv,
                     )?;
                 }
             }
+            // The term of `a`, made when a general constant first needs it.
+            let mut ta = None;
             if !y.constant.is_zero() {
-                let ay = a.mul(&y.constant)?;
+                let ty = map_constant(&mut constants, map, usize::from(j));
+                let ay = product_of(a, &mut ta, &y.constant, ty)?;
                 for (u, cu) in &x.terms {
-                    add(vector.entry(*u).or_insert_with(zero), &ay.mul(cu)?)?;
+                    add_product(vector.entry(*u).or_insert_with(zero), &ay, cu)?;
                 }
                 if !x.constant.is_zero() {
-                    add(&mut constant, &ay.mul(&x.constant)?)?;
+                    let tx = map_constant(&mut constants, map, usize::from(i));
+                    add_to_sum(&mut constant_sum, &mut constant, &ay, &x.constant, tx)?;
                 }
             }
             if !x.constant.is_zero() {
-                let ax = a.mul(&x.constant)?;
+                let tx = map_constant(&mut constants, map, usize::from(i));
+                let ax = product_of(a, &mut ta, &x.constant, tx)?;
                 for (v, cv) in &y.terms {
-                    add(vector.entry(*v).or_insert_with(zero), &ax.mul(cv)?)?;
+                    add_product(vector.entry(*v).or_insert_with(zero), &ax, cv)?;
                 }
             }
         }
         for (i, a) in self.r1.entries() {
             let x = &map[usize::from(i)];
             for (u, cu) in &x.terms {
-                add(vector.entry(*u).or_insert_with(zero), &a.mul(cu)?)?;
+                add_product(vector.entry(*u).or_insert_with(zero), a, cu)?;
             }
             if !x.constant.is_zero() {
-                add(&mut constant, &a.mul(&x.constant)?)?;
+                let tx = map_constant(&mut constants, map, usize::from(i));
+                add_to_sum(&mut constant_sum, &mut constant, a, &x.constant, tx)?;
             }
         }
+        constant_sum.finish_into(&mut constant)?;
         Ok(Self {
             r2: SparsePolyMat::new(
                 ring.clone(),
