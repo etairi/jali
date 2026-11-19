@@ -217,6 +217,12 @@ impl Statement {
     /// Whether `witness` satisfies the statement: [`Error::Witness`] if not, with no
     /// indication of which condition fails.
     pub fn check(&self, witness: &Witness) -> Result<(), Error> {
+        self.check_derived(witness).map(|_| ())
+    }
+
+    /// [`Statement::check`], returning what it derives from the witness for the prover's first
+    /// level, which needs the same transforms, pair products and norm.
+    pub(crate) fn check_derived(&self, witness: &Witness) -> Result<Derived, Error> {
         let (ring, d) = (&self.ring, self.ring.degree());
         if witness.vectors.len() != self.r || witness.vectors.iter().any(|v| v.len() != self.n * d)
         {
@@ -248,7 +254,38 @@ impl Statement {
         if full_ok.iter().chain(&constant_ok).any(|ok| !ok) {
             return Err(Error::Witness);
         }
-        Ok(())
+        Ok(Derived {
+            hats,
+            pairs,
+            norm_sq: norm,
+        })
+    }
+}
+
+/// What a prover level derives from its witness before anything else: the transforms of the
+/// vectors, their pair products $`\langle s_i,s_j\rangle`$ ([`all_pairs`]) and the squared
+/// norm, the transforms and products wiped on drop.
+pub(crate) struct Derived {
+    pub(crate) hats: Zeroizing<Vec<Vec<u64>>>,
+    pub(crate) pairs: Zeroizing<Vec<Vec<u64>>>,
+    pub(crate) norm_sq: u128,
+}
+
+impl Derived {
+    /// The transforms, pair products and squared norm of `witness`.
+    pub(crate) fn of(ring: &Rq, witness: &[Zeroizing<Vec<u64>>]) -> Self {
+        let hats: Zeroizing<Vec<Vec<u64>>> =
+            Zeroizing::new(witness.iter().map(|v| ring.ntt_many(v)).collect());
+        let pairs = Zeroizing::new(all_pairs(ring, &hats));
+        let norm_sq = witness
+            .iter()
+            .map(|v| ring.norm_sq(v))
+            .fold(0, u128::saturating_add);
+        Self {
+            hats,
+            pairs,
+            norm_sq,
+        }
     }
 }
 

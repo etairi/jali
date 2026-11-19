@@ -41,7 +41,8 @@ fn lane_projections_equal_wide_ones() {
     // 2^32 - 99: centred values reach 2^31 - 50, so a lane flushes after every step there.
     for q in [65557u64, 4294967197, 281474976710597] {
         let ring = Rq::new(q, 64).unwrap();
-        for bound in [1u64, 1 << 15, (q - 1) / 2] {
+        // 8-bit lanes up to 127 (flushed every step there), 32-bit lanes from 128 on.
+        for bound in [1u64, 2, 126, 127, 128, 1 << 15, (q - 1) / 2] {
             // Within one block, then over several blocks, a partial last one and two waves.
             for len in [64 * 5, 64 * 1400 + 3] {
                 let w = witness(&mut rng, q, 3, len, bound);
@@ -131,8 +132,9 @@ fn interleaved_tables_give_the_same_polynomials() {
         .chain(LARGE)
     {
         let ring = Rq::new(q, 64).unwrap();
-        // the general loop (1, 2, 9) and every specialized width (3 to 8)
-        for lambda in 1usize..=9 {
+        // the general loop (1, 2) and every specialized width (3 to 8), the largest λ of the
+        // moduli above 2^16
+        for lambda in 1usize..=MAX_LAMBDA {
             let omega: Vec<Vec<u64>> = (0..lambda)
                 .map(|_| (0..256).map(|_| rng.below(q)).collect())
                 .collect();
@@ -387,48 +389,135 @@ fn final_witnesses_have_one_encoding() {
 
 /// The column sums at the largest magnitudes their bounds allow, every lane at
 /// $`\pm32(q-1)`$, and on random tables, against exact integer sums, on both sides of
-/// $`2^{58}`$ and for every width (the specialized 3 to 8 and the general loop).
+/// $`2^{32}`$ and $`2^{58}`$, for every width (the specialized 3 to 8 and the general loop for
+/// 1 and 2) and for one, two and four columns at once.
 #[test]
 fn column_sums_are_exact_at_their_bounds() {
     let mut rng = TestRng::new(83);
     for q in [65557u64, 4294967197].into_iter().chain(LARGE) {
         let ring = Rq::new(q, 64).unwrap();
         let half = ((q - 1) / 2) as i64;
-        for lambda in 1usize..=9 {
-            let tables: Vec<Vec<i64>> = vec![
-                vec![half; 64 * 256 * lambda],
-                vec![-half; 64 * 256 * lambda],
-                (0..64 * 256 * lambda)
+        for lambda in 1usize..=MAX_LAMBDA {
+            let n = 64 * 81 * lambda;
+            let all: Vec<Vec<i64>> = vec![
+                vec![half; n],
+                vec![-half; n],
+                (0..n)
                     .map(|i| if i % 2 == 0 { half } else { -half })
                     .collect(),
-                (0..64 * 256 * lambda)
-                    .map(|_| rng.below(q) as i64 - half)
-                    .collect(),
+                (0..n).map(|_| rng.below(q) as i64 - half).collect(),
             ];
-            for table in &tables {
-                for column in [
-                    [0u8; 64],
-                    [255u8; 64],
-                    core::array::from_fn(|_| rng.below(256) as u8),
-                ] {
-                    let mut sums = vec![0u64; lambda];
-                    column_sums(&ring, table, lambda, &column, &mut sums);
-                    for (k, s) in sums.iter().enumerate() {
-                        let exact: i128 = column
+            for values in all {
+                let mut tables = vec![ProjectionTable {
+                    lambda,
+                    entries: TableEntries::Wide(values.clone()),
+                }];
+                if q < 1 << 32 {
+                    tables.push(ProjectionTable {
+                        lambda,
+                        entries: TableEntries::Narrow(values.iter().map(|x| *x as i32).collect()),
+                    });
+                }
+                for table in &tables {
+                    let columns: [[u8; 64]; 4] = [
+                        [0u8; 64],
+                        [255u8; 64],
+                        core::array::from_fn(|_| rng.below(256) as u8),
+                        core::array::from_fn(|_| rng.below(256) as u8),
+                    ];
+                    let exact = |column: &[u8; 64], k: usize| -> u64 {
+                        let e: i128 = column
                             .iter()
                             .enumerate()
-                            .map(|(g, b)| {
-                                i128::from(table[(g * 256 + usize::from(*b)) * lambda + k])
-                            })
+                            .map(|(g, b)| i128::from(table.entry(g, *b, k)))
                             .sum();
+                        e.rem_euclid(i128::from(q)) as u64
+                    };
+                    let mut four = [[0u64; 8]; 4];
+                    table.sums(&ring, &columns, &mut four);
+                    let mut two = [[0u64; 8]; 2];
+                    table.sums(&ring, &[columns[2], columns[3]], &mut two);
+                    for (c, column) in columns.iter().enumerate() {
+                        let mut one = [[0u64; 8]; 1];
+                        table.sums(&ring, &[*column], &mut one);
+                        for k in 0..lambda {
+                            let e = exact(column, k);
+                            assert_eq!(one[0][k], e, "q {q} lambda {lambda} one column");
+                            assert_eq!(four[c][k], e, "q {q} lambda {lambda} four columns");
+                            if c >= 2 {
+                                assert_eq!(two[c - 2][k], e, "q {q} lambda {lambda} two columns");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The table of `projection_table`, for every group, byte and $`k`$, holds the sum of the
+/// table indexed by the byte itself (the one of 0.3.3, built here as it was), so that the
+/// polynomials of `block_polys` are those of a byte table: below $`2^{32}`$, between $`2^{32}`$
+/// and $`2^{58}`$ and above, for every λ of the supported moduli.
+#[test]
+fn the_pattern_table_holds_the_byte_table_sums() {
+    let mut rng = TestRng::new(84);
+    for q in [
+        65557u64,
+        4294967197,
+        (1 << 40) + 21,
+        (1 << 61) - 1,
+        LARGE[0],
+    ] {
+        let Ok(ring) = Rq::new(q, 64) else { continue };
+        for lambda in 3..=MAX_LAMBDA {
+            let omega: Vec<Vec<u64>> = (0..lambda)
+                .map(|_| (0..256).map(|_| rng.below(q)).collect())
+                .collect();
+            let mut reference = vec![0i64; 64 * 256 * lambda];
+            for (k, w) in omega.iter().enumerate() {
+                for group in 0..64 {
+                    for byte in 0..256usize {
+                        let mut s = 0u64;
+                        for (e, v) in DECODE[byte].iter().enumerate() {
+                            match v {
+                                1 => s = ring.add(s, w[4 * group + e]),
+                                -1 => s = ring.sub(s, w[4 * group + e]),
+                                _ => {}
+                            }
+                        }
+                        reference[(group * 256 + byte) * lambda + k] = ring.center(s);
+                    }
+                }
+            }
+            let table = projection_table(&ring, &omega);
+            for group in 0..64 {
+                for byte in 0..=255u8 {
+                    for k in 0..lambda {
                         assert_eq!(
-                            *s,
-                            exact.rem_euclid(i128::from(q)) as u64,
-                            "q {q} lambda {lambda}"
+                            table.entry(group, byte, k),
+                            reference[(group * 256 + usize::from(byte)) * lambda + k],
+                            "q {q} lambda {lambda} group {group} byte {byte} k {k}"
                         );
                     }
                 }
             }
+        }
+    }
+}
+
+/// Every pattern index is below 81, and two bytes share one exactly when their four entries
+/// agree.
+#[test]
+fn patterns_index_the_sign_patterns() {
+    for a in 0..256usize {
+        assert!(PATTERN[a] < 81);
+        for b in 0..256usize {
+            assert_eq!(
+                PATTERN[a] == PATTERN[b],
+                DECODE[a] == DECODE[b],
+                "bytes {a} {b}"
+            );
         }
     }
 }
@@ -502,5 +591,59 @@ fn radix_digits_match_digit_by_digit_division() {
                 assert_eq!(got, want, "h {h} len {len}");
             }
         }
+    }
+}
+
+/// `combine_hats` and `combine` against the sparse products they replaced
+/// (`Rq::mul_sparse_add`), for sparse polynomials with coefficients ±1 and ±2 at distinct
+/// positions (the shape of the challenges) and random vectors, at moduli on both sides of
+/// $`2^{40}`$.
+#[test]
+fn transform_combinations_equal_the_sparse_products() {
+    let mut rng = TestRng::new(85);
+    for q in [4294967197u64, LARGE[0], LARGE[3]] {
+        let ring = Rq::new(q, 64).unwrap();
+        let d = ring.degree();
+        let (r, n) = (3usize, 5usize);
+        let challenges: Vec<Sparse> = (0..r)
+            .map(|_| {
+                let mut positions: Vec<usize> = (0..d).collect();
+                for i in 0..d {
+                    positions.swap(i, i + rng.below((d - i) as u64) as usize);
+                }
+                let values = [1i64, -1, 2, -2];
+                Sparse {
+                    terms: positions[..54]
+                        .iter()
+                        .map(|p| (*p, values[rng.below(4) as usize]))
+                        .collect(),
+                }
+            })
+            .collect();
+        let vectors: Vec<Vec<u64>> = (0..r)
+            .map(|_| (0..n * d).map(|_| rng.below(q)).collect())
+            .collect();
+        let mut reference = vec![0u64; n * d];
+        for (c, v) in challenges.iter().zip(&vectors) {
+            for x in 0..n {
+                ring.mul_sparse_add(
+                    c,
+                    &v[x * d..(x + 1) * d],
+                    &mut reference[x * d..(x + 1) * d],
+                );
+            }
+        }
+        let c_hats = challenge_hats(&ring, &challenges);
+        let v_hats: Vec<Vec<u64>> = vectors.iter().map(|v| ring.ntt_many(v)).collect();
+        assert_eq!(
+            *combine_hats(&ring, &c_hats, &v_hats, n),
+            reference,
+            "q {q} stored"
+        );
+        assert_eq!(
+            combine(&ring, &c_hats, &vectors, n),
+            reference,
+            "q {q} computed"
+        );
     }
 }
