@@ -10,17 +10,26 @@ use zeroize::Zeroizing;
 mod oracle_tests;
 
 /// The `count` bits from bit `start` of `buf` on, least significant first, for `count` at
-/// most 128: the bytes that hold them (at most 17) are read whole and shifted.
+/// most 128: the bytes that hold them (at most 17) are read whole and shifted. Where the buffer
+/// holds sixteen bytes from the first one, they are read as one little-endian word, whose bytes
+/// past the field the mask clears.
 pub(crate) fn bits(buf: &[u8], start: usize, count: u32) -> u128 {
     if count == 0 {
         return 0;
     }
     let shift = (start % 8) as u32;
-    let bytes = &buf[start / 8..(start + count as usize).div_ceil(8)];
-    let mut value = 0u128;
-    for (i, byte) in bytes.iter().take(16).enumerate() {
-        value |= u128::from(*byte) << (8 * i);
-    }
+    let first = start / 8;
+    let bytes = &buf[first..(start + count as usize).div_ceil(8)];
+    let mut value = match buf.get(first..first + 16) {
+        Some(word) => u128::from_le_bytes(word.try_into().expect("sixteen bytes")),
+        None => {
+            let mut value = 0u128;
+            for (i, byte) in bytes.iter().take(16).enumerate() {
+                value |= u128::from(*byte) << (8 * i);
+            }
+            value
+        }
+    };
     value >>= shift;
     if let Some(byte) = bytes.get(16) {
         // Only when count + shift > 128, so shift > 0.
