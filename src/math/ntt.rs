@@ -192,9 +192,10 @@ impl NttPlan {
     ///
     /// Rings build one plan per prime, and the statement compiler builds rings for every form
     /// it lowers, so the tables of the same few plans were computed again and again (a tenth of
-    /// a PCS proof's time, measured 2026-11-16). Only rings call this, with the primes of
-    /// `NTT_PRIMES` at the five degrees, so the memo holds at most 45 plans, about 2 MB at the
-    /// most. Plans are deterministic, so a shared one equals a new one. Rings keep copies.
+    /// the time of an end-to-end lattice test, measured 2026-11-16). Only rings call this, with
+    /// the primes of `NTT_PRIMES` at the five degrees, so the memo holds at most 45 plans, about
+    /// 2 MB at the most. Plans are deterministic, so a shared one equals a new one. Rings keep
+    /// copies.
     pub(crate) fn shared(p: u64, d: usize, psi: u64) -> Result<Arc<Self>, Error> {
         type Memo = Mutex<HashMap<(u64, usize, u64), Arc<NttPlan>>>;
         static PLANS: OnceLock<Memo> = OnceLock::new();

@@ -1,7 +1,7 @@
 //! `MaskLinear` against the three products it replaces in the quadratic proof's attempts:
 //! $`\mathrm{bilinear}(s,y)+\mathrm{bilinear}(y,s)+r_1\cdot y`$, and `Quadratic::evaluate`
 //! against $`\mathrm{bilinear}(y,y)`$, for equations with zero, scalar, monomial and general
-//! entries and masks of every shape, at small, PCS-size and large moduli; `abdlop::scale`
+//! entries and masks of every shape, at small, 69-bit and large moduli; `abdlop::scale`
 //! against a product per entry.
 use super::*;
 

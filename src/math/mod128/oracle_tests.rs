@@ -32,8 +32,8 @@ fn product_mod(a: u128, b: u128, q: u128) -> u128 {
     int::low_u128(&U256::from_u128(a).mul_mod_vartime(&U256::from_u128(b), &q))
 }
 
-/// The moduli: for each bit length 64 to 126 an odd and an even random one, then edges and the
-/// PCS attribute modulus.
+/// The moduli: for each bit length 64 to 126 an odd and an even random one, then edges and a
+/// prime of 69.44 bits.
 fn moduli(rng: &mut Rng) -> Vec<u128> {
     let mut out = Vec::new();
     for s in 64..=126u32 {

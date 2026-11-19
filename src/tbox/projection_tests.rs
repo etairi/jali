@@ -412,10 +412,9 @@ fn combined_rows_equal_the_combination_of_the_rows() {
 fn weighted_rows_agree_with_modular_additions() {
     // The table sums below 2^119 and the u128 sums up to 2^120 against the modular additions
     // that larger moduli take, at extreme and random weights, for every width of the table's
-    // specialized sums (1 to 8) and the general loop (9). The moduli: small ones, the PCS
-    // attribute modulus (log2 q = 69.44), and the largest odd ones below 2^119 and 2^120. One
-    // polynomial's 64 columns take the u128 sums, three the table, and the table is also
-    // checked directly at 64.
+    // specialized sums (1 to 8) and the general loop (9). The moduli: small ones, a prime of
+    // 69.44 bits, and the largest odd ones below 2^119 and 2^120. One polynomial's 64 columns
+    // take the u128 sums, three the table, and the table is also checked directly at 64.
     let mut rng = Rng(15);
     let moduli: [i128; 6] = [
         65537,

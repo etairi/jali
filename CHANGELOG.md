@@ -60,9 +60,8 @@ The proofs of the LNP22 modules and their transcripts are those of 0.2.0, in bot
   is unchanged. Measured on an Apple M4, one thread, against the first 0.3.0 commit:
   - Moduli from $`2^{63}`$ to $`2^{126}`$ use native 128-bit arithmetic: Barrett products,
     Shoup multipliers, residues and the CRT in words, instead of `crypto-bigint`'s generic
-    division. The lattice test of the predicate-credential system, whose attribute and
-    possession sets have $`q\approx2^{69.4}`$, needs 6.2 times fewer cycles, its attribute and
-    membership proofs about 7 times less time.
+    division. An end-to-end lattice test whose statements have $`q\approx2^{69.4}`$ needs 6.2
+    times fewer cycles, its two largest proofs about 7 times less time.
   - The prover's witness checks compute only the constant coefficients they test, from witness
     products shared by all equations. The exact integer evaluation behind lifted constraints
     uses 64-bit coefficients when a bound shows that nothing overflows. NTT plans are built once
@@ -80,9 +79,9 @@ The proofs of the LNP22 modules and their transcripts are those of 0.2.0, in bot
   instead of holding the 256 rows of each family at once. The statement's equations move into
   the evaluation proof instead of being copied, public matrices share their entries between
   clones, and the selectors and approximate blocks of a compiled statement hold only their
-  nonzero entries. In the lattice test of the predicate-credential system the peak live heap
-  of each step falls 2.1 to 4.2 times (the attribute proof from 601 to 225 MiB), and the
-  memory that Kyber1024 proofs and their verification allocate 6.3 to 8.5 times.
+  nonzero entries. In that end-to-end lattice test the peak live heap of each step falls 2.1 to
+  4.2 times (the largest proof's from 601 to 225 MiB), and the memory that Kyber1024 proofs and
+  their verification allocate 6.3 to 8.5 times.
 - **Faster again, with byte-identical proofs.** Measured on an Apple M4, one thread, against the
   0.3.0 work before these changes (commit 9bb4c07):
   - The evaluation proof combines the 256 projection rows of a family with the weights of each
@@ -96,10 +95,10 @@ The proofs of the LNP22 modules and their transcripts are those of 0.2.0, in bot
   - The AES-256-CTR keystream is buffered, squeezed values below $`2^{64}`$ are reduced by
     Barrett's method, and LinHC's two key products share one transform of their vector.
 
-  The lattice test of the predicate-credential system needs 1.88 times fewer cycles, 1.79 times
-  in the extractable mode, Kyber1024 proofs 2.7 to 3.0 times fewer and their verification 4.9
-  to 5.2 times fewer. The provers of the credential test hold 1.5% to 2.8% more memory, the
-  transformed quadratic coefficients.
+  The end-to-end lattice test needs 1.88 times fewer cycles, 1.79 times in the extractable
+  mode, Kyber1024 proofs 2.7 to 3.0 times fewer and their verification 4.9 to 5.2 times fewer.
+  The provers of that test hold 1.5% to 2.8% more memory, the transformed quadratic
+  coefficients.
 - **LaBRADOR, faster and parallel, with byte-identical proofs.** The prover keeps the
   polynomials of the aggregated projection constraints between their two uses when they take
   at most 64 MiB, instead of streaming the projection a third time. The projection is read in
