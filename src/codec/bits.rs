@@ -9,12 +9,17 @@ mod writer_tests;
 pub(crate) trait CodeWriter {
     /// [`BitWriter::unsigned`].
     fn unsigned(&mut self, value: u128, bits: u32) -> Result<(), Error>;
-    /// [`BitWriter::uniform`].
+    /// [`BitWriter::uniform`]. Production code writes runs with [`CodeWriter::uniform_each`].
+    #[cfg(test)]
     fn uniform(&mut self, value: u128, modulus: u128) -> Result<(), Error>;
     /// [`BitWriter::uniform_u256`].
     fn uniform_u256(&mut self, value: &U256, modulus: &U256) -> Result<(), Error>;
     /// `count` zero bits, as [`BitWriter::zeros`] appends them.
     fn zeros(&mut self, count: u64);
+    /// [`BitWriter::uniform`] of the low 128 bits of each value, in order: the same codes and
+    /// the same error at the first value not below `modulus`, with the width and the checks
+    /// of the modulus taken once (and none for no values).
+    fn uniform_each(&mut self, values: &[U256], modulus: u128) -> Result<(), Error>;
 }
 
 /// Append-only LSB-first bit writer.
@@ -222,6 +227,7 @@ impl CodeWriter for BitWriter {
     fn unsigned(&mut self, value: u128, bits: u32) -> Result<(), Error> {
         BitWriter::unsigned(self, value, bits)
     }
+    #[cfg(test)]
     fn uniform(&mut self, value: u128, modulus: u128) -> Result<(), Error> {
         BitWriter::uniform(self, value, modulus)
     }
@@ -230,6 +236,36 @@ impl CodeWriter for BitWriter {
     }
     fn zeros(&mut self, count: u64) {
         BitWriter::zeros(self, count)
+    }
+    fn uniform_each(&mut self, values: &[U256], modulus: u128) -> Result<(), Error> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let bits = uniform_bits(modulus)?;
+        for x in values {
+            self.put(below(crate::math::int::low_u128(x), modulus)?, bits);
+        }
+        Ok(())
+    }
+}
+
+/// The width of [`BitWriter::uniform`]'s code for `modulus`, which must be at least 2.
+#[inline]
+fn uniform_bits(modulus: u128) -> Result<u32, Error> {
+    if modulus < 2 {
+        return Err(Error::Encoding);
+    }
+    Ok(128 - (modulus - 1).leading_zeros())
+}
+
+/// `value` if it is below `modulus` (so that it fits the code's width), the check of
+/// [`BitWriter::uniform`].
+#[inline(always)]
+fn below(value: u128, modulus: u128) -> Result<u128, Error> {
+    if value < modulus {
+        Ok(value)
+    } else {
+        Err(Error::Encoding)
     }
 }
 
@@ -288,6 +324,7 @@ impl CodeWriter for SegmentWriter {
         self.spill(STAGE);
         result
     }
+    #[cfg(test)]
     fn uniform(&mut self, value: u128, modulus: u128) -> Result<(), Error> {
         let result = self.bits.uniform(value, modulus);
         self.spill(STAGE);
@@ -297,6 +334,21 @@ impl CodeWriter for SegmentWriter {
         let result = self.bits.uniform_u256(value, modulus);
         self.spill(STAGE);
         result
+    }
+    fn uniform_each(&mut self, values: &[U256], modulus: u128) -> Result<(), Error> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let bits = uniform_bits(modulus)?;
+        for x in values {
+            let value = below(crate::math::int::low_u128(x), modulus);
+            if let Ok(value) = value {
+                self.bits.put(value, bits);
+            }
+            self.spill(STAGE);
+            value?;
+        }
+        Ok(())
     }
     fn zeros(&mut self, count: u64) {
         let run = self.bits.zero_run(count);
