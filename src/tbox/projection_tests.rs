@@ -410,14 +410,27 @@ fn combined_rows_equal_the_combination_of_the_rows() {
 
 #[test]
 fn weighted_rows_agree_with_modular_additions() {
-    // The u128 sums against the modular additions that larger moduli take, at extreme and
-    // random weights.
+    // The table sums below 2^119 and the u128 sums up to 2^120 against the modular additions
+    // that larger moduli take, at extreme and random weights, for every width of the table's
+    // specialized sums (1 to 8) and the general loop (9). The moduli: small ones, the PCS
+    // attribute modulus (log2 q = 69.44), and the largest odd ones below 2^119 and 2^120. One
+    // polynomial's 64 columns take the u128 sums, three the table, and the table is also
+    // checked directly at 64.
     let mut rng = Rng(15);
-    for q in [65537u64, 4294967291, 18446744073709551557] {
-        let ring = Ring::new(i128::from(q), 64).unwrap();
-        let cols = 3 * 64;
-        let matrices = Projections::for_tests(&[q as u8; 32], cols, cols);
-        let weights: Vec<Vec<U256>> = (0..3)
+    let moduli: [i128; 6] = [
+        65537,
+        4294967291,
+        18446744073709551557,
+        800602353498606932557,
+        (1 << 119) - 1,
+        (1 << 120) - 1,
+    ];
+    for (q, lambda) in moduli
+        .into_iter()
+        .flat_map(|q| (1..=9).map(move |l| (q, l)))
+    {
+        let ring = Ring::new(q, 64).unwrap();
+        let weights: Vec<Vec<U256>> = (0..lambda)
             .map(|k| {
                 (0..256)
                     .map(|j| match (k + j) % 3 {
@@ -429,12 +442,23 @@ fn weighted_rows_agree_with_modular_additions() {
             })
             .collect();
         let refs: Vec<&[U256]> = weights.iter().map(|w| &w[..]).collect();
-        for exact in [true, false] {
-            assert_eq!(
-                weighted_rows(&ring, &matrices, exact, cols, &refs).unwrap(),
-                weighted_rows_general(&ring, &matrices, exact, cols, &refs).unwrap(),
-                "q {q} exact {exact}"
-            );
+        for cols in [64, 3 * 64] {
+            let matrices = Projections::for_tests(&[q as u8; 32], cols, cols);
+            for exact in [true, false] {
+                let expected = weighted_rows_general(&ring, &matrices, exact, cols, &refs).unwrap();
+                assert_eq!(
+                    weighted_rows(&ring, &matrices, exact, cols, &refs).unwrap(),
+                    expected,
+                    "q {q} lambda {lambda} cols {cols} exact {exact}"
+                );
+                if q < 1 << 119 {
+                    assert_eq!(
+                        weighted_rows_by_table(&matrices, exact, cols, &refs, q as u128).unwrap(),
+                        expected,
+                        "table, q {q} lambda {lambda} cols {cols} exact {exact}"
+                    );
+                }
+            }
         }
     }
 }
