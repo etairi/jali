@@ -339,3 +339,44 @@ fn lifts_remainders_and_scaled_vectors_match_division() {
         }
     }
 }
+
+/// Where the ring takes the IFMA primes, its products, inner products of 300 polynomials and
+/// products accumulated in the transform domain equal those of the ring on the primes of
+/// `NTT_PRIMES`, on random and extreme operands: the exact CRT returns the same residues.
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[test]
+fn ifma_rings_equal_the_word_rings() {
+    let mut rng = TestRng::new(52);
+    for q in MODULI {
+        let ifma = Rq::new(q, 64).unwrap();
+        let word = Rq::new_word(q, 64).unwrap();
+        if ifma.ifma.is_empty() {
+            continue;
+        }
+        assert!(word.ifma.is_empty());
+        for case in 0..3 {
+            let poly = |rng: &mut TestRng| -> Vec<u64> {
+                match case {
+                    0 => vec![q - 1; 64],
+                    1 => (0..64)
+                        .map(|i| if i % 2 == 0 { q - 1 } else { q / 2 })
+                        .collect(),
+                    _ => random_poly(&word, rng),
+                }
+            };
+            let (a, b) = (poly(&mut rng), poly(&mut rng));
+            assert_eq!(
+                ifma.poly_mul(&a, &b),
+                word.poly_mul(&a, &b),
+                "q {q} case {case}"
+            );
+            let xs: Vec<u64> = (0..300).flat_map(|_| poly(&mut rng)).collect();
+            let ys: Vec<u64> = (0..300).flat_map(|_| poly(&mut rng)).collect();
+            assert_eq!(
+                ifma.inner_hat(&ifma.ntt_many(&xs), &ifma.ntt_many(&ys)),
+                word.inner_hat(&word.ntt_many(&xs), &word.ntt_many(&ys)),
+                "q {q} case {case} inner product"
+            );
+        }
+    }
+}
