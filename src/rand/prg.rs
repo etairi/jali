@@ -1,7 +1,7 @@
 use crate::Error;
+use crate::sponge::{Shake128, Shake128Reader};
 use aes::Aes256;
 use ctr::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
-use shake::{ExtendableOutput, Shake128, Shake128Reader, Update, XofReader};
 use zeroize::Zeroize;
 
 /// A deterministic byte stream with explicit failure on exhaustion.

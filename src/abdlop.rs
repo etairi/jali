@@ -1423,7 +1423,7 @@ impl Abdlop {
 /// \mathrm{LE64}(|payload|)\,\|\,payload)`$, each hash taken to 32 bytes. Only
 /// [`Abdlop::fingerprint`] uses it, so that the keys of `commit_with_seed` stay those of 0.1.
 fn legacy_chain(items: &[(&[u8], &[u8])]) -> [u8; 32] {
-    use shake::{ExtendableOutput, Shake128, Update, XofReader};
+    use crate::sponge::Shake128;
     let hash = |parts: &[&[u8]]| {
         let mut h = Shake128::default();
         for part in parts {
