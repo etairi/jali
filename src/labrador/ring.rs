@@ -272,12 +272,16 @@ impl Rq {
     /// transformed canonical polynomials, or of their sums and differences within that count.
     pub(crate) fn intt_into(&self, h: &mut [u64], out: &mut [u64]) {
         debug_assert!(h.len() == self.hat_len() && out.len() == self.d);
-        let mut residues = Vec::with_capacity(self.plans.len());
         for (plan, block) in self.plans.iter().zip(h.chunks_exact_mut(self.d)) {
             plan.inverse_mont(block);
-            residues.push(block.to_vec());
         }
-        self.crt.reconstruct_into(&residues, out);
+        // At most three primes (`Rq::new`): the blocks themselves are the CRT's residues.
+        let mut residues: [&[u64]; 3] = [&[]; 3];
+        for (slot, block) in residues.iter_mut().zip(h.chunks_exact(self.d)) {
+            *slot = block;
+        }
+        self.crt
+            .reconstruct_into(&residues[..self.plans.len()], out);
     }
 
     /// [`Rq::intt_into`] into a new vector.

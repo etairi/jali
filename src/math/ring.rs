@@ -99,14 +99,14 @@ impl Garner {
     /// The digits of the integer $`X\in[0,P)`$ whose residues are `residues[i][j]`, each in
     /// $`[0,p_i)`$, and whether $`X>\lfloor P/2\rfloor`$.
     #[inline(always)]
-    fn digits(&self, residues: &[Vec<u64>], j: usize, digits: &mut [u64; 9]) -> bool {
+    fn digits<R: AsRef<[u64]>>(&self, residues: &[R], j: usize, digits: &mut [u64; 9]) -> bool {
         for (i, p) in self.primes.iter().enumerate() {
             let mut sum = 0;
             for (v, (w, w_shoup)) in digits[..i].iter().zip(&self.prefixes[i]) {
                 sum = add_mod(sum, shoup_mul(*v, *w, *w_shoup, *p), *p);
             }
             let (w, w_shoup) = self.inverses[i];
-            digits[i] = shoup_mul(sub_mod(residues[i][j], sum, *p), w, w_shoup, *p);
+            digits[i] = shoup_mul(sub_mod(residues[i].as_ref()[j], sum, *p), w, w_shoup, *p);
         }
         for (v, h) in digits[..self.primes.len()].iter().zip(&self.half).rev() {
             if v != h {
@@ -160,9 +160,9 @@ impl<const K: usize> FixedGarner<K> {
     }
 }
 /// The residues of every coefficient, prime by prime, as `K` slices of one length.
-fn columns<const K: usize>(residues: &[Vec<u64>]) -> [&[u64]; K] {
-    let d = residues[0].len();
-    core::array::from_fn(|i| &residues[i][..d])
+fn columns<const K: usize>(residues: &[impl AsRef<[u64]>]) -> [&[u64]; K] {
+    let d = residues[0].as_ref().len();
+    core::array::from_fn(|i| &residues[i].as_ref()[..d])
 }
 
 /// $`vw\bmod q`$ for a digit $`v<2^{64}`$: `shoup_mul128` of $`v`$, with two word products for
@@ -213,13 +213,13 @@ impl SmallCrt {
     /// [`SmallCrt::reconstruct`] of every coefficient, with the constants of one to four
     /// primes in arrays, as 256-bit values (the oracle of the batched CRT tests).
     #[cfg(test)]
-    pub(crate) fn reconstruct_all(&self, residues: &[Vec<u64>]) -> Vec<U256> {
-        let mut out = vec![0; residues[0].len()];
+    pub(crate) fn reconstruct_all<R: AsRef<[u64]>>(&self, residues: &[R]) -> Vec<U256> {
+        let mut out = vec![0; residues[0].as_ref().len()];
         self.reconstruct_into(residues, &mut out);
         out.into_iter().map(U256::from_u64).collect()
     }
     /// [`SmallCrt::reconstruct`] of the first `out.len()` coefficients, into `out`.
-    pub(crate) fn reconstruct_into(&self, residues: &[Vec<u64>], out: &mut [u64]) {
+    pub(crate) fn reconstruct_into<R: AsRef<[u64]>>(&self, residues: &[R], out: &mut [u64]) {
         match self.garner.primes.len() {
             1 => self.reconstruct_fixed::<1>(residues, out),
             2 => self.reconstruct_fixed::<2>(residues, out),
@@ -232,7 +232,7 @@ impl SmallCrt {
             }
         }
     }
-    fn reconstruct_fixed<const K: usize>(&self, residues: &[Vec<u64>], out: &mut [u64]) {
+    fn reconstruct_fixed<const K: usize>(&self, residues: &[impl AsRef<[u64]>], out: &mut [u64]) {
         let garner = self.garner.fixed::<K>();
         let columns = columns::<K>(residues);
         let prefixes: [(u64, u64); K] = core::array::from_fn(|i| self.prefixes_q[i]);
@@ -253,7 +253,7 @@ impl SmallCrt {
     /// The canonical representative modulo $`q`$ of the centred integer whose residues modulo
     /// the primes are `residues[i][j]`, each in $`[0,p_i)`$.
     #[inline]
-    pub(crate) fn reconstruct(&self, residues: &[Vec<u64>], j: usize) -> u64 {
+    pub(crate) fn reconstruct<R: AsRef<[u64]>>(&self, residues: &[R], j: usize) -> u64 {
         let mut digits = [0u64; 9];
         let negative = self.garner.digits(residues, j, &mut digits);
         let mut x = 0;
@@ -320,9 +320,9 @@ impl WideCrt {
     }
     /// [`WideCrt::reconstruct`] of every coefficient, with the constants of one to four primes
     /// in arrays when $`q`$ has the native tail.
-    pub(crate) fn reconstruct_all(
+    pub(crate) fn reconstruct_all<R: AsRef<[u64]>>(
         &self,
-        residues: &[Vec<u64>],
+        residues: &[R],
         q: &NonZero<U256>,
         small: Option<&Divisor64>,
     ) -> Vec<U256> {
@@ -332,16 +332,16 @@ impl WideCrt {
                 .into_iter()
                 .map(U256::from_u128)
                 .collect(),
-            _ => (0..residues[0].len())
+            _ => (0..residues[0].as_ref().len())
                 .map(|j| self.reconstruct(residues, j, q, small))
                 .collect(),
         }
     }
     /// [`WideCrt::reconstruct_all`] as `u128`, for a modulus with the native tail
     /// ($`2^{63}\le q<2^{126}`$), whose polynomials keep two-word coefficients.
-    pub(crate) fn reconstruct_all_u128(
+    pub(crate) fn reconstruct_all_u128<R: AsRef<[u64]>>(
         &self,
-        residues: &[Vec<u64>],
+        residues: &[R],
         q: &NonZero<U256>,
         small: Option<&Divisor64>,
     ) -> Vec<u128> {
@@ -350,7 +350,7 @@ impl WideCrt {
             (Some(tail), 2) => self.reconstruct_fixed::<2>(tail, residues),
             (Some(tail), 3) => self.reconstruct_fixed::<3>(tail, residues),
             (Some(tail), 4) => self.reconstruct_fixed::<4>(tail, residues),
-            _ => (0..residues[0].len())
+            _ => (0..residues[0].as_ref().len())
                 .map(|j| int::low_u128(&self.reconstruct(residues, j, q, small)))
                 .collect(),
         }
@@ -358,7 +358,7 @@ impl WideCrt {
     fn reconstruct_fixed<const K: usize>(
         &self,
         tail: &NativeTail,
-        residues: &[Vec<u64>],
+        residues: &[impl AsRef<[u64]>],
     ) -> Vec<u128> {
         let garner = self.garner.fixed::<K>();
         let columns = columns::<K>(residues);
@@ -383,9 +383,9 @@ impl WideCrt {
     /// the primes are `residues[i][j]`, each in $`[0,p_i)`$; `small` is $`q`$ as a divisor
     /// when $`q<2^{64}`$.
     #[inline]
-    pub(crate) fn reconstruct(
+    pub(crate) fn reconstruct<R: AsRef<[u64]>>(
         &self,
-        residues: &[Vec<u64>],
+        residues: &[R],
         j: usize,
         q: &NonZero<U256>,
         small: Option<&Divisor64>,
