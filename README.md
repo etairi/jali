@@ -57,9 +57,10 @@ Jali is on [crates.io](https://crates.io/crates/jali). It needs Rust 1.95 or lat
 jali = { version = "0.3", features = ["serde"] }
 ```
 
-The crate forbids `unsafe` code and has no C dependencies. The exception is the optional `simd`
-feature on x86-64, whose one module of kernels calls intrinsics and processor-specific functions
-in `unsafe` blocks. The rest of the crate still denies `unsafe` code there.
+The crate forbids `unsafe` code and has no C dependencies. The exception is the `simd` feature,
+on by default, on x86-64: its one module of kernels calls intrinsics and processor-specific
+functions in `unsafe` blocks, and the rest of the crate still denies `unsafe` code there. Without
+default features the crate compiles no `unsafe` code at all.
 
 ## Quick start
 
@@ -191,9 +192,9 @@ guarantee and status.
 | `serde` | Parameter sets from JSON (`TboxParams::from_json`) and export of statement requirements. Proofs always use the binary codec. |
 | `parallel` | Rayon parallelism inside proving and verifying. Outputs do not depend on the number of threads. |
 | `test-utils` | Capture and replay of sampler randomness, for tests only. |
-| `simd` | Kernels for x86-64 chosen at run time when the processor has the instructions and the environment variable `JALI_SCALAR` is unset: with AVX-512F and AVX-512DQ the NTT, the residues, lazy sums and CRT of the RNS products and LaBRADOR's ring arithmetic, with BMI1 and BMI2 the Keccak permutation. They return the scalar code's outputs, so proofs do not depend on the processor. On other targets the feature changes nothing. |
+| `simd` | On by default. Kernels for x86-64 chosen at run time when the processor has the instructions and the environment variable `JALI_SCALAR` is unset: with AVX-512F and AVX-512DQ the NTT, the residues, lazy sums and CRT of the RNS products and LaBRADOR's ring arithmetic, with AVX-512 IFMA LaBRADOR's transforms and products below $`2^{51}`$ (over primes below $`2^{51}`$), with AVX-512BW, VL and VBMI LaBRADOR's projection and its column sums, with BMI1 and BMI2 the Keccak permutation. They return the scalar code's outputs, so proofs do not depend on the processor. On other targets, and on processors without the instructions, the scalar code runs. |
 
-There are no default features.
+`simd` is the only default feature.
 
 ## Supported parameters and limits
 
