@@ -267,11 +267,11 @@ fn radix_four_passes_equal_the_radix_two_stages() {
             let plan = NttPlan::new(p, d, pow_mod(root, (1024 / d) as u64, p)).unwrap();
             for a in inputs(p, d, &mut rng) {
                 let (mut four, mut two) = (a.clone(), a.clone());
-                plan.forward_mont(&mut four);
+                plan.forward_mont_radix4(&mut four);
                 plan.forward_mont_radix2(&mut two);
                 assert_eq!(four, two, "forward p {p} d {d}");
                 let (mut four, mut two) = (a.clone(), a.clone());
-                plan.inverse_mont(&mut four);
+                plan.inverse_mont_radix4(&mut four);
                 plan.inverse_mont_radix2(&mut two);
                 assert_eq!(four, two, "inverse p {p} d {d}");
             }
