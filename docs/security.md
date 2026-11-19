@@ -13,7 +13,12 @@ a vulnerability, see [SECURITY.md](../SECURITY.md).
   are wiped on drop, and so are seeds, once received, and the keys derived from them; the
   caller's own copy of a seed is the caller's to wipe. Integer copies and compiler-generated
   temporaries may remain on the stack.
-- **No `unsafe` code** (`#![forbid(unsafe_code)]`) and no C dependencies in the library.
+- **No `unsafe` code** (`#![forbid(unsafe_code)]`) and no C dependencies in the library, except
+  with the `simd` feature on x86-64. There the module `simd` calls AVX-512 intrinsics, its
+  loads and stores in `unsafe` blocks on arrays of fixed length, behind safe functions that
+  check the processor and the lengths, and the rest of the crate denies `unsafe` code
+  (`#![deny(unsafe_code)]`). The kernels return the outputs of the scalar code, which a test
+  compares for every NTT prime and degree.
 - **Formats are unstable.** The API, the proof encoding and the transcripts may change between
   versions, and proofs do not interoperate with other implementations. Since version 0.2 the
   transcripts follow draft-irtf-cfrg-fiat-shamir-04, an Internet-Draft that can still change

@@ -106,6 +106,10 @@ pub struct NttPlan {
     last: (u64, u64),
     /// The bit-reversal permutation of $`[0,d)`$.
     bit_reverse: Vec<u32>,
+    /// The twiddles of `zetas` and `inv_zetas` and their Shoup constants, each in its own
+    /// array, as the SIMD kernels load them.
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    simd: [Vec<u64>; 4],
 }
 
 impl NttPlan {
@@ -170,6 +174,13 @@ impl NttPlan {
             inv_zetas[k] = pair(pow_mod(z, p - 2, p));
         }
         let c = mul_mod(inv_d, r_inv, p);
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        let simd = [
+            zetas.iter().map(|w| w.0).collect(),
+            zetas.iter().map(|w| w.1).collect(),
+            inv_zetas.iter().map(|w| w.0).collect(),
+            inv_zetas.iter().map(|w| w.1).collect(),
+        ];
         Ok(Self {
             p,
             d,
@@ -186,7 +197,25 @@ impl NttPlan {
             zetas,
             inv_zetas,
             bit_reverse,
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            simd,
         })
+    }
+    /// The constants that the SIMD kernels read.
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    pub(crate) fn simd_tables(&self) -> crate::simd::NttTables<'_> {
+        crate::simd::NttTables {
+            p: self.p,
+            d: self.d,
+            zetas: &self.simd[0],
+            zetas_shoup: &self.simd[1],
+            inv_zetas: &self.simd[2],
+            inv_zetas_shoup: &self.simd[3],
+            r: self.r,
+            first: self.first,
+            scale: self.scale,
+            last: self.last,
+        }
     }
     /// The plan of [`NttPlan::new`], built once per process for each $`(p,d,\psi)`$ and shared.
     ///
@@ -292,11 +321,19 @@ impl NttPlan {
     /// butterflies: the upper input is reduced below $`2p`$, lazy Shoup products are below $`2p`$).
     pub(crate) fn forward_mont(&self, a: &mut [u64]) {
         debug_assert!(a.len() == self.d && a.iter().all(|x| *x < self.p));
-        // Two stages per pass on aarch64, one elsewhere, with the same outputs. The pairs of
-        // stages took less time on an Apple M4, also in whole proofs. On an Intel Xeon 8581C they
-        // ran faster in a loop of transforms but made whole proofs take 4% to 6% more time (one
-        // binary switching between the two, measured 2026-11-18), so x86 and the other targets
-        // keep the stage-by-stage code.
+        // The same values from AVX-512 registers where they run (`crate::simd`).
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        if crate::simd::forward_mont(&self.simd_tables(), a) {
+            return;
+        }
+        self.forward_mont_scalar(a);
+    }
+    /// [`NttPlan::forward_mont`] in scalar code, the reference of the SIMD kernels: two stages per
+    /// pass on aarch64, one elsewhere, with the same outputs. The pairs of stages took less time
+    /// on an Apple M4, also in whole proofs. On an Intel Xeon 8581C they ran faster in a loop of
+    /// transforms but made whole proofs take 4% to 6% more time (one binary switching between
+    /// the two, measured 2026-11-18), so x86 and the other targets keep the stage-by-stage code.
+    pub(crate) fn forward_mont_scalar(&self, a: &mut [u64]) {
         if cfg!(target_arch = "aarch64") {
             self.forward_mont_radix4(a);
         } else {
@@ -472,7 +509,15 @@ impl NttPlan {
     /// returned in $`[0,p)`$. Values stay below $`2p`$ between stages.
     pub(crate) fn inverse_mont(&self, a: &mut [u64]) {
         debug_assert!(a.len() == self.d && a.iter().all(|x| *x < self.p));
-        // Two stages per pass on aarch64, one elsewhere, as in `forward_mont`.
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        if crate::simd::inverse_mont(&self.simd_tables(), a) {
+            return;
+        }
+        self.inverse_mont_scalar(a);
+    }
+    /// [`NttPlan::inverse_mont`] in scalar code, the reference of the SIMD kernels: two stages per
+    /// pass on aarch64, one elsewhere, as [`NttPlan::forward_mont_scalar`].
+    pub(crate) fn inverse_mont_scalar(&self, a: &mut [u64]) {
         if cfg!(target_arch = "aarch64") {
             self.inverse_mont_radix4(a);
         } else {

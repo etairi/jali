@@ -1,5 +1,11 @@
 #![doc = include_str!("../README.md")]
-#![forbid(unsafe_code)]
+// Without the `simd` feature, or off x86-64, no unsafe code is compiled at all. With it on
+// x86-64, the one module `simd` holds the SIMD kernels and is the only place allowed unsafe code.
+#![cfg_attr(
+    not(all(feature = "simd", target_arch = "x86_64")),
+    forbid(unsafe_code)
+)]
+#![cfg_attr(all(feature = "simd", target_arch = "x86_64"), deny(unsafe_code))]
 #![deny(missing_docs)]
 
 pub mod abdlop;
@@ -23,6 +29,8 @@ pub mod quad;
 pub mod quad_eval;
 pub mod quad_many;
 pub mod rand;
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+mod simd;
 pub mod statement;
 pub mod tbox;
 #[cfg(feature = "test-utils")]
