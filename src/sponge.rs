@@ -1,7 +1,8 @@
-//! SHAKE128 (FIPS 202) over the `keccak` crate's Keccak-f[1600] permutation (with the SHA3
-//! instructions on aarch64 where present), in the crate so that it can choose the permutation
-//! per processor. The output is SHAKE128's on every target, which the tests check against the
-//! `shake` crate.
+//! SHAKE128 (FIPS 202) over the Keccak-f[1600] permutation that suits the processor: the
+//! `keccak` crate's (with the SHA3 instructions on aarch64 where present), or with the `simd`
+//! feature on x86-64 the same permutation compiled for BMI1 and BMI2 where the processor has
+//! them (`crate::simd`). Every choice computes the same permutation, so the output is SHAKE128's
+//! on every target, which the tests check against the `shake` crate.
 //!
 //! Bytes go into and out of the lanes of the state directly, whole lanes where the position
 //! allows and the bytes of one lane at the ends, so that a context and a reader hold only the
@@ -14,6 +15,10 @@ const RATE: usize = 168;
 /// Keccak-f[1600] on `state`, lane $`i`$ the little-endian word $`x+5y=i`$ of FIPS 202.
 #[inline]
 fn permute(keccak: &keccak::Keccak, state: &mut [u64; 25]) {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    if crate::simd::keccak_f1600(state) {
+        return;
+    }
     keccak.with_f1600(|f| f(state));
 }
 
