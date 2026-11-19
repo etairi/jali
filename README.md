@@ -58,8 +58,8 @@ jali = { version = "0.3", features = ["serde"] }
 ```
 
 The crate forbids `unsafe` code and has no C dependencies. The exception is the optional `simd`
-feature on x86-64, whose one module of AVX-512 kernels calls intrinsics in `unsafe` blocks. The
-rest of the crate still denies `unsafe` code there.
+feature on x86-64, whose one module of kernels calls intrinsics and processor-specific functions
+in `unsafe` blocks. The rest of the crate still denies `unsafe` code there.
 
 ## Quick start
 
@@ -191,7 +191,7 @@ guarantee and status.
 | `serde` | Parameter sets from JSON (`TboxParams::from_json`) and export of statement requirements. Proofs always use the binary codec. |
 | `parallel` | Rayon parallelism inside proving and verifying. Outputs do not depend on the number of threads. |
 | `test-utils` | Capture and replay of sampler randomness, for tests only. |
-| `simd` | AVX-512 versions of the NTT on x86-64, chosen at run time when the processor has AVX-512F and AVX-512DQ and the environment variable `JALI_SCALAR` is unset. They return the scalar code's outputs, so proofs do not depend on the processor. On other targets the feature changes nothing. |
+| `simd` | Kernels for x86-64 chosen at run time when the processor has the instructions and the environment variable `JALI_SCALAR` is unset: with AVX-512F and AVX-512DQ the NTT, the residues, lazy sums and CRT of the RNS products and LaBRADOR's ring arithmetic, with BMI1 and BMI2 the Keccak permutation. They return the scalar code's outputs, so proofs do not depend on the processor. On other targets the feature changes nothing. |
 
 There are no default features.
 

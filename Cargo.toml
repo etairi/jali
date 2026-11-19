@@ -60,8 +60,9 @@ default = []
 serde = ["dep:serde", "dep:serde_json"]
 test-utils = []
 parallel = ["dep:rayon"]
-# SIMD kernels chosen at run time on processors that have the instructions (AVX-512 on x86-64),
-# with the same outputs as the scalar code. The one module that holds them may use unsafe code.
+# Kernels chosen at run time on processors that have the instructions (AVX-512, BMI1 and BMI2
+# on x86-64), with the same outputs as the scalar code. The one module that holds them may use
+# unsafe code.
 simd = []
 
 [[bench]]

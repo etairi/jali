@@ -7,70 +7,15 @@
 //! distance 8 or more broadcast one twiddle per group; the three below regroup the lanes of two
 //! registers, so that each butterfly has its two inputs in the same lane of two registers.
 use super::NttTables;
+use super::lanes::{csub, lanes, load, load4, mulhi, splat, store};
 use core::arch::x86_64::*;
 
-#[inline]
-#[target_feature(enable = "avx512f")]
-fn splat(x: u64) -> __m512i {
-    _mm512_set1_epi64(x as i64)
-}
-/// The vector of eight lane indices, lane 0 first.
-#[inline]
-#[target_feature(enable = "avx512f")]
-fn lanes(i: [i64; 8]) -> __m512i {
-    _mm512_set_epi64(i[7], i[6], i[5], i[4], i[3], i[2], i[1], i[0])
-}
-#[inline]
-#[target_feature(enable = "avx512f")]
-fn load(a: &[u64; 8]) -> __m512i {
-    // SAFETY: eight readable values, and the load needs no alignment.
-    unsafe { _mm512_loadu_si512(a.as_ptr().cast()) }
-}
-/// Four values into lanes 0 to 3, the others zero.
-#[inline]
-#[target_feature(enable = "avx512f")]
-fn load4(a: &[u64; 4]) -> __m512i {
-    // SAFETY: the mask reads only the four values, without alignment.
-    unsafe { _mm512_maskz_loadu_epi64(0x0f, a.as_ptr().cast()) }
-}
-#[inline]
-#[target_feature(enable = "avx512f")]
-fn store(a: &mut [u64; 8], v: __m512i) {
-    // SAFETY: eight writable values, and the store needs no alignment.
-    unsafe { _mm512_storeu_si512(a.as_mut_ptr().cast(), v) }
-}
-/// The high 64 bits of each lane's 128-bit product: with $`a=a_12^{32}+a_0`$ and
-/// $`b=b_12^{32}+b_0`$, $`m=a_1b_0+\lfloor a_0b_0/2^{32}\rfloor`$ and
-/// $`m'=a_0b_1+(m\bmod2^{32})`$ stay below $`2^{64}`$, and the high half is
-/// $`a_1b_1+\lfloor m/2^{32}\rfloor+\lfloor m'/2^{32}\rfloor`$.
-#[inline]
-#[target_feature(enable = "avx512f")]
-fn mulhi(a: __m512i, b: __m512i) -> __m512i {
-    let (a1, b1) = (_mm512_srli_epi64::<32>(a), _mm512_srli_epi64::<32>(b));
-    let low = _mm512_mul_epu32(a, b);
-    let mid = _mm512_add_epi64(_mm512_mul_epu32(a1, b), _mm512_srli_epi64::<32>(low));
-    let mid2 = _mm512_add_epi64(
-        _mm512_mul_epu32(a, b1),
-        _mm512_and_si512(mid, splat(0xffff_ffff)),
-    );
-    _mm512_add_epi64(
-        _mm512_add_epi64(_mm512_mul_epu32(a1, b1), _mm512_srli_epi64::<32>(mid)),
-        _mm512_srli_epi64::<32>(mid2),
-    )
-}
 /// `ntt::shoup_lazy` in each lane: $`xw-\lfloor xw'/2^{64}\rfloor p`$, in $`[0,2p)`$.
 #[inline]
 #[target_feature(enable = "avx512f,avx512dq")]
 fn shoup_lazy(x: __m512i, w: __m512i, ws: __m512i, p: __m512i) -> __m512i {
     let k = mulhi(x, ws);
     _mm512_sub_epi64(_mm512_mullo_epi64(x, w), _mm512_mullo_epi64(k, p))
-}
-/// $`x`$ or $`x-m`$, whichever is below $`m`$, for $`x<2m`$: below $`m`$ the difference wraps
-/// above $`x`$, so the unsigned minimum picks the right one.
-#[inline]
-#[target_feature(enable = "avx512f")]
-fn csub(x: __m512i, m: __m512i) -> __m512i {
-    _mm512_min_epu64(x, _mm512_sub_epi64(x, m))
 }
 /// The Cooley-Tukey butterfly of the forward stages: $`u=x\bmod2p`$, $`t=yw\bmod p`$ lazily,
 /// $`(u+t,u+2p-t)`$, both below $`4p`$.

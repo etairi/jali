@@ -185,6 +185,10 @@ impl Rq {
     /// `a += b` coefficientwise, for slices of equal length.
     pub(crate) fn add_assign(&self, a: &mut [u64], b: &[u64]) {
         debug_assert_eq!(a.len(), b.len());
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        if crate::simd::add_mod(a, b, self.q) {
+            return;
+        }
         for (x, y) in a.iter_mut().zip(b) {
             *x = add_mod(*x, *y, self.q);
         }
@@ -193,6 +197,10 @@ impl Rq {
     /// `a -= b` coefficientwise, for slices of equal length.
     pub(crate) fn sub_assign(&self, a: &mut [u64], b: &[u64]) {
         debug_assert_eq!(a.len(), b.len());
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        if crate::simd::sub_mod(a, b, self.q) {
+            return;
+        }
         for (x, y) in a.iter_mut().zip(b) {
             *x = sub_mod(*x, *y, self.q);
         }
@@ -206,6 +214,10 @@ impl Rq {
             return;
         }
         let s_shoup = shoup(s, self.q);
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        if crate::simd::add_scaled(a, b, s, s_shoup, self.q) {
+            return;
+        }
         for (x, y) in a.iter_mut().zip(b) {
             *x = add_mod(*x, shoup_mul(*y, s, s_shoup, self.q), self.q);
         }
@@ -214,6 +226,10 @@ impl Rq {
     /// `a *= s` coefficientwise for a scalar $`s\in[0,q)`$, with one Shoup constant.
     pub(crate) fn scale_assign(&self, a: &mut [u64], s: u64) {
         let s_shoup = shoup(s, self.q);
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        if crate::simd::scale(a, s, s_shoup, self.q) {
+            return;
+        }
         for x in a.iter_mut() {
             *x = shoup_mul(*x, s, s_shoup, self.q);
         }
@@ -235,6 +251,11 @@ impl Rq {
         debug_assert!(a.len() == self.d && out.len() == self.hat_len());
         for (plan, block) in self.plans.iter().zip(out.chunks_exact_mut(self.d)) {
             let p = plan.modulus();
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            if crate::simd::centred(a, self.q, p, block) {
+                plan.forward_mont(block);
+                continue;
+            }
             for (y, x) in block.iter_mut().zip(a) {
                 let c = self.center(*x);
                 *y = if c >= 0 {
@@ -301,6 +322,16 @@ impl Rq {
                 let p = plan.modulus();
                 let start = poly * self.hat_len() + i * self.d;
                 let range = start..start + self.d;
+                #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+                if crate::simd::mont_mac(
+                    &mut acc[range.clone()],
+                    &a[range.clone()],
+                    &b[range.clone()],
+                    p,
+                    plan.neg_inv(),
+                ) {
+                    continue;
+                }
                 for ((x, y), z) in acc[range.clone()]
                     .iter_mut()
                     .zip(&a[range.clone()])
@@ -321,6 +352,10 @@ impl Rq {
             .enumerate()
         {
             let p = self.plans[block % self.plans.len()].modulus();
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            if crate::simd::add_mod(x, y, p) {
+                continue;
+            }
             for (u, v) in x.iter_mut().zip(y) {
                 *u = add_mod(*u, *v, p);
             }
@@ -392,11 +427,22 @@ impl Rq {
                             (v, shoup(v, q))
                         }
                     };
-                    for (o, x) in high.iter_mut().zip(head) {
-                        *o = add_mod(*o, shoup_mul(*x, v, v_shoup, q), q);
+                    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+                    let (high_done, low_done) = (
+                        crate::simd::add_scaled(high, head, v, v_shoup, q),
+                        crate::simd::sub_scaled(low, tail, v, v_shoup, q),
+                    );
+                    #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+                    let (high_done, low_done) = (false, false);
+                    if !high_done {
+                        for (o, x) in high.iter_mut().zip(head) {
+                            *o = add_mod(*o, shoup_mul(*x, v, v_shoup, q), q);
+                        }
                     }
-                    for (o, x) in low.iter_mut().zip(tail) {
-                        *o = sub_mod(*o, shoup_mul(*x, v, v_shoup, q), q);
+                    if !low_done {
+                        for (o, x) in low.iter_mut().zip(tail) {
+                            *o = sub_mod(*o, shoup_mul(*x, v, v_shoup, q), q);
+                        }
                     }
                 }
             }

@@ -552,7 +552,38 @@ fn block_polys(
     let mut column = [0u8; 64];
     let mut sums = vec![0u64; lambda];
     for polys in data.chunks_exact_mut(stride) {
-        for c in 0..d {
+        // Eight columns at a time in AVX-512 registers where they run, below 2^58 (the narrow
+        // sums of `column_sums`, with its reduction), the rest column by column.
+        #[allow(unused_mut)]
+        let mut first = 0;
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        if ring.modulus() < 1 << 58 && crate::simd::avx512() {
+            let mut columns = [[0u8; 64]; 8];
+            let mut raw = [[0i64; 8]; 8];
+            let offset = 32 * ring.modulus();
+            while first + 8 <= d {
+                for c in columns.iter_mut() {
+                    projection.column_bytes(c)?;
+                }
+                if crate::simd::table_sums8(table, lambda, &columns, &mut raw) {
+                    for (j, r) in raw.iter().enumerate() {
+                        for (k, s) in r[..lambda].iter().enumerate() {
+                            polys[k * d + first + j] =
+                                ring.reduce_word((*s as u64).wrapping_add(offset));
+                        }
+                    }
+                } else {
+                    for (j, c) in columns.iter().enumerate() {
+                        column_sums(ring, table, lambda, c, &mut sums);
+                        for (k, s) in sums.iter().enumerate() {
+                            polys[k * d + first + j] = *s;
+                        }
+                    }
+                }
+                first += 8;
+            }
+        }
+        for c in first..d {
             projection.column_bytes(&mut column)?;
             column_sums(ring, table, lambda, &column, &mut sums);
             for (poly, s) in polys.chunks_exact_mut(d).zip(&sums) {

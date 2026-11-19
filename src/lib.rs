@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
 // Without the `simd` feature, or off x86-64, no unsafe code is compiled at all. With it on
-// x86-64, the one module `simd` holds the SIMD kernels and is the only place allowed unsafe code.
+// x86-64, the one module `simd` holds the kernels and is the only place allowed unsafe code.
 #![cfg_attr(
     not(all(feature = "simd", target_arch = "x86_64")),
     forbid(unsafe_code)

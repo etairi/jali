@@ -201,6 +201,11 @@ impl NttPlan {
             simd,
         })
     }
+    /// $`-p^{-1}\bmod2^{64}`$, the Montgomery constant of [`NttPlan::mont_mul`].
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    pub(crate) fn neg_inv(&self) -> u64 {
+        self.neg_inv
+    }
     /// The constants that the SIMD kernels read.
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     pub(crate) fn simd_tables(&self) -> crate::simd::NttTables<'_> {
