@@ -31,13 +31,27 @@
 //! and otherwise decide by $`N_6=\|u^{32}\|_1`$ itself: the same decision as the exact test,
 //! for most challenges after the three products in `i128` (measured on 200,000 uniform draws
 //! per degree: 98.9% decided by $`j=3`$ at degree 64 and 98.2% at degree 128).
+//!
+//! **Early rejection.** The powers $`y=u^{2^{j-1}}`$ are $`\sigma_{-1}`$-stable, so
+//! $`y^2=y\,\sigma_{-1}(y)`$, whose constant coefficient is $`\sum_iy_i^2=\|y\|_2^2`$, at
+//! least $`\|y\|_1^2/d`$ by Cauchy-Schwarz. Hence $`N_{j+1}\ge N_j^2/d`$, and by induction
+//! $`N_6\ge N_j^{2^{6-j}}/d^{2^{6-j}-1}`$. [`within_eta`] and [`challenge`] therefore also reject
+//! as soon as $`N_j^{2^{6-j}}>\eta^{64}d^{2^{6-j}-1}`$ for $`j=3`$ to 5, compared exactly: the
+//! same decision again. Most draws of LaBRADOR's challenge set are rejected (about five in six),
+//! and about 78% of those are decided so before the last product (3,000 draws of its set,
+//! computed exactly in Python, 2026-11-19), which is most of the time of the test.
 use super::{ByteStream, autostable};
 use crate::{
     Error,
     math::{Poly, Ring},
 };
-use crypto_bigint::{CheckedAdd, CheckedSub, Concat, I128, I256, I512, I1024, Int, U1024, Uint};
-use std::sync::Arc;
+use crypto_bigint::{
+    CheckedAdd, CheckedSub, Concat, I128, I256, I512, I1024, Int, U1024, U2048, Uint,
+};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
+};
 
 /// The draws [`challenge`] makes before it fails. Each draw of the shipped sets is rejected
 /// with probability about 1.2% at most, so 64 rejections have probability below $`2^{-400}`$.
@@ -68,13 +82,72 @@ fn eta_powers(eta: u64) -> Result<[U1024; 7], Error> {
     Ok(powers)
 }
 
-/// The exact test against the thresholds of [`eta_powers`], accepting early when a stage norm
-/// $`N_j`$ is within $`\eta^{2^j}`$ (module documentation).
-fn decide(c: &Poly, powers: &[U1024; 7]) -> Result<bool, Error> {
+/// The thresholds of the exact test for one $`\eta`$ and degree $`d`$: $`\eta^{2^j}`$ for the
+/// early acceptance at stage $`j`$ (0 to 6), and $`\eta^{64}d^{2^{6-j}-1}`$ for the early
+/// rejection at stages 3 to 5 (module documentation).
+struct Bounds {
+    accept: [U1024; 7],
+    reject: [Option<U2048>; 7],
+}
+
+/// The [`Bounds`] of $`(\eta,d)`$, computed once per process for each pair, with the errors of
+/// [`eta_powers`].
+fn bounds(eta: u64, d: usize) -> Result<Arc<Bounds>, Error> {
+    type Memo = Mutex<HashMap<(u64, usize), Arc<Bounds>>>;
+    static MEMO: OnceLock<Memo> = OnceLock::new();
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some(b) = memo.lock().expect("challenge bounds").get(&(eta, d)) {
+        return Ok(b.clone());
+    }
+    let accept = eta_powers(eta)?;
+    // eta^64 < 2^1024 and d^31 < 2^320 for the degrees of rings, so no threshold overflows;
+    // one that did would only disable its early rejection.
+    let top: U2048 = accept[6].resize();
+    let degree = U2048::from_u64(d as u64);
+    let mut reject = [None; 7];
+    for (j, slot) in reject.iter_mut().enumerate().take(6).skip(3) {
+        let factor =
+            (1..1u32 << (6 - j)).try_fold(U2048::ONE, |f, _| f.checked_mul(&degree).into_option());
+        *slot = factor.and_then(|f| top.checked_mul(&f).into_option());
+    }
+    let b = Arc::new(Bounds { accept, reject });
+    memo.lock()
+        .expect("challenge bounds")
+        .insert((eta, d), b.clone());
+    Ok(b)
+}
+
+/// Whether $`N^{2^{6-j}}`$ exceeds `threshold`, exactly: by bit lengths where they decide
+/// ($`2^{(b-1)e}\le N^e<2^{be}`$ for the bit length $`b`$ of $`N`$ and $`e=2^{6-j}`$), and by the
+/// power in 2048 bits otherwise, which then stays below $`2^{be}\le2^{t+e}`$ for the bit length
+/// $`t\le1344`$ of the threshold.
+fn beyond(norm: &U1024, j: usize, threshold: &U2048) -> bool {
+    let e = 1u32 << (6 - j);
+    let (b, t) = (norm.bits_vartime(), threshold.bits_vartime());
+    if b == 0 {
+        return false;
+    }
+    if (b - 1) * e >= t {
+        return true;
+    }
+    if b * e < t {
+        return false;
+    }
+    let mut x: U2048 = norm.resize();
+    for _ in 0..6 - j {
+        x = x.wrapping_mul(&x);
+    }
+    x > *threshold
+}
+
+/// The exact test against `b`, accepting early when a stage norm $`N_j`$ is within
+/// $`\eta^{2^j}`$ and rejecting early when $`N_j^{2^{6-j}}`$ exceeds $`\eta^{64}d^{2^{6-j}-1}`$
+/// (module documentation).
+fn decide(c: &Poly, b: &Bounds) -> Result<bool, Error> {
     let mut within = false;
     stage_norms(c, |j, norm| {
-        within = *norm <= powers[j];
-        within
+        within = *norm <= b.accept[j];
+        within || b.reject[j].as_ref().is_some_and(|t| beyond(norm, j, t))
     })?;
     Ok(within)
 }
@@ -84,7 +157,8 @@ fn decide(c: &Poly, powers: &[U1024; 7]) -> Result<bool, Error> {
 /// early where a smaller power already shows it, with the same result). The errors are those
 /// of [`eta_norm_power`], and [`Error::Parameter`] for $`\eta\ge2^{16}`$.
 pub fn within_eta(c: &Poly, eta: u64) -> Result<bool, Error> {
-    decide(c, &eta_powers(eta)?)
+    let bounds = bounds(eta, c.ring().degree())?;
+    decide(c, &bounds)
 }
 
 /// A challenge of the set: the first [`autostable`] draw from `stream` that is
@@ -107,7 +181,7 @@ pub fn challenge(
     omega: i128,
     eta: u64,
 ) -> Result<Poly, Error> {
-    let powers = eta_powers(eta)?;
+    let bounds = bounds(eta, ring.degree())?;
     // ||c||_1 = |c_0| + 2 (|c_1| + ... + |c_{d/2-1}|) <= (d - 1) omega for every draw.
     let largest = (ring.degree() as u128)
         .saturating_sub(1)
@@ -117,7 +191,7 @@ pub fn challenge(
     }
     for _ in 0..MAX_CHALLENGE_DRAWS {
         let c = autostable(stream, ring.clone(), omega)?;
-        if decide(&c, &powers)? {
+        if decide(&c, &bounds)? {
             return Ok(c);
         }
     }
@@ -156,7 +230,7 @@ pub fn challenge_from_bytes(
     omega: i128,
     eta: u64,
 ) -> Result<Poly, Error> {
-    let powers = eta_powers(eta)?;
+    let bounds = bounds(eta, ring.degree())?;
     if omega < 1 || crate::math::U256::from_u128(omega as u128) >= ring.half {
         return Err(Error::Parameter("challenge bound"));
     }
@@ -177,7 +251,7 @@ pub fn challenge_from_bytes(
         first.push(w - omega);
         if first.len() == half {
             let c = Poly::new(ring.clone(), stable(&first, 0i128, |x| -x))?;
-            if decide(&c, &powers)? {
+            if decide(&c, &bounds)? {
                 return Ok(c);
             }
             first.clear();
