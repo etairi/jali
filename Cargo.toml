@@ -56,13 +56,14 @@ criterion = "0.8"
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 
 [features]
-default = []
+default = ["simd"]
 serde = ["dep:serde", "dep:serde_json"]
 test-utils = []
 parallel = ["dep:rayon"]
 # Kernels chosen at run time on processors that have the instructions (AVX-512, BMI1 and BMI2
-# on x86-64), with the same outputs as the scalar code. The one module that holds them may use
-# unsafe code.
+# on x86-64), with the same outputs as the scalar code, which runs everywhere else. On by
+# default. The one module that holds the kernels may use unsafe code, and without default
+# features the crate compiles no unsafe code at all.
 simd = []
 
 [[bench]]
