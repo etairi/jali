@@ -227,8 +227,9 @@ fn the_enclosure_contains_the_exact_cutoff_on_sampler_inputs() {
             widest = widest.max(upper - lower);
         }
     }
-    // The width sets how often the exact test runs: at most about 2^13 of 2^64 top words.
-    assert!(widest < 1 << 12, "width {widest}");
+    // The width sets how often the exact test runs: 2(U - L) + 2 of the 2^64 top words, fewer
+    // than 2^-19 of them below 2^44 (2^42.8 for these inputs with the five Taylor terms).
+    assert!(widest < 1 << 44, "width {widest}");
 }
 
 #[test]

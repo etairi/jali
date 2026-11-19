@@ -40,17 +40,17 @@
 //! 3. The least $`s\ge0`$ with $`X^+<2^{61+s}`$, and $`Y^-=\lfloor X^-/2^s\rfloor`$,
 //!    $`Y^+=\lceil X^+/2^s\rceil`$: $`y=x/2^s\in[y^-,y^+]=[Y^-,Y^+]/2^{64}`$ with
 //!    $`y^+\le1/8`$, and $`e^{-x}=(e^{-y})^{2^s}`$.
-//! 4. Terms $`D_0=2^{63}`$, $`D_k=\lfloor D_{k-1}Y^-/(2^{64}k)\rfloor`$ for $`k\le13`$. With
+//! 4. Terms $`D_0=2^{63}`$, $`D_k=\lfloor D_{k-1}Y^-/(2^{64}k)\rfloor`$ for $`k\le5`$. With
 //!    $`t_k=(y^-)^k/k!`$, $`\varepsilon_k=2^{63}t_k-D_k`$ satisfies $`\varepsilon_0=0`$ and
 //!    $`\varepsilon_k=\varepsilon_{k-1}y^-/k+\mathrm{frac}(D_{k-1}y^-/k)\in[0,
 //!    \varepsilon_{k-1}/8+1)`$, so $`0\le\varepsilon_k<8/7<2`$. Taylor's theorem with the
-//!    Lagrange remainder gives $`S_{13}(y)\le e^{-y}\le S_{12}(y)`$ for $`y\ge0`$, where
+//!    Lagrange remainder gives $`S_5(y)\le e^{-y}\le S_4(y)`$ for $`y\ge0`$, where
 //!    $`S_N(y)=\sum_{k\le N}(-1)^ky^k/k!`$. As $`2^{63}S_N(y^-)=\sum_{k\le N}(-1)^k(D_k+
-//!    \varepsilon_k)`$ and there are seven even and seven odd $`k\le13`$, each
+//!    \varepsilon_k)`$ and there are three even and three odd $`k\le5`$, each
 //!    $`\varepsilon_k<2`$:
-//!    $`U_y=\sum_{k\le12}(-1)^kD_k+14\ge2^{63}e^{-y^-}`$ and
-//!    $`\sum_{k\le13}(-1)^kD_k-14\le2^{63}e^{-y^-}`$. As $`e^{-y}`$ is 1-Lipschitz on
-//!    $`y\ge0`$, $`L_y=\sum_{k\le13}(-1)^kD_k-14-\lceil(Y^+-Y^-)/2\rceil\le2^{63}e^{-y^+}`$.
+//!    $`U_y=\sum_{k\le4}(-1)^kD_k+6\ge2^{63}e^{-y^-}`$ and
+//!    $`\sum_{k\le5}(-1)^kD_k-6\le2^{63}e^{-y^-}`$. As $`e^{-y}`$ is 1-Lipschitz on
+//!    $`y\ge0`$, $`L_y=\sum_{k\le5}(-1)^kD_k-6-\lceil(Y^+-Y^-)/2\rceil\le2^{63}e^{-y^+}`$.
 //! 5. $`s`$ squarings, $`L\gets\lfloor L^2/2^{63}\rfloor`$ and
 //!    $`U\gets\lceil U^2/2^{63}\rceil`$, keep $`L\le2^{63}(e^{-y})^{2^s}\le U`$.
 //!
@@ -59,15 +59,17 @@
 //! (equality for base sample 58, sign 1 and offset 0) and $`s\le6`$; inputs outside the ranges
 //! that the integer types cover give `None`, never a decision. The width $`U-L`$ only decides
 //! how often the exact test runs (for $`2(U-L)+2`$ of the $`2^{64}`$ values of $`h`$), not
-//! whether a decision is right.
+//! whether a decision is right. Five terms leave it below $`2^{44}`$ on the sampler's inputs,
+//! so the exact test runs for fewer than $`2^{-19}`$ of them, and the series costs less than
+//! the 13 terms that kept it below $`2^{12}`$.
 
 /// $`\lfloor200\cdot2^{64}/961\rfloor`$; 961 does not divide $`200\cdot2^{64}`$.
 const K_LOW: u128 = (200 << 64) / 961;
 const K_HIGH: u128 = K_LOW + 1;
 /// The last Taylor term, odd so that the partial sums bracket the exponential.
-const TERMS: u64 = 13;
+const TERMS: u64 = 5;
 /// $`2\cdot\lceil(\mathrm{TERMS}+1)/2\rceil`$: the rounding slack of the partial sums.
-const SLACK: u128 = 14;
+const SLACK: u128 = 6;
 
 /// `Some(V < C)` when the top word `high` of the uniform value decides the exact test, `None`
 /// otherwise; for `a >= v`, the operands of the sampler. See the module documentation.
