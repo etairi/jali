@@ -218,6 +218,119 @@ pub(super) fn table_sums8(
     }
 }
 
+/// `columns[c][g]` mapped through `map` (a byte to its pattern index) for the 64 bytes of each
+/// of eight columns, by two `vpermi2b` lookups in the halves of the map and a blend on the
+/// byte's top bit.
+#[inline]
+#[target_feature(enable = "avx512f,avx512bw,avx512vbmi")]
+fn patterns8_vbmi(map: &[u8; 256], columns: &[[u8; 64]; 8]) -> [[u8; 64]; 8] {
+    // SAFETY: each load reads 64 of the map's 256 bytes or one column's 64, and each store
+    // writes one row of the output, unaligned.
+    let (m0, m1, m2, m3) = unsafe {
+        (
+            _mm512_loadu_si512(map.as_ptr().cast()),
+            _mm512_loadu_si512(map.as_ptr().add(64).cast()),
+            _mm512_loadu_si512(map.as_ptr().add(128).cast()),
+            _mm512_loadu_si512(map.as_ptr().add(192).cast()),
+        )
+    };
+    let mut out = [[0u8; 64]; 8];
+    for (o, c) in out.iter_mut().zip(columns) {
+        // SAFETY: as above.
+        let b = unsafe { _mm512_loadu_si512(c.as_ptr().cast()) };
+        let low = _mm512_permutex2var_epi8(m0, b, m1);
+        let high = _mm512_permutex2var_epi8(m2, b, m3);
+        let picked = _mm512_mask_blend_epi8(_mm512_movepi8_mask(b), low, high);
+        // SAFETY: as above.
+        unsafe { _mm512_storeu_si512(o.as_mut_ptr().cast(), picked) };
+    }
+    out
+}
+
+/// The column sums of LaBRADOR's projection table of sign patterns for eight columns at once:
+/// `out[c][k]` the sum over the 64 groups $`g`$ of `table[(81g + map[columns[c][g]])λ + k]` for
+/// $`k<\lambda\le8`$, the table's sums in 32 bits added as 64-bit lanes, each column's λ sums in
+/// one register, the groups in order. The patterns of the columns come from `vpermi2b` where
+/// AVX-512 VBMI runs (`vbmi`), from the map one byte at a time otherwise.
+#[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512vbmi")]
+pub(super) fn pattern_sums8_vbmi(
+    table: &[i32],
+    lambda: usize,
+    map: &[u8; 256],
+    columns: &[[u8; 64]; 8],
+    out: &mut [[i64; 8]; 8],
+) {
+    let patterns = patterns8_vbmi(map, columns);
+    pattern_sums8_from(table, lambda, &patterns, out);
+}
+
+/// [`pattern_sums8_vbmi`] without AVX-512 VBMI.
+#[target_feature(enable = "avx512f,avx512vl")]
+pub(super) fn pattern_sums8(
+    table: &[i32],
+    lambda: usize,
+    map: &[u8; 256],
+    columns: &[[u8; 64]; 8],
+    out: &mut [[i64; 8]; 8],
+) {
+    let mut acc = [_mm512_setzero_si512(); 8];
+    for g in 0..64 {
+        for (a, column) in acc.iter_mut().zip(columns) {
+            let at = (81 * g + usize::from(map[usize::from(column[g])])) * lambda;
+            *a = _mm512_add_epi64(
+                *a,
+                _mm512_cvtepi32_epi64(load_part32(&table[at..at + lambda])),
+            );
+        }
+    }
+    store_sums(&acc, out);
+}
+
+/// The sums of [`pattern_sums8_vbmi`] from the patterns themselves.
+#[inline]
+#[target_feature(enable = "avx512f,avx512vl")]
+fn pattern_sums8_from(
+    table: &[i32],
+    lambda: usize,
+    patterns: &[[u8; 64]; 8],
+    out: &mut [[i64; 8]; 8],
+) {
+    let mut acc = [_mm512_setzero_si512(); 8];
+    for g in 0..64 {
+        for (a, p) in acc.iter_mut().zip(patterns) {
+            let at = (81 * g + usize::from(p[g])) * lambda;
+            *a = _mm512_add_epi64(
+                *a,
+                _mm512_cvtepi32_epi64(load_part32(&table[at..at + lambda])),
+            );
+        }
+    }
+    store_sums(&acc, out);
+}
+
+/// Up to eight `i32` of a slice into the low lanes of a 256-bit register, zeros above.
+#[inline]
+#[target_feature(enable = "avx512f,avx512vl")]
+fn load_part32(a: &[i32]) -> __m256i {
+    debug_assert!(a.len() <= 8);
+    let mask = ((1u16 << a.len()) - 1) as u8;
+    // SAFETY: the mask selects the slice's elements only, and masked-off lanes are not read.
+    unsafe { _mm256_maskz_loadu_epi32(mask, a.as_ptr().cast()) }
+}
+
+/// The eight registers of column sums into `out`, as `i64`.
+#[inline]
+#[target_feature(enable = "avx512f")]
+fn store_sums(acc: &[__m512i; 8], out: &mut [[i64; 8]; 8]) {
+    for (o, a) in out.iter_mut().zip(acc) {
+        let mut words = [0u64; 8];
+        store(&mut words, *a);
+        for (x, w) in o.iter_mut().zip(words) {
+            *x = w as i64;
+        }
+    }
+}
+
 /// A slice of `i64` read as `u64`, the same bits.
 #[inline]
 fn bytemuck_i64(a: &[i64]) -> &[u64] {

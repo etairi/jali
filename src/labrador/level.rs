@@ -331,8 +331,13 @@ fn project_bytes<'a>(
 }
 
 /// The columns `columns` with their coefficients `values` added into the 8-bit lanes of
-/// [`project_bytes`], in loops on vectors of bytes. Every partial sum of a call stays within ±127 (at most `flush` columns).
+/// [`project_bytes`]: the AVX-512 byte kernel where it runs, loops on vectors of bytes
+/// otherwise. Every partial sum of a call stays within ±127 (at most `flush` columns).
 fn add_columns(lanes: &mut [[i8; 64]; 4], columns: &[[u8; 64]], values: &[i8]) {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    if crate::simd::project_bytes(lanes, columns, values) {
+        return;
+    }
     for (column, s) in columns.iter().zip(values) {
         for (e, lane) in lanes.iter_mut().enumerate() {
             for (a, b) in lane.iter_mut().zip(column) {
@@ -597,8 +602,9 @@ const PATTERN: [u8; 256] = {
 ///
 /// The table holds one sum per sign pattern ([`PATTERN`], 81 per group), in 32 bits below
 /// $`2^{32}`$, so that it stays in a core's first-level cache (about 100 KB at λ = 5). With the
-/// `simd` feature on x86-64, where the AVX-512 kernel runs, it holds one sum per byte instead,
-/// the layout that the kernel reads.
+/// `simd` feature on x86-64, where the AVX-512 kernels run, a kernel reads the table of patterns
+/// below $`2^{32}`$, and from $`2^{32}`$ to $`2^{58}`$ the table holds one sum per byte instead,
+/// the layout that the other kernel reads.
 struct ProjectionTable {
     lambda: usize,
     entries: TableEntries,
@@ -609,7 +615,7 @@ enum TableEntries {
     Narrow(Vec<i32>),
     /// One sum per pattern.
     Wide(Vec<i64>),
-    /// One sum per byte, for the AVX-512 kernel ($`q<2^{58}`$).
+    /// One sum per byte, for the AVX-512 kernel ($`2^{32}\le q<2^{58}`$).
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     Bytes(Vec<i64>),
 }
@@ -631,7 +637,7 @@ fn projection_table(ring: &Rq, omega: &[Vec<u64>]) -> ProjectionTable {
         ring.center(s)
     };
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
-    if ring.modulus() < 1 << 58 && crate::simd::avx512() {
+    if (1 << 32..1 << 58).contains(&ring.modulus()) && crate::simd::avx512() {
         let mut table = vec![0i64; 64 * 256 * lambda];
         for group in 0..64 {
             for (byte, signs) in DECODE.iter().enumerate() {
@@ -695,9 +701,9 @@ fn block_polys(
     let mut data = vec![0u64; indices.len() * stride];
     let mut tmp = vec![0u64; d];
     for polys in data.chunks_exact_mut(stride) {
-        // Eight columns at a time in AVX-512 registers where they run (the byte table, below
-        // 2^58, with the narrow sums of `ProjectionTable::sums` and its reduction), then
-        // `COLUMNS` at a time, then one by one. Whether a kernel runs is
+        // Eight columns at a time in AVX-512 registers where they run (the table of patterns
+        // below 2^32, the byte table up to 2^58, with the narrow sums of `ProjectionTable::sums`
+        // and its reduction), then `COLUMNS` at a time, then one by one. Whether a kernel runs is
         // known before a column is read, and a kernel that declines leaves its columns to
         // `ProjectionTable::sums`, so every column is summed once in stream order.
         #[allow(unused_mut)]
@@ -705,7 +711,7 @@ fn block_polys(
         #[cfg(all(feature = "simd", target_arch = "x86_64"))]
         {
             let kernel = match &table.entries {
-                TableEntries::Narrow(_) => false,
+                TableEntries::Narrow(_) => crate::simd::avx512vl(),
                 TableEntries::Bytes(_) => true,
                 TableEntries::Wide(_) => false,
             };
@@ -718,7 +724,9 @@ fn block_polys(
                     projection.column_bytes(c)?;
                 }
                 let done = match &table.entries {
-                    TableEntries::Narrow(_) => false,
+                    TableEntries::Narrow(t) => {
+                        crate::simd::pattern_sums8(t, lambda, &PATTERN, &columns, &mut raw)
+                    }
                     TableEntries::Bytes(t) => {
                         crate::simd::table_sums8(t, lambda, &columns, &mut raw)
                     }

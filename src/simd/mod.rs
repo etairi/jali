@@ -6,6 +6,7 @@
 //! environment variable `JALI_SCALAR`, to any value, keeps the scalar code everywhere.
 #![allow(unsafe_code)]
 
+mod bytes_avx512;
 mod keccak_bmi;
 mod lanes;
 mod modular_avx512;
@@ -51,6 +52,52 @@ pub(crate) fn avx512() -> bool {
             && std::is_x86_feature_detected!("avx512f")
             && std::is_x86_feature_detected!("avx512dq")
     })
+}
+
+/// Whether the AVX-512 byte kernels run: [`avx512`] and AVX-512BW. Decided once per process.
+pub(crate) fn avx512bw() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| avx512() && std::is_x86_feature_detected!("avx512bw"))
+}
+
+/// Whether the AVX-512 kernels that need AVX-512VL run: [`avx512`] and AVX-512VL. Decided once
+/// per process.
+pub(crate) fn avx512vl() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| avx512() && std::is_x86_feature_detected!("avx512vl"))
+}
+
+/// Whether the AVX-512 VBMI kernels run: [`avx512vl`], [`avx512bw`] and AVX-512 VBMI. Decided
+/// once per process.
+pub(crate) fn vbmi() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| avx512vl() && avx512bw() && std::is_x86_feature_detected!("avx512vbmi"))
+}
+
+/// The raw column sums of LaBRADOR's projection table of sign patterns (32-bit sums, `map` from
+/// a byte to its pattern) for eight columns, as `level::ProjectionTable::sums` adds them before
+/// reducing, when the AVX-512 kernels run with AVX-512VL and $`\lambda\le8`$: `true` if `out` is
+/// filled.
+#[inline]
+pub(crate) fn pattern_sums8(
+    table: &[i32],
+    lambda: usize,
+    map: &[u8; 256],
+    columns: &[[u8; 64]; 8],
+    out: &mut [[i64; 8]; 8],
+) -> bool {
+    if !(1..=8).contains(&lambda) || table.len() < 64 * 81 * lambda || !avx512vl() {
+        return false;
+    }
+    if vbmi() {
+        // SAFETY: the processor has AVX-512F, VL, BW and VBMI (`vbmi`), and the kernel reads only
+        // the table's entries, by slices whose bounds it checks (patterns are below 81).
+        unsafe { modular_avx512::pattern_sums8_vbmi(table, lambda, map, columns, out) };
+    } else {
+        // SAFETY: as above, with AVX-512F and VL (`avx512vl`).
+        unsafe { modular_avx512::pattern_sums8(table, lambda, map, columns, out) };
+    }
+    true
 }
 
 /// Whether the BMI1 and BMI2 kernels run: the processor has both, and `JALI_SCALAR` is unset.
@@ -139,6 +186,24 @@ pub(crate) fn small_crt<const K: usize>(
         return unsafe { modular_avx512::small_crt(residues, c, out) };
     }
     0
+}
+
+/// The columns `columns` with their coefficients `values` added into the 8-bit lanes of
+/// `level::project_bytes` (lane $`g`$ of `lanes[e]` is row $`4g+e`$) when the AVX-512 byte
+/// kernels run: `true` if they did.
+#[inline]
+pub(crate) fn project_bytes(
+    lanes: &mut [[i8; 64]; 4],
+    columns: &[[u8; 64]],
+    values: &[i8],
+) -> bool {
+    if columns.len() == values.len() && avx512bw() {
+        // SAFETY: the processor has AVX-512F and AVX-512BW (`avx512bw`), and the kernel reads
+        // and writes only the arrays and slices it is given.
+        unsafe { bytes_avx512::project_bytes(lanes, columns, values) };
+        return true;
+    }
+    false
 }
 
 /// The raw column sums of LaBRADOR's projection table for eight columns, as
