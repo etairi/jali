@@ -292,6 +292,19 @@ impl NttPlan {
     /// butterflies: the upper input is reduced below $`2p`$, lazy Shoup products are below $`2p`$).
     pub(crate) fn forward_mont(&self, a: &mut [u64]) {
         debug_assert!(a.len() == self.d && a.iter().all(|x| *x < self.p));
+        // Two stages per pass on aarch64, one elsewhere, with the same outputs. The pairs of
+        // stages took less time on an Apple M4, also in whole proofs. On an Intel Xeon 8581C they
+        // ran faster in a loop of transforms but made whole proofs take 4% to 6% more time (one
+        // binary switching between the two, measured 2026-11-18), so x86 and the other targets
+        // keep the stage-by-stage code.
+        if cfg!(target_arch = "aarch64") {
+            self.forward_mont_radix4(a);
+        } else {
+            self.forward_mont_radix2(a);
+        }
+    }
+    /// [`NttPlan::forward_mont`] two stages per pass (radix 4).
+    pub(crate) fn forward_mont_radix4(&self, a: &mut [u64]) {
         let (p, d) = (self.p, self.d);
         let two_p = 2 * p;
         let half = d / 2;
@@ -417,8 +430,7 @@ impl NttPlan {
             }
         }
     }
-    /// [`NttPlan::forward_mont`] one stage at a time, the reference of its radix-4 passes.
-    #[cfg(test)]
+    /// [`NttPlan::forward_mont`] one stage at a time (radix 2).
     pub(crate) fn forward_mont_radix2(&self, a: &mut [u64]) {
         debug_assert!(a.len() == self.d && a.iter().all(|x| *x < self.p));
         let (p, d) = (self.p, self.d);
@@ -460,6 +472,15 @@ impl NttPlan {
     /// returned in $`[0,p)`$. Values stay below $`2p`$ between stages.
     pub(crate) fn inverse_mont(&self, a: &mut [u64]) {
         debug_assert!(a.len() == self.d && a.iter().all(|x| *x < self.p));
+        // Two stages per pass on aarch64, one elsewhere, as in `forward_mont`.
+        if cfg!(target_arch = "aarch64") {
+            self.inverse_mont_radix4(a);
+        } else {
+            self.inverse_mont_radix2(a);
+        }
+    }
+    /// [`NttPlan::inverse_mont`] two stages per pass (radix 4).
+    pub(crate) fn inverse_mont_radix4(&self, a: &mut [u64]) {
         let (p, d) = (self.p, self.d);
         let two_p = 2 * p;
         let half = d / 2;
@@ -530,8 +551,7 @@ impl NttPlan {
             *x3 = shoup_mul(y1 + two_p - y3, z, z_shoup, p);
         }
     }
-    /// [`NttPlan::inverse_mont`] one stage at a time, the reference of its radix-4 passes.
-    #[cfg(test)]
+    /// [`NttPlan::inverse_mont`] one stage at a time (radix 2).
     pub(crate) fn inverse_mont_radix2(&self, a: &mut [u64]) {
         debug_assert!(a.len() == self.d && a.iter().all(|x| *x < self.p));
         let (p, d) = (self.p, self.d);
