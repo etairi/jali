@@ -266,11 +266,15 @@ pub(crate) fn sample_gaussian(
 ) -> Result<Mask, Error> {
     let mut entries = Vec::with_capacity(len);
     for i in 0..len {
-        let mut values = Zeroizing::new(gaussian(
-            &mut AesPrg::new(seed, domain(dom, (i + 1) as u32)),
-            t,
-            ring.degree(),
-        )?);
+        let stream = AesPrg::new(seed, domain(dom, (i + 1) as u32));
+        // On x86 the sampler's short reads come from 1 KiB batches of the keystream, the batch
+        // of VAES-512, and the stream is dropped after the mask: the same bytes in the same
+        // order as from the stream itself.
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        let mut stream = crate::rand::ReadAhead::<_, 1024>::new(stream);
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        let mut stream = stream;
+        let mut values = Zeroizing::new(gaussian(&mut stream, t, ring.degree())?);
         // A width at which a sample can exceed q/2 is a parameter error; another attempt
         // would not fix it.
         if values

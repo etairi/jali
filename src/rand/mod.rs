@@ -17,6 +17,8 @@ pub use gauss::gaussian;
 /// Gaussian code and the parameter check share this limit.
 pub const MAX_LOG_SIGMA: u32 = 100;
 pub(crate) use key::{derive_key, take_seed};
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub(crate) use prg::ReadAhead;
 pub(crate) use prg::secret;
 #[cfg(test)]
 pub(crate) use prg::stream_log;

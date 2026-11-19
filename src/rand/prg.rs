@@ -120,6 +120,58 @@ impl ByteStream for AesPrg {
     }
 }
 
+/// A stream read in batches of `N` bytes for its short reads: the bytes of `inner` in order,
+/// whatever the read sizes. A read of `N` bytes or more takes the inner stream directly. The
+/// batch read ahead leaves `inner` past the bytes returned, so the wrapper is for streams that
+/// are dropped with it, such as a mask's AES stream (on x86 `aes` encrypts 64 blocks at a time
+/// with VAES-512, 1 KiB, while `AesPrg` refills 256 bytes for short reads). The bytes read
+/// ahead are wiped on drop.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64", test))]
+pub(crate) struct ReadAhead<S, const N: usize> {
+    inner: S,
+    bytes: [u8; N],
+    pos: usize,
+    len: usize,
+    used: usize,
+}
+#[cfg(any(target_arch = "x86", target_arch = "x86_64", test))]
+impl<S: ByteStream, const N: usize> ReadAhead<S, N> {
+    pub(crate) fn new(inner: S) -> Self {
+        Self {
+            inner,
+            bytes: [0; N],
+            pos: 0,
+            len: 0,
+            used: 0,
+        }
+    }
+}
+#[cfg(any(target_arch = "x86", target_arch = "x86_64", test))]
+impl<S: ByteStream, const N: usize> ByteStream for ReadAhead<S, N> {
+    fn fill(&mut self, output: &mut [u8]) -> Result<(), Error> {
+        let buffered = (self.len - self.pos).min(output.len());
+        output[..buffered].copy_from_slice(&self.bytes[self.pos..self.pos + buffered]);
+        self.pos += buffered;
+        let rest = &mut output[buffered..];
+        if rest.is_empty() {
+            return Ok(());
+        }
+        if rest.len() >= N {
+            return self.inner.fill(rest);
+        }
+        self.inner.fill(&mut self.bytes)?;
+        rest.copy_from_slice(&self.bytes[..rest.len()]);
+        (self.pos, self.len, self.used) = (rest.len(), N, N);
+        Ok(())
+    }
+}
+#[cfg(any(target_arch = "x86", target_arch = "x86_64", test))]
+impl<S, const N: usize> Drop for ReadAhead<S, N> {
+    fn drop(&mut self) {
+        self.bytes[..self.used].zeroize();
+    }
+}
+
 /// Alternative SHAKE128 stream over `seed || LE64(domain)`.
 pub struct ShakePrg(Shake128Reader);
 impl core::fmt::Debug for ShakePrg {
@@ -284,6 +336,30 @@ mod tests {
                 }
                 assert_eq!(got, raw, "{sizes:?}");
             }
+        }
+    }
+    #[test]
+    fn read_ahead_returns_the_inner_stream() {
+        // Reads of every size around the batch, against one long read of the same stream.
+        let (seed, domain, total) = ([5u8; 32], 9u64, 7000);
+        let mut whole = vec![0u8; total];
+        super::AesPrg::new(&seed, domain).fill(&mut whole).unwrap();
+        for sizes in [
+            vec![1usize, 7, 8, 24, 32],
+            vec![1023, 1, 1024, 1025, 600, 5],
+            vec![255, 256, 257, 3, 2048],
+        ] {
+            let mut ahead = super::ReadAhead::<_, 1024>::new(super::AesPrg::new(&seed, domain));
+            let mut got = Vec::with_capacity(total);
+            let mut k = 0;
+            while got.len() < total {
+                let n = sizes[k % sizes.len()].min(total - got.len());
+                let mut buf = vec![0u8; n];
+                ahead.fill(&mut buf).unwrap();
+                got.extend_from_slice(&buf);
+                k += 1;
+            }
+            assert_eq!(got, whole, "{sizes:?}");
         }
     }
     use super::secret::*;
