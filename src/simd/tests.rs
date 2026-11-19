@@ -304,3 +304,104 @@ fn table_sums_equal_the_scalar_sums() {
         }
     }
 }
+
+/// The AVX-512 byte kernel of LaBRADOR's projection against the portable update, for
+/// coefficients up to ±127 in chunks of the flush length, with columns of every entry (all +1,
+/// all −1, cancelling bits) and random ones.
+#[test]
+fn byte_projection_equals_the_portable_update() {
+    if !super::avx512bw() {
+        eprintln!("no AVX-512BW here (or JALI_SCALAR set): only the portable loops run");
+        return;
+    }
+    let mut rng = Rng(46);
+    for max in [1i8, 2, 63, 127] {
+        let flush = 127 / max as usize;
+        for len in [0usize, 1, 3, flush] {
+            let mut columns: Vec<[u8; 64]> = vec![[0x55; 64], [0xaa; 64], [0xff; 64]];
+            columns.extend((3..len.max(3)).map(|_| core::array::from_fn(|_| rng.next() as u8)));
+            columns.truncate(len);
+            let values: Vec<i8> = (0..len)
+                .map(|i| {
+                    let m = if i % 3 == 0 {
+                        max
+                    } else {
+                        1 + (rng.next() % max as u64) as i8
+                    };
+                    if rng.next().is_multiple_of(2) { m } else { -m }
+                })
+                .collect();
+            let mut got = [[0i8; 64]; 4];
+            assert!(super::project_bytes(&mut got, &columns, &values));
+            let mut expect = [[0i8; 64]; 4];
+            for (column, s) in columns.iter().zip(&values) {
+                for (e, lane) in expect.iter_mut().enumerate() {
+                    for (a, b) in lane.iter_mut().zip(column) {
+                        let entry = i8::from((b >> (2 * e)) & 1 == 1)
+                            - i8::from((b >> (2 * e + 1)) & 1 == 1);
+                        *a += entry * s;
+                    }
+                }
+            }
+            assert_eq!(got, expect, "max {max} len {len}");
+        }
+    }
+}
+
+/// The kernels of the table of sign patterns, with AVX-512 VBMI where it runs and without it,
+/// against the sums of the table's entries, for λ from 1 to 8, at the largest 32-bit entries
+/// and on random ones, with a map onto every pattern.
+#[test]
+fn pattern_sums_equal_the_scalar_sums() {
+    if !super::avx512vl() {
+        eprintln!("no AVX-512VL here (or JALI_SCALAR set): only the portable sums run");
+        return;
+    }
+    let mut rng = Rng(81);
+    let map: [u8; 256] = core::array::from_fn(|b| ((b * 7) % 81) as u8);
+    for lambda in 1..=8usize {
+        let n = 64 * 81 * lambda;
+        let tables: [Vec<i32>; 3] = [
+            vec![i32::MAX; n],
+            vec![-i32::MAX; n],
+            (0..n).map(|_| rng.next() as i32).collect(),
+        ];
+        for table in &tables {
+            let mut columns = [[0u8; 64]; 8];
+            columns[1] = [255; 64];
+            for c in columns.iter_mut().skip(2) {
+                *c = core::array::from_fn(|_| rng.next() as u8);
+            }
+            let mut expect = [[0i64; 8]; 8];
+            for (e, column) in expect.iter_mut().zip(&columns) {
+                for (g, b) in column.iter().enumerate() {
+                    let at = (81 * g + usize::from(map[usize::from(*b)])) * lambda;
+                    for (k, x) in e[..lambda].iter_mut().enumerate() {
+                        *x += i64::from(table[at + k]);
+                    }
+                }
+            }
+            let mut got = [[0i64; 8]; 8];
+            assert!(super::pattern_sums8(
+                table, lambda, &map, &columns, &mut got
+            ));
+            let mut plain = [[0i64; 8]; 8];
+            // SAFETY: the processor has AVX-512F and VL (checked above).
+            unsafe {
+                super::modular_avx512::pattern_sums8(table, lambda, &map, &columns, &mut plain)
+            };
+            for c in 0..8 {
+                assert_eq!(
+                    got[c][..lambda],
+                    expect[c][..lambda],
+                    "lambda {lambda} column {c}"
+                );
+                assert_eq!(
+                    plain[c][..lambda],
+                    expect[c][..lambda],
+                    "plain lambda {lambda} column {c}"
+                );
+            }
+        }
+    }
+}
