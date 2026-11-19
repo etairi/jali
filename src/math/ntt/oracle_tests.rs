@@ -254,3 +254,27 @@ fn montgomery_path_products_equal_schoolbook_products() {
         }
     }
 }
+
+/// The radix-4 passes of the Montgomery transforms against one stage at a time, on the same
+/// inputs, for every prime and degree: the same butterflies on the same values, so the same
+/// outputs.
+#[test]
+fn radix_four_passes_equal_the_radix_two_stages() {
+    let mut rng = Rng(2);
+    for (p, root) in NTT_PRIMES {
+        for log_d in 1..=10 {
+            let d = 1usize << log_d;
+            let plan = NttPlan::new(p, d, pow_mod(root, (1024 / d) as u64, p)).unwrap();
+            for a in inputs(p, d, &mut rng) {
+                let (mut four, mut two) = (a.clone(), a.clone());
+                plan.forward_mont(&mut four);
+                plan.forward_mont_radix2(&mut two);
+                assert_eq!(four, two, "forward p {p} d {d}");
+                let (mut four, mut two) = (a.clone(), a.clone());
+                plan.inverse_mont(&mut four);
+                plan.inverse_mont_radix2(&mut two);
+                assert_eq!(four, two, "inverse p {p} d {d}");
+            }
+        }
+    }
+}

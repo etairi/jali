@@ -48,6 +48,13 @@ pub(crate) fn shoup_mul(x: u64, w: u64, w_shoup: u64, p: u64) -> u64 {
     if r >= p { r - p } else { r }
 }
 
+/// $`v\bmod p`$ for $`v<4p`$, by two conditional subtractions.
+#[inline(always)]
+fn reduce_four_p(v: u64, p: u64) -> u64 {
+    let v = if v >= 2 * p { v - 2 * p } else { v };
+    if v >= p { v - p } else { v }
+}
+
 /// [`shoup_mul`] without its final subtraction: a value in $`[0,2p)`$ congruent to $`xw`$, for
 /// any $`x<2^{64}`$ (the bound of `shoup_mul`'s proof before the subtraction).
 #[inline(always)]
@@ -287,6 +294,135 @@ impl NttPlan {
         let (p, d) = (self.p, self.d);
         let two_p = 2 * p;
         let half = d / 2;
+        // The stages two at a time (radix 4): in a block of 4l, the butterflies of the stage at
+        // distance 2l with the block's twiddle, then those at distance l with the twiddles of
+        // its halves, on the same 4 values. These are the butterflies of the radix-2 stages on
+        // the same values ([`NttPlan::forward_mont_radix2`]), so the outputs are equal, and a
+        // pass over the vector serves two stages. With an even number of stages the first one
+        // (which puts R in) pairs with the second, with an odd number it runs alone. The last
+        // pass also reduces into [0, p), which a pass of its own did before.
+        let (mut len, mut k) = if d >= 4 && d.trailing_zeros().is_multiple_of(2) {
+            if d == 4 {
+                self.forward_first_pair::<true>(a);
+            } else {
+                self.forward_first_pair::<false>(a);
+            }
+            (half / 4, 4)
+        } else {
+            let (r, r_shoup) = self.r;
+            let (z, z_shoup) = self.first;
+            let (low, high) = a.split_at_mut(half);
+            for (x, y) in low.iter_mut().zip(high.iter_mut()) {
+                let u = shoup_lazy(*x, r, r_shoup, p);
+                let t = shoup_lazy(*y, z, z_shoup, p);
+                *x = u + t;
+                *y = u + two_p - t;
+            }
+            (half / 2, 2)
+        };
+        while len >= 2 {
+            let l = len / 2;
+            if l == 1 {
+                self.forward_pair::<true>(a, k, l);
+            } else {
+                self.forward_pair::<false>(a, k, l);
+            }
+            k *= 4;
+            len /= 4;
+        }
+        // The pairing leaves no stage alone after the first: an odd number of stages pairs
+        // all but the first, an even number all of them. Degree 2 has its one stage only.
+        debug_assert_eq!(len, 0);
+        if d == 2 {
+            for x in a.iter_mut() {
+                *x = reduce_four_p(*x, p);
+            }
+        }
+    }
+    /// The first two stages of [`NttPlan::forward_mont`] in one pass: the first, which
+    /// multiplies its inputs by $`R`$ and $`\zeta_1R`$, and the second, with $`\zeta_2`$ and
+    /// $`\zeta_3`$. With `LAST` (degree 4) the outputs are reduced into $`[0,p)`$.
+    #[inline(always)]
+    fn forward_first_pair<const LAST: bool>(&self, a: &mut [u64]) {
+        let p = self.p;
+        let two_p = 2 * p;
+        let l = self.d / 4;
+        let (r, r_shoup) = self.r;
+        let (z, z_shoup) = self.first;
+        let (w0, w0_shoup) = self.zetas[2];
+        let (w1, w1_shoup) = self.zetas[3];
+        let (b0, rest) = a.split_at_mut(l);
+        let (b1, rest) = rest.split_at_mut(l);
+        let (b2, b3) = rest.split_at_mut(l);
+        for (((x0, x1), x2), x3) in b0.iter_mut().zip(b1).zip(b2).zip(b3) {
+            let u0 = shoup_lazy(*x0, r, r_shoup, p);
+            let t0 = shoup_lazy(*x2, z, z_shoup, p);
+            let u1 = shoup_lazy(*x1, r, r_shoup, p);
+            let t1 = shoup_lazy(*x3, z, z_shoup, p);
+            let (y0, y2) = (u0 + t0, u0 + two_p - t0);
+            let (y1, y3) = (u1 + t1, u1 + two_p - t1);
+            let v0 = if y0 >= two_p { y0 - two_p } else { y0 };
+            let s0 = shoup_lazy(y1, w0, w0_shoup, p);
+            let v2 = if y2 >= two_p { y2 - two_p } else { y2 };
+            let s2 = shoup_lazy(y3, w1, w1_shoup, p);
+            if LAST {
+                *x0 = reduce_four_p(v0 + s0, p);
+                *x1 = reduce_four_p(v0 + two_p - s0, p);
+                *x2 = reduce_four_p(v2 + s2, p);
+                *x3 = reduce_four_p(v2 + two_p - s2, p);
+            } else {
+                *x0 = v0 + s0;
+                *x1 = v0 + two_p - s0;
+                *x2 = v2 + s2;
+                *x3 = v2 + two_p - s2;
+            }
+        }
+    }
+    /// Two stages of [`NttPlan::forward_mont`] in one pass: blocks of $`4l`$ whose first
+    /// twiddle index is `k`. With `LAST` the outputs are reduced into $`[0,p)`$.
+    #[inline(always)]
+    fn forward_pair<const LAST: bool>(&self, a: &mut [u64], k: usize, l: usize) {
+        let p = self.p;
+        let two_p = 2 * p;
+        for (j, block) in a.chunks_exact_mut(4 * l).enumerate() {
+            let (w, w_shoup) = self.zetas[k + j];
+            let (w0, w0_shoup) = self.zetas[2 * (k + j)];
+            let (w1, w1_shoup) = self.zetas[2 * (k + j) + 1];
+            let (b0, rest) = block.split_at_mut(l);
+            let (b1, rest) = rest.split_at_mut(l);
+            let (b2, b3) = rest.split_at_mut(l);
+            for (((x0, x1), x2), x3) in b0.iter_mut().zip(b1).zip(b2).zip(b3) {
+                let u0 = if *x0 >= two_p { *x0 - two_p } else { *x0 };
+                let t0 = shoup_lazy(*x2, w, w_shoup, p);
+                let u1 = if *x1 >= two_p { *x1 - two_p } else { *x1 };
+                let t1 = shoup_lazy(*x3, w, w_shoup, p);
+                let (y0, y2) = (u0 + t0, u0 + two_p - t0);
+                let (y1, y3) = (u1 + t1, u1 + two_p - t1);
+                let v0 = if y0 >= two_p { y0 - two_p } else { y0 };
+                let s0 = shoup_lazy(y1, w0, w0_shoup, p);
+                let v2 = if y2 >= two_p { y2 - two_p } else { y2 };
+                let s2 = shoup_lazy(y3, w1, w1_shoup, p);
+                if LAST {
+                    *x0 = reduce_four_p(v0 + s0, p);
+                    *x1 = reduce_four_p(v0 + two_p - s0, p);
+                    *x2 = reduce_four_p(v2 + s2, p);
+                    *x3 = reduce_four_p(v2 + two_p - s2, p);
+                } else {
+                    *x0 = v0 + s0;
+                    *x1 = v0 + two_p - s0;
+                    *x2 = v2 + s2;
+                    *x3 = v2 + two_p - s2;
+                }
+            }
+        }
+    }
+    /// [`NttPlan::forward_mont`] one stage at a time, the reference of its radix-4 passes.
+    #[cfg(test)]
+    pub(crate) fn forward_mont_radix2(&self, a: &mut [u64]) {
+        debug_assert!(a.len() == self.d && a.iter().all(|x| *x < self.p));
+        let (p, d) = (self.p, self.d);
+        let two_p = 2 * p;
+        let half = d / 2;
         let (r, r_shoup) = self.r;
         let (z, z_shoup) = self.first;
         let (low, high) = a.split_at_mut(half);
@@ -313,14 +449,7 @@ impl NttPlan {
             len /= 2;
         }
         for x in a.iter_mut() {
-            let mut v = *x;
-            if v >= two_p {
-                v -= two_p;
-            }
-            if v >= p {
-                v -= p;
-            }
-            *x = v;
+            *x = reduce_four_p(*x, p);
         }
     }
     /// The inverse of [`NttPlan::forward_mont`] that also removes the factor $`R`$: the
@@ -329,6 +458,80 @@ impl NttPlan {
     /// $`d`$, and the last stage multiplies by $`c=d^{-1}R^{-1}`$. For `d` residues in $`[0,p)`$,
     /// returned in $`[0,p)`$. Values stay below $`2p`$ between stages.
     pub(crate) fn inverse_mont(&self, a: &mut [u64]) {
+        debug_assert!(a.len() == self.d && a.iter().all(|x| *x < self.p));
+        let (p, d) = (self.p, self.d);
+        let two_p = 2 * p;
+        let half = d / 2;
+        // The stages below the last two at a time (radix 4): in a block of 4l, the butterflies
+        // at distance l with the twiddles of its halves, then those at distance 2l with the
+        // block's twiddle, on the same 4 values, the butterflies of the two radix-2 stages
+        // ([`NttPlan::inverse_mont_radix2`]).
+        let mut len = 1;
+        while 2 * len < half {
+            let k0 = d / (2 * len);
+            let k1 = d / (4 * len);
+            for (j, block) in a.chunks_exact_mut(4 * len).enumerate() {
+                let (w0, w0_shoup) = self.inv_zetas[k0 + 2 * j];
+                let (w1, w1_shoup) = self.inv_zetas[k0 + 2 * j + 1];
+                let (w, w_shoup) = self.inv_zetas[k1 + j];
+                let (b0, rest) = block.split_at_mut(len);
+                let (b1, rest) = rest.split_at_mut(len);
+                let (b2, b3) = rest.split_at_mut(len);
+                for (((x0, x1), x2), x3) in b0.iter_mut().zip(b1).zip(b2).zip(b3) {
+                    let s0 = *x0 + *x1;
+                    let y0 = if s0 >= two_p { s0 - two_p } else { s0 };
+                    let y1 = shoup_lazy(*x0 + two_p - *x1, w0, w0_shoup, p);
+                    let s2 = *x2 + *x3;
+                    let y2 = if s2 >= two_p { s2 - two_p } else { s2 };
+                    let y3 = shoup_lazy(*x2 + two_p - *x3, w1, w1_shoup, p);
+                    let t0 = y0 + y2;
+                    let t1 = y1 + y3;
+                    *x0 = if t0 >= two_p { t0 - two_p } else { t0 };
+                    *x1 = if t1 >= two_p { t1 - two_p } else { t1 };
+                    *x2 = shoup_lazy(y0 + two_p - y2, w, w_shoup, p);
+                    *x3 = shoup_lazy(y1 + two_p - y3, w, w_shoup, p);
+                }
+            }
+            len *= 4;
+        }
+        // An odd number of stages below the last leaves one, at distance d/4: with the last stage
+        // in one pass.
+        if len < half {
+            self.inverse_last_pair(a);
+        } else {
+            self.inverse_last_stage(a);
+        }
+    }
+    /// The stage of [`NttPlan::inverse_mont`] at distance $`d/4`$ (twiddles $`\zeta_2^{-1}`$
+    /// and $`\zeta_3^{-1}`$) and its last stage, which multiplies by $`c`$ and
+    /// $`\zeta_1^{-1}c`$, in one pass.
+    fn inverse_last_pair(&self, a: &mut [u64]) {
+        let p = self.p;
+        let two_p = 2 * p;
+        let l = self.d / 4;
+        let (w0, w0_shoup) = self.inv_zetas[2];
+        let (w1, w1_shoup) = self.inv_zetas[3];
+        let (c, c_shoup) = self.scale;
+        let (z, z_shoup) = self.last;
+        let (b0, rest) = a.split_at_mut(l);
+        let (b1, rest) = rest.split_at_mut(l);
+        let (b2, b3) = rest.split_at_mut(l);
+        for (((x0, x1), x2), x3) in b0.iter_mut().zip(b1).zip(b2).zip(b3) {
+            let s0 = *x0 + *x1;
+            let y0 = if s0 >= two_p { s0 - two_p } else { s0 };
+            let y1 = shoup_lazy(*x0 + two_p - *x1, w0, w0_shoup, p);
+            let s2 = *x2 + *x3;
+            let y2 = if s2 >= two_p { s2 - two_p } else { s2 };
+            let y3 = shoup_lazy(*x2 + two_p - *x3, w1, w1_shoup, p);
+            *x0 = shoup_mul(y0 + y2, c, c_shoup, p);
+            *x2 = shoup_mul(y0 + two_p - y2, z, z_shoup, p);
+            *x1 = shoup_mul(y1 + y3, c, c_shoup, p);
+            *x3 = shoup_mul(y1 + two_p - y3, z, z_shoup, p);
+        }
+    }
+    /// [`NttPlan::inverse_mont`] one stage at a time, the reference of its radix-4 passes.
+    #[cfg(test)]
+    pub(crate) fn inverse_mont_radix2(&self, a: &mut [u64]) {
         debug_assert!(a.len() == self.d && a.iter().all(|x| *x < self.p));
         let (p, d) = (self.p, self.d);
         let two_p = 2 * p;
@@ -348,6 +551,12 @@ impl NttPlan {
             }
             len *= 2;
         }
+        self.inverse_last_stage(a);
+    }
+    /// The last stage of [`NttPlan::inverse_mont`], which multiplies by $`c=d^{-1}R^{-1}`$.
+    fn inverse_last_stage(&self, a: &mut [u64]) {
+        let (p, half) = (self.p, self.d / 2);
+        let two_p = 2 * p;
         let (c, c_shoup) = self.scale;
         let (z, z_shoup) = self.last;
         let (low, high) = a.split_at_mut(half);
