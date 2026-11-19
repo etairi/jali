@@ -627,7 +627,7 @@ impl QuadEq {
             }
         }
         self.r1.dot_constant(witness, &mut sum)?;
-        sum.add(&self.r0.coefficients()[0]);
+        sum.add(&self.r0.coefficient(0));
         Ok(sum.finish())
     }
     /// The constant coefficient of [`QuadEq::evaluate`], exactly, with the same refusals:
@@ -639,7 +639,7 @@ impl QuadEq {
         let mut sum = ConstantSum::new(self.r0.ring());
         self.r2.bilinear_constant(witness, &mut sum)?;
         self.r1.dot_constant(witness, &mut sum)?;
-        sum.add(&self.r0.coefficients()[0]);
+        sum.add(&self.r0.coefficient(0));
         Ok(sum.finish())
     }
     /// Canonical, dimension-bound encoding for statement hashing.
@@ -748,15 +748,15 @@ fn encode_poly(w: &mut impl CodeWriter, p: &Poly) -> Result<(), Error> {
     // Each coefficient is a uniform code of bits(q - 1) bits; those of a zero polynomial are
     // all zero, written as one run.
     if p.is_zero() {
-        w.zeros(p.coefficients().len() as u64 * u64::from(p.ring().coefficient_bits()));
+        w.zeros(p.ring().degree() as u64 * u64::from(p.ring().coefficient_bits()));
         return Ok(());
     }
     let q = p.ring().modulus();
     match int::to_u128(&q) {
-        Some(m) => w.uniform_each(p.coefficients(), m)?,
+        Some(m) => w.uniform_each(p.values_u128(), m)?,
         None => {
-            for x in p.coefficients() {
-                w.uniform_u256(x, &q)?;
+            for x in p.values() {
+                w.uniform_u256(&x, &q)?;
             }
         }
     }

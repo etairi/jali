@@ -472,10 +472,8 @@ fn zero_runs_across_a_chunk_boundary_equal_the_bit_writer() {
 }
 
 /// [`CodeWriter::uniform`] of each value in turn, up to the first error.
-fn uniform_one_by_one(w: &mut impl CodeWriter, values: &[U256], m: u128) -> Result<(), Error> {
-    values
-        .iter()
-        .try_for_each(|x| w.uniform(crate::math::int::low_u128(x), m))
+fn uniform_one_by_one(w: &mut impl CodeWriter, values: &[u128], m: u128) -> Result<(), Error> {
+    values.iter().try_for_each(|x| w.uniform(*x, m))
 }
 
 #[test]
@@ -504,21 +502,21 @@ fn uniform_runs_equal_one_code_per_value() {
             1 => rng.below(8),
             _ => rng.below(3000),
         } as usize;
-        let mut values: Vec<U256> = (0..len)
+        let mut values: Vec<u128> = (0..len)
             .map(|_| {
                 let v = (u128::from(rng.next()) << 64) | u128::from(rng.next());
-                U256::from_u128(if m < 2 { v } else { v % m })
+                if m < 2 { v } else { v % m }
             })
             .collect();
         if len > 0 && m >= 2 && rng.below(4) == 0 {
-            values[rng.below(len as u64) as usize] = U256::from_u128(m);
+            values[rng.below(len as u64) as usize] = m;
         }
         let (mut a, mut b) = (BitWriter::new(), BitWriter::new());
         let (mut s, mut t) = (SegmentWriter::new(), SegmentWriter::new());
         let results = [
-            CodeWriter::uniform_each(&mut a, &values, m),
+            CodeWriter::uniform_each(&mut a, values.iter().copied(), m),
             uniform_one_by_one(&mut b, &values, m),
-            CodeWriter::uniform_each(&mut s, &values, m),
+            CodeWriter::uniform_each(&mut s, values.iter().copied(), m),
             uniform_one_by_one(&mut t, &values, m),
         ];
         assert!(

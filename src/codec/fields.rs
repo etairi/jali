@@ -14,10 +14,10 @@
 //!   refused: the other coefficients of a challenge follow from these.
 //!
 //! With degrees 64 and 128 every field fills whole bytes.
-use super::{BitReader, BitWriter};
+use super::{BitReader, BitWriter, bits::CodeWriter};
 use crate::{
     Error,
-    math::{Poly, PolyVec, Ring, U256, int},
+    math::{Coeffs, Poly, PolyVec, Ring, U256, int},
 };
 use std::sync::Arc;
 
@@ -28,18 +28,24 @@ pub(crate) fn write_below(w: &mut BitWriter, v: &PolyVec, modulus: &U256) -> Res
     match int::to_u128(modulus) {
         Some(m) => {
             for p in v.entries() {
-                for x in p.coefficients() {
-                    if x >= modulus {
-                        return Err(Error::Encoding);
+                match p.coeffs() {
+                    // A value of 128 bits or more is not below the modulus either.
+                    Coeffs::Wide(values) => {
+                        for x in values {
+                            if x >= modulus {
+                                return Err(Error::Encoding);
+                            }
+                            w.uniform(int::low_u128(x), m)?;
+                        }
                     }
-                    w.uniform(int::low_u128(x), m)?;
+                    _ => w.uniform_each(p.values_u128(), m)?,
                 }
             }
         }
         None => {
             for p in v.entries() {
-                for x in p.coefficients() {
-                    w.uniform_u256(x, modulus)?;
+                for x in p.values() {
+                    w.uniform_u256(&x, modulus)?;
                 }
             }
         }
@@ -58,13 +64,20 @@ pub(crate) fn read_below(
     let narrow = int::to_u128(modulus);
     let mut entries = Vec::with_capacity(len);
     for _ in 0..len {
-        let coefficients = (0..ring.degree())
-            .map(|_| match narrow {
-                Some(m) => Ok(U256::from_u128(r.uniform(m)?)),
-                None => r.uniform_u256(modulus),
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-        entries.push(Poly::from_canonical(ring.clone(), coefficients));
+        entries.push(match narrow {
+            Some(m) => Poly::from_canonical_u128(
+                ring.clone(),
+                (0..ring.degree())
+                    .map(|_| r.uniform(m))
+                    .collect::<Result<Vec<_>, Error>>()?,
+            ),
+            None => Poly::from_canonical(
+                ring.clone(),
+                (0..ring.degree())
+                    .map(|_| r.uniform_u256(modulus))
+                    .collect::<Result<Vec<_>, Error>>()?,
+            ),
+        });
     }
     PolyVec::new(ring.clone(), entries)
 }
@@ -73,9 +86,8 @@ pub(crate) fn read_below(
 /// [`Error::Encoding`] on a coefficient beyond $`2^{w-1}-1`$ in absolute value.
 pub(crate) fn write_signed(w: &mut BitWriter, v: &PolyVec, width: u32) -> Result<(), Error> {
     for p in v.entries() {
-        for x in p.coefficients() {
-            let x = p.ring().centred_i128(x).ok_or(Error::Encoding)?;
-            w.signed(x, width)?;
+        for i in 0..p.ring().degree() {
+            w.signed(p.centred(i).ok_or(Error::Encoding)?, width)?;
         }
     }
     Ok(())
@@ -86,11 +98,7 @@ pub(crate) fn write_signed(w: &mut BitWriter, v: &PolyVec, width: u32) -> Result
 pub(crate) fn fits_signed(v: &PolyVec, width: u32) -> bool {
     let b = (1u128 << (width - 1)) - 1;
     v.entries().iter().all(|p| {
-        p.coefficients().iter().all(|x| {
-            p.ring()
-                .centred_i128(x)
-                .is_some_and(|x| x.unsigned_abs() <= b)
-        })
+        (0..p.ring().degree()).all(|i| p.centred(i).is_some_and(|x| x.unsigned_abs() <= b))
     })
 }
 
@@ -128,12 +136,12 @@ fn challenge_width(omega: i128) -> u32 {
 /// coefficients in $`[-\omega,\omega]`$.
 pub(crate) fn write_challenge(w: &mut BitWriter, c: &Poly, omega: i128) -> Result<(), Error> {
     let d = c.ring().degree();
-    if c.auto() != *c || !c.coefficients()[d / 2].is_zero_vartime() {
+    if c.auto() != *c || !c.coefficient(d / 2).is_zero_vartime() {
         return Err(Error::Encoding);
     }
     let k = challenge_width(omega);
-    for x in &c.coefficients()[..d / 2] {
-        let x = c.ring().centred_i128(x).ok_or(Error::Encoding)?;
+    for i in 0..d / 2 {
+        let x = c.centred(i).ok_or(Error::Encoding)?;
         if x.unsigned_abs() > omega as u128 {
             return Err(Error::Encoding);
         }

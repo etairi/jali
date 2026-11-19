@@ -1104,15 +1104,15 @@ fn ceil_sqrt(x: Bound) -> Bound {
 }
 /// Exact squared Euclidean norm of the centred representatives.
 fn exact_norm_squared(p: &Poly) -> Result<Bound, Error> {
-    p.coefficients().iter().try_fold(Bound::ZERO, |sum, x| {
-        let m = p.ring().magnitude(x).resize::<{ Bound::LIMBS }>();
+    (0..p.ring().degree()).try_fold(Bound::ZERO, |sum, i| {
+        let m = p.magnitude(i).resize::<{ Bound::LIMBS }>();
         add_bound(sum, m.wrapping_mul(&m))
     })
 }
 /// $`\|p\|_1`$ of the centred representatives.
 fn l1_norm(p: &Poly) -> Result<Bound, Error> {
-    p.coefficients().iter().try_fold(Bound::ZERO, |sum, x| {
-        add_bound(sum, p.ring().magnitude(x).resize::<{ Bound::LIMBS }>())
+    (0..p.ring().degree()).try_fold(Bound::ZERO, |sum, i| {
+        add_bound(sum, p.magnitude(i).resize::<{ Bound::LIMBS }>())
     })
 }
 /// A value below $`2^{256}`$, and [`Error::Overflow`] otherwise.
@@ -1258,13 +1258,12 @@ fn quotient_bound(f: &U256, ring: &Ring) -> Result<u128, Error> {
 /// The centred representative of each coefficient, reduced into the target ring.
 fn lift(p: &Poly, target: Arc<Ring>) -> Result<Poly, Error> {
     let source = p.ring();
-    if source.q == target.q {
-        return Ok(Poly::from_canonical(target, p.coefficients().to_vec()));
+    if source.q == target.q && source.d == target.d {
+        return Ok(Poly::from_coeffs(target, p.coeffs().clone()));
     }
     let values = p
-        .coefficients()
-        .iter()
-        .map(|x| target.reduce_i256(&source.centred_i256(x)))
+        .values()
+        .map(|x| target.reduce_i256(&source.centred_i256(&x)))
         .collect();
     Ok(Poly::from_canonical(target, values))
 }
@@ -1741,9 +1740,8 @@ impl Integer for Wide {
     fn centred(p: &Poly) -> Option<Zeroizing<Vec<Self>>> {
         let ring = p.ring();
         Some(Zeroizing::new(
-            p.coefficients()
-                .iter()
-                .map(|x| Wide(ring.centred_i256(x).resize::<{ I512::LIMBS }>()))
+            p.values()
+                .map(|x| Wide(ring.centred_i256(&x).resize::<{ I512::LIMBS }>()))
                 .collect(),
         ))
     }
@@ -2126,20 +2124,14 @@ impl Compiled {
                 {
                     return Err(Error::Witness);
                 }
-                Norm::Binary
-                    if block
-                        .iter()
-                        .any(|p| p.coefficients().iter().any(|x| *x > U256::ONE)) =>
-                {
+                Norm::Binary if block.iter().any(|p| p.values().any(|x| x > U256::ONE)) => {
                     return Err(Error::Witness);
                 }
                 // The range proof checks only the common linf_bound: beta is checked here. For
                 // LinfExact, the bits could not encode more.
                 Norm::Linf(beta) | Norm::LinfExact(beta)
                     if block.iter().any(|p| {
-                        p.coefficients()
-                            .iter()
-                            .any(|x| self.source.ring.magnitude(x) > U256::from_u64(beta))
+                        (0..p.ring().degree()).any(|i| p.magnitude(i) > U256::from_u64(beta))
                     }) =>
                 {
                     return Err(Error::Witness);
@@ -2149,8 +2141,7 @@ impl Compiled {
             // A subring element v(X^K) has zeros at every index not divisible by K.
             let stride = self.source.ring.degree() / var.degree;
             if block.iter().any(|p| {
-                p.coefficients()
-                    .iter()
+                p.values()
                     .enumerate()
                     .any(|(i, x)| i % stride != 0 && !x.is_zero_vartime())
             }) {

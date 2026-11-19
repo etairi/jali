@@ -17,7 +17,7 @@ pub fn split(poly: &Poly, target: Arc<Ring>) -> Result<Vec<Poly>, Error> {
             Poly::from_canonical(
                 target.clone(),
                 (0..target.degree())
-                    .map(|j| poly.coefficients()[k * j + i])
+                    .map(|j| poly.coefficient(k * j + i))
                     .collect(),
             )
         })
@@ -37,7 +37,7 @@ pub fn join(parts: &[Poly], target: Arc<Ring>) -> Result<Poly, Error> {
     Ok(Poly::from_canonical(
         target.clone(),
         (0..target.degree())
-            .map(|i| parts[i % parts.len()].coefficients()[i / parts.len()])
+            .map(|i| parts[i % parts.len()].coefficient(i / parts.len()))
             .collect(),
     ))
 }
@@ -55,8 +55,8 @@ pub fn embed(poly: &Poly, target: Arc<Ring>) -> Result<Poly, Error> {
     }
     let k = target.degree() / poly.ring().degree();
     let mut coefficients = vec![crypto_bigint::U256::ZERO; target.degree()];
-    for (i, x) in poly.coefficients().iter().enumerate() {
-        coefficients[k * i] = *x;
+    for (i, x) in poly.values().enumerate() {
+        coefficients[k * i] = x;
     }
     Ok(Poly::from_canonical(target, coefficients))
 }

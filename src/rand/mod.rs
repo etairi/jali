@@ -22,4 +22,4 @@ pub(crate) use prg::secret;
 pub(crate) use prg::stream_log;
 pub use prg::{AesPrg, ByteStream, ShakePrg, domain};
 pub use uniform::{autostable, binomial, bounded, uniform, uniform_u256};
-pub(crate) use uniform::{bits, uniform_ring};
+pub(crate) use uniform::{bits, uniform_poly};

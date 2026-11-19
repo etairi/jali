@@ -24,7 +24,7 @@
 //!   its squared norm, where the paper checks every block against $`\sqrt{2nd}\,\phi T`$,
 //!   which honest openings of the blocks of dimension $`m'd`$ exceed once $`m'>2n`$.
 #[cfg(test)]
-use crate::rand::{ShakePrg, uniform_ring};
+use crate::rand::{ShakePrg, uniform_poly};
 use crate::{
     Error,
     abdlop::{self, Mask},
@@ -340,14 +340,7 @@ fn shake_matrix(
     dom: u32,
 ) -> Result<PolyMat, Error> {
     let entries = (0..abdlop::matrix_size(rows, cols)?)
-        .map(|i| {
-            let values = uniform_ring(
-                &mut ShakePrg::new(seed, domain(dom, i as u32)),
-                ring,
-                ring.degree(),
-            )?;
-            Ok(Poly::from_canonical(ring.clone(), values))
-        })
+        .map(|i| uniform_poly(&mut ShakePrg::new(seed, domain(dom, i as u32)), ring))
         .collect::<Result<Vec<_>, Error>>()?;
     PolyMat::new(ring.clone(), rows, cols, entries)
 }

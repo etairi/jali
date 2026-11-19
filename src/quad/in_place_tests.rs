@@ -147,8 +147,9 @@ fn polynomial_helpers_equal_the_operations_they_fuse() {
             let k = rng.below(ring.degree() as u64) as usize;
             let mut x = a.clone();
             x.add_monomial_product_assign(&b, k, &c).unwrap();
-            let mut monomial = Poly::zero(ring.clone());
-            monomial.coeffs[k] = c;
+            let mut values = vec![U256::ZERO; ring.degree()];
+            values[k] = c;
+            let monomial = Poly::from_canonical(ring.clone(), values);
             assert_eq!(x, a.add(&monomial.mul(&b).unwrap()).unwrap());
             assert_eq!(
                 x,

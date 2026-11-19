@@ -210,12 +210,9 @@ impl SmallCrt {
             product_q: modulo(&product),
         }
     }
-    /// The modulus $`q<2^{63}`$.
-    pub(crate) fn modulus(&self) -> u64 {
-        self.q
-    }
     /// [`SmallCrt::reconstruct`] of every coefficient, with the constants of one to four
-    /// primes in arrays.
+    /// primes in arrays, as 256-bit values (the oracle of the batched CRT tests).
+    #[cfg(test)]
     pub(crate) fn reconstruct_all(&self, residues: &[Vec<u64>]) -> Vec<U256> {
         let mut out = vec![0; residues[0].len()];
         self.reconstruct_into(residues, &mut out);
@@ -330,12 +327,31 @@ impl WideCrt {
         small: Option<&Divisor64>,
     ) -> Vec<U256> {
         match (&self.native, self.garner.primes.len()) {
+            (Some(_), 1..=4) => self
+                .reconstruct_all_u128(residues, q, small)
+                .into_iter()
+                .map(U256::from_u128)
+                .collect(),
+            _ => (0..residues[0].len())
+                .map(|j| self.reconstruct(residues, j, q, small))
+                .collect(),
+        }
+    }
+    /// [`WideCrt::reconstruct_all`] as `u128`, for a modulus with the native tail
+    /// ($`2^{63}\le q<2^{126}`$), whose polynomials keep two-word coefficients.
+    pub(crate) fn reconstruct_all_u128(
+        &self,
+        residues: &[Vec<u64>],
+        q: &NonZero<U256>,
+        small: Option<&Divisor64>,
+    ) -> Vec<u128> {
+        match (&self.native, self.garner.primes.len()) {
             (Some(tail), 1) => self.reconstruct_fixed::<1>(tail, residues),
             (Some(tail), 2) => self.reconstruct_fixed::<2>(tail, residues),
             (Some(tail), 3) => self.reconstruct_fixed::<3>(tail, residues),
             (Some(tail), 4) => self.reconstruct_fixed::<4>(tail, residues),
             _ => (0..residues[0].len())
-                .map(|j| self.reconstruct(residues, j, q, small))
+                .map(|j| int::low_u128(&self.reconstruct(residues, j, q, small)))
                 .collect(),
         }
     }
@@ -343,7 +359,7 @@ impl WideCrt {
         &self,
         tail: &NativeTail,
         residues: &[Vec<u64>],
-    ) -> Vec<U256> {
+    ) -> Vec<u128> {
         let garner = self.garner.fixed::<K>();
         let columns = columns::<K>(residues);
         let prefixes: [(u128, u128); K] = core::array::from_fn(|i| tail.prefixes_q[i]);
@@ -355,11 +371,11 @@ impl WideCrt {
                 for (v, (m, m_shoup)) in digits.iter().zip(&prefixes) {
                     x = add_mod128(x, shoup_mul128_word(*v, *m, *m_shoup, q), q);
                 }
-                U256::from_u128(if negative {
+                if negative {
                     sub_mod128(x, tail.product_q, q)
                 } else {
                     x
-                })
+                }
             })
             .collect()
     }
@@ -412,84 +428,6 @@ impl WideCrt {
 pub(crate) enum RingCrt {
     Small(SmallCrt),
     Wide(WideCrt),
-}
-
-/// Multiplication by one reduced scalar $`w`$, by Shoup products: the quotient constant is
-/// computed once (see `ntt::shoup_mul` and `mod128::shoup_mul128`).
-pub(crate) enum ScalarMul {
-    /// $`q<2^{63}`$, with $`\lfloor w2^{64}/q\rfloor`$.
-    Small { w: u64, w_shoup: u64, q: u64 },
-    /// $`2^{63}\le q<2^{126}`$, with $`\lfloor w2^{128}/q\rfloor`$.
-    Wide { w: u128, w_shoup: u128, q: u128 },
-}
-// Each method matches the variant once, outside its loop: a match per value costs about a
-// quarter more instructions in a small-modulus scaling (measured 2026-11-16).
-impl ScalarMul {
-    /// `out += xs w`, or `out -= xs w` with `SUBTRACT`, modulo $`q`$ for canonical values: the
-    /// product and the sum in the variant's own words, without a ring addition per value.
-    #[inline(always)]
-    pub(crate) fn add_scaled<const SUBTRACT: bool>(&self, out: &mut [U256], xs: &[U256]) {
-        match *self {
-            ScalarMul::Small { w, w_shoup, q } => {
-                for (o, x) in out.iter_mut().zip(xs) {
-                    let t = shoup_mul(int::low_u64(x), w, w_shoup, q);
-                    let a = int::low_u64(o);
-                    int::set_low_u64(
-                        o,
-                        if SUBTRACT {
-                            sub_mod(a, t, q)
-                        } else {
-                            add_mod(a, t, q)
-                        },
-                    );
-                }
-            }
-            ScalarMul::Wide { w, w_shoup, q } => {
-                for (o, x) in out.iter_mut().zip(xs) {
-                    let t = shoup_mul128(int::low_u128(x), w, w_shoup, q);
-                    let a = int::low_u128(o);
-                    int::set_low_u128(
-                        o,
-                        if SUBTRACT {
-                            sub_mod128(a, t, q)
-                        } else {
-                            add_mod128(a, t, q)
-                        },
-                    );
-                }
-            }
-        }
-    }
-    /// $`x\gets xw\bmod q`$ for each canonical value.
-    #[inline(always)]
-    pub(crate) fn apply_in_place(&self, xs: &mut [U256]) {
-        match *self {
-            ScalarMul::Small { w, w_shoup, q } => {
-                for x in xs {
-                    *x = U256::from_u64(shoup_mul(int::low_u64(x), w, w_shoup, q));
-                }
-            }
-            ScalarMul::Wide { w, w_shoup, q } => {
-                for x in xs {
-                    *x = U256::from_u128(shoup_mul128(int::low_u128(x), w, w_shoup, q));
-                }
-            }
-        }
-    }
-    /// The products $`xw\bmod q`$ of canonical values, in one pass.
-    #[inline(always)]
-    pub(crate) fn apply_all(&self, xs: &[U256]) -> Vec<U256> {
-        match *self {
-            ScalarMul::Small { w, w_shoup, q } => xs
-                .iter()
-                .map(|x| U256::from_u64(shoup_mul(int::low_u64(x), w, w_shoup, q)))
-                .collect(),
-            ScalarMul::Wide { w, w_shoup, q } => xs
-                .iter()
-                .map(|x| U256::from_u128(shoup_mul128(int::low_u128(x), w, w_shoup, q)))
-                .collect(),
-        }
-    }
 }
 
 /// Remainders of two-word values modulo an NTT prime $`p<2^{62}`$, by two Shoup products:
@@ -546,8 +484,6 @@ pub struct Ring {
     pub(crate) reducers: Vec<WordReducer>,
     /// Number of 64-bit words that canonical values can occupy.
     pub(crate) words: usize,
-    /// The same in limbs of `crypto-bigint` (64 or 32 bits): the limbs that wipes must clear.
-    pub(crate) limbs: usize,
     pub(crate) d: usize,
     pub(crate) plans: Vec<NttPlan>,
     /// The selected primes as divisors.
@@ -651,9 +587,6 @@ impl Ring {
             wide,
             reducers: primes.iter().map(|p| WordReducer::new(*p)).collect(),
             words: int::bits(&(q.wrapping_sub(&U256::ONE))).div_ceil(64).max(1) as usize,
-            limbs: int::bits(&(q.wrapping_sub(&U256::ONE)))
-                .div_ceil(crypto_bigint::Word::BITS)
-                .max(1) as usize,
             d,
             plans,
             divisors,
@@ -791,27 +724,6 @@ impl Ring {
             return U256::from_u128(m.mul(int::low_u128(a), int::low_u128(b)));
         }
         a.mul_mod_vartime(b, &self.nonzero)
-    }
-    /// A Shoup multiplier for a reduced scalar, when $`q<2^{126}`$.
-    pub(crate) fn scalar_multiplier(&self, scalar: &U256) -> Option<ScalarMul> {
-        if let Some(small) = self.small_crt() {
-            let q = small.modulus();
-            let w = int::low_u64(scalar);
-            debug_assert!(w < q && int::to_u64(scalar) == Some(w));
-            return Some(ScalarMul::Small {
-                w,
-                w_shoup: shoup(w, q),
-                q,
-            });
-        }
-        let m = self.wide.as_ref()?;
-        let w = int::low_u128(scalar);
-        debug_assert!(w < m.modulus() && int::to_u128(scalar) == Some(w));
-        Some(ScalarMul::Wide {
-            w,
-            w_shoup: m.shoup(w),
-            q: m.modulus(),
-        })
     }
     /// Whether a canonical value is negative when centred in $`(-q/2,q/2]`$.
     #[inline]

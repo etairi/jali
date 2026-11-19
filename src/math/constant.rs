@@ -1,7 +1,11 @@
 //! Constant coefficients of sums of products, without computing the products: in
 //! $`\mathbb Z_q[X]/(X^d+1)`$, $`\mathrm{ct}(ab)=a_0b_0-\sum_{j=1}^{d-1}a_jb_{d-j}`$, a dot
 //! product of length $`d`$ instead of a transformed product.
-use super::{Poly, Ring, int, mod128::Mod128};
+use super::{
+    Poly, Ring, int,
+    mod128::{Mod128, add_mod128, sub_mod128},
+    poly::Coeffs,
+};
 use crypto_bigint::U256;
 
 /// A sum of constant coefficients, kept exactly and reduced modulo $`q`$ by `finish`.
@@ -39,6 +43,22 @@ fn reduce_carried((s, c): (u128, u64), q: u64) -> u64 {
     ((u128::from(c) % q * two128 % q + s % q) % q) as u64
 }
 
+/// The terms of $`\mathrm{ct}(ab)`$ below $`2^{64}`$: $`a_0b_0`$ to the positive sum, the
+/// products $`a_jb_{d-j}`$ to the negative one, each below $`2^{128}`$.
+#[inline(always)]
+fn small_product<T>(
+    positive: &mut (u128, u64),
+    negative: &mut (u128, u64),
+    a: &[T],
+    b: &[T],
+    low: impl Fn(&T) -> u128,
+) {
+    add_carry(positive, low(&a[0]) * low(&b[0]));
+    for (x, y) in a[1..].iter().zip(b[1..].iter().rev()) {
+        add_carry(negative, low(x) * low(y));
+    }
+}
+
 impl<'a> ConstantSum<'a> {
     pub(crate) fn new(ring: &'a Ring) -> Self {
         let state = match (int::to_u64(&ring.q), ring.wide) {
@@ -57,40 +77,39 @@ impl<'a> ConstantSum<'a> {
         match &mut self.state {
             State::Small { positive, .. } => add_carry(positive, u128::from(int::low_u64(x))),
             State::Wide { m, sum } => {
-                *sum = super::mod128::add_mod128(*sum, int::low_u128(x), m.modulus());
+                *sum = add_mod128(*sum, int::low_u128(x), m.modulus());
             }
             State::General { sum } => *sum = self.ring.add(sum, x),
         }
     }
     /// Add $`\mathrm{ct}(ab)`$ for polynomials of the ring, with canonical coefficients.
     pub(crate) fn add_product(&mut self, a: &Poly, b: &Poly) {
-        let (a, b) = (a.coefficients(), b.coefficients());
-        let d = a.len();
-        debug_assert_eq!(b.len(), d);
-        match &mut self.state {
-            State::Small {
-                positive, negative, ..
-            } => {
-                let low = |x: &U256| u128::from(int::low_u64(x));
-                add_carry(positive, low(&a[0]) * low(&b[0]));
-                for (x, y) in a[1..].iter().zip(b[1..].iter().rev()) {
-                    add_carry(negative, low(x) * low(y));
-                }
-            }
-            State::Wide { m, sum } => {
+        debug_assert_eq!(a.ring().degree(), b.ring().degree());
+        match (&mut self.state, a.coeffs(), b.coeffs()) {
+            (
+                State::Small {
+                    positive, negative, ..
+                },
+                Coeffs::Word(a),
+                Coeffs::Word(b),
+            ) => small_product(positive, negative, a, b, |x| u128::from(*x)),
+            // 2^63 <= q < 2^64: two-word coefficients whose values fit a word.
+            (
+                State::Small {
+                    positive, negative, ..
+                },
+                Coeffs::Double(a),
+                Coeffs::Double(b),
+            ) => small_product(positive, negative, a, b, |x| *x),
+            (State::Wide { m, sum }, Coeffs::Double(a), Coeffs::Double(b)) => {
                 let q = m.modulus();
-                let mut s = *sum;
-                s = super::mod128::add_mod128(
-                    s,
-                    m.mul(int::low_u128(&a[0]), int::low_u128(&b[0])),
-                    q,
-                );
+                let mut s = add_mod128(*sum, m.mul(a[0], b[0]), q);
                 for (x, y) in a[1..].iter().zip(b[1..].iter().rev()) {
-                    s = super::mod128::sub_mod128(s, m.mul(int::low_u128(x), int::low_u128(y)), q);
+                    s = sub_mod128(s, m.mul(*x, *y), q);
                 }
                 *sum = s;
             }
-            State::General { sum } => {
+            (State::General { sum }, Coeffs::Wide(a), Coeffs::Wide(b)) => {
                 let ring = self.ring;
                 let mut s = ring.add(sum, &ring.mul(&a[0], &b[0]));
                 for (x, y) in a[1..].iter().zip(b[1..].iter().rev()) {
@@ -98,6 +117,7 @@ impl<'a> ConstantSum<'a> {
                 }
                 *sum = s;
             }
+            _ => unreachable!("the ring decides the state and the coefficient width"),
         }
     }
     /// The canonical sum.
