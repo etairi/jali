@@ -237,7 +237,23 @@ impl SmallCrt {
         let columns = columns::<K>(residues);
         let prefixes: [(u64, u64); K] = core::array::from_fn(|i| self.prefixes_q[i]);
         let q = self.q;
-        for (j, out) in out.iter_mut().enumerate() {
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        let done = crate::simd::small_crt(
+            &columns,
+            &crate::simd::CrtConstants {
+                primes: garner.primes,
+                prefixes: garner.prefixes,
+                inverses: garner.inverses,
+                half: garner.half,
+                prefixes_q: prefixes,
+                product_q: self.product_q,
+                q,
+            },
+            out,
+        );
+        #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+        let done = 0;
+        for (j, out) in out.iter_mut().enumerate().skip(done) {
             let (digits, negative) = garner.digits(&columns, j);
             let mut x = 0;
             for (v, (w, w_shoup)) in digits.iter().zip(&prefixes) {
@@ -450,6 +466,18 @@ impl WordReducer {
             c,
             c_shoup: shoup(c, p),
             one_shoup: shoup(1, p),
+        }
+    }
+    /// The constants of the AVX-512 residues: $`p`$, $`2^{64}\bmod p`$ with its Shoup
+    /// constant, the Shoup constant of one, and `q_mod_p`.
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    pub(crate) fn constants(&self, q_mod_p: u64) -> crate::simd::ResidueConstants {
+        crate::simd::ResidueConstants {
+            p: self.p,
+            c: self.c,
+            c_shoup: self.c_shoup,
+            one_shoup: self.one_shoup,
+            q_mod_p,
         }
     }
     /// $`x\bmod p`$ for any $`x<2^{128}`$.

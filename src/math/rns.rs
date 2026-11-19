@@ -228,6 +228,10 @@ impl LazySum {
             .zip(&a.residues.0)
             .zip(&b.residues.0)
         {
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            if crate::simd::lazy_mac(sums, x, y) {
+                continue;
+            }
             for ((s, x), y) in sums.iter_mut().zip(x).zip(y) {
                 *s += u128::from(*x) * u128::from(*y);
             }
@@ -289,6 +293,10 @@ fn centred_residues(ring: &Ring, coeffs: &Coeffs, i: usize) -> Vec<u64> {
         // q < 2^63: a canonical value is a word, and its residue is native.
         Coeffs::Word(values) => {
             let half = ring.small_crt().expect("one-word coefficients").half_q;
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            if let Some(out) = crate::simd::centred_word(values, half, p, q) {
+                return out;
+            }
             values
                 .iter()
                 .map(|&v| {
@@ -302,6 +310,10 @@ fn centred_residues(ring: &Ring, coeffs: &Coeffs, i: usize) -> Vec<u64> {
         }
         Coeffs::Double(values) => {
             let half = ring.narrow.expect("two-word coefficients") >> 1;
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            if let Some(out) = crate::simd::centred_wide(values, half, &reducer.constants(q)) {
+                return out;
+            }
             values.iter().map(|&v| narrow(v, half)).collect()
         }
         Coeffs::Wide(values) => match ring.narrow {
