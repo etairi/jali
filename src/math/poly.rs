@@ -448,6 +448,25 @@ impl Poly {
     }
     /// The magnitude of the centred coefficient `i`.
     #[inline]
+    /// The magnitudes of the centred coefficients folded with `f` from `init`, where they
+    /// are one or two words (moduli below $`2^{128}`$, magnitudes below $`2^{127}`$), and
+    /// `None` for wider coefficients.
+    pub(crate) fn fold_magnitudes<A>(&self, init: A, mut f: impl FnMut(A, u128) -> A) -> Option<A> {
+        match &self.coeffs {
+            Coeffs::Word(v) => {
+                let q = u128::from(self.word_modulus());
+                Some(
+                    v.iter()
+                        .fold(init, |a, x| f(a, magnitude_double(u128::from(*x), q))),
+                )
+            }
+            Coeffs::Double(v) => {
+                let q = self.double_modulus();
+                Some(v.iter().fold(init, |a, x| f(a, magnitude_double(*x, q))))
+            }
+            Coeffs::Wide(_) => None,
+        }
+    }
     pub(crate) fn magnitude(&self, i: usize) -> U256 {
         match &self.coeffs {
             Coeffs::Word(v) => U256::from_u128(magnitude_double(
