@@ -52,3 +52,24 @@ fn avx512_transforms_equal_the_scalar_ones() {
         }
     }
 }
+
+#[test]
+fn the_bmi_permutation_equals_the_keccak_crate() {
+    if !super::bmi() {
+        eprintln!("no BMI1 and BMI2 here (or JALI_SCALAR set): the keccak crate permutes");
+        return;
+    }
+    let mut rng = Rng(43);
+    let keccak = keccak::Keccak::new();
+    for case in 0..2000 {
+        let mut a: [u64; 25] = core::array::from_fn(|_| match case {
+            0 => 0,
+            1 => u64::MAX,
+            _ => rng.next(),
+        });
+        let mut b = a;
+        keccak.with_f1600(|f| f(&mut a));
+        assert!(super::keccak_f1600(&mut b));
+        assert_eq!(a, b, "case {case}");
+    }
+}
