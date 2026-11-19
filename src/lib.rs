@@ -31,6 +31,7 @@ pub mod quad_many;
 pub mod rand;
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 mod simd;
+mod sponge;
 pub mod statement;
 pub mod tbox;
 #[cfg(feature = "test-utils")]

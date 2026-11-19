@@ -1,7 +1,7 @@
 //! Secret keys derived from a caller's seed and the inputs of one call, in the manner of
 //! deterministic signature nonces (EdDSA, RFC 6979). Calls that differ in any input read
 //! different keys; identical calls read identical ones.
-use shake::{ExtendableOutput, Shake128, Update, XofReader};
+use crate::sponge::Shake128;
 use zeroize::{Zeroize, Zeroizing};
 
 /// Version tag, the first field of every derivation.

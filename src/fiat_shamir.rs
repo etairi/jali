@@ -14,8 +14,8 @@
 //!
 //! The unit tests run the draft's SHAKE128 vectors (Appendix C), and the draft's sumcheck
 //! example (Appendix B) against its NARG vectors.
+use crate::sponge::{Shake128, Shake128Reader};
 use crypto_bigint::{NonZero, U256, U512};
-use shake::{ExtendableOutput, Shake128, Shake128Reader, Update, XofReader};
 
 #[cfg(test)]
 mod tests;
