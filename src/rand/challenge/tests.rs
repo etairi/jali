@@ -310,11 +310,22 @@ fn each_stage_norm_is_exact_and_compared_inclusively() {
             // With every other threshold just below its norm, stage j alone decides: it
             // accepts at its norm and refuses one below.
             for j in 1..=6 {
-                let mut powers = norms.map(|n| n.wrapping_sub(&U1024::ONE));
-                powers[j] = norms[j];
-                assert!(decide(&c, &powers).unwrap(), "{d} {i} {j}");
-                powers[j] = norms[j].wrapping_sub(&U1024::ONE);
-                assert!(!decide(&c, &powers).unwrap(), "{d} {i} {j}");
+                let mut accept = norms.map(|n| n.wrapping_sub(&U1024::ONE));
+                accept[j] = norms[j];
+                let b = Bounds {
+                    accept,
+                    reject: [None; 7],
+                };
+                assert!(decide(&c, &b).unwrap(), "{d} {i} {j}");
+                let b = Bounds {
+                    accept: {
+                        let mut a = accept;
+                        a[j] = norms[j].wrapping_sub(&U1024::ONE);
+                        a
+                    },
+                    reject: [None; 7],
+                };
+                assert!(!decide(&c, &b).unwrap(), "{d} {i} {j}");
             }
         }
     }
@@ -406,4 +417,74 @@ fn a_challenge_fails_after_the_last_draw() {
     stream.fill(&mut x).unwrap();
     fresh.fill(&mut y).unwrap();
     assert_eq!(x, y);
+}
+
+/// The early rejection decides as the exact test $`\|(\sigma_{-1}(c)c)^{32}\|_1\le\eta^{64}`$ in
+/// big integers, on draws of LaBRADOR's challenge set (41 nonzero coefficients, 10 of them
+/// ±2, at degree 64), which it mostly rejects, and on uniform $`\sigma_{-1}`$-stable draws at
+/// degrees 64 and 128, for η on both sides of their norms.
+#[test]
+fn early_rejection_decides_as_the_exact_test() {
+    let mut rng = Rng(78);
+    for d in [64usize, 128] {
+        let ring = Ring::new(1099511627917, d).unwrap();
+        for case in 0..200 {
+            let c: Vec<i128> = if d == 64 && case % 2 == 0 {
+                let mut positions: Vec<usize> = (0..d).collect();
+                for i in 0..41 {
+                    positions.swap(i, i + (rng.next() % (d - i) as u64) as usize);
+                }
+                let mut c = vec![0i128; d];
+                for (k, p) in positions[..41].iter().enumerate() {
+                    let m = if k < 10 { 2 } else { 1 };
+                    c[*p] = if rng.next().is_multiple_of(2) { m } else { -m };
+                }
+                c
+            } else {
+                let omega: i128 = if d == 64 { 8 } else { 2 };
+                let half: Vec<i128> = (0..d / 2)
+                    .map(|_| (rng.next() % (2 * omega as u64 + 1)) as i128 - omega)
+                    .collect();
+                stable(&half, 0i128, |x| -x)
+            };
+            let exact = direct(&c);
+            let p = poly(&ring, &c);
+            for eta in [12u64, 14, 15, 16, 18, 40, 95] {
+                let expected = exact <= BigInt::from(eta).pow(64);
+                assert_eq!(
+                    within_eta(&p, eta).unwrap(),
+                    expected,
+                    "d {d} case {case} eta {eta}"
+                );
+            }
+        }
+    }
+}
+
+/// `beyond` against the power computed in 4096 bits, for norms whose power lies within a bit
+/// length or two of the threshold, where the bit lengths alone do not decide.
+#[test]
+fn beyond_compares_the_power_exactly() {
+    use crypto_bigint::U4096;
+    let mut rng = Rng(79);
+    let random = |rng: &mut Rng, bits: u32| -> U2048 {
+        let words: Vec<u8> = (0..32).flat_map(|_| rng.next().to_le_bytes()).collect();
+        let x = U2048::from_le_slice(&words).shr_vartime(2048 - bits);
+        x.bitor(&U2048::ONE.shl_vartime(bits - 1))
+    };
+    for j in 3..=5usize {
+        let e = 1u32 << (6 - j);
+        for _ in 0..2000 {
+            let t = 600 + (rng.next() % 600) as u32;
+            let threshold = random(&mut rng, t);
+            let b = t / e + (rng.next() % 3) as u32;
+            let norm: U1024 = random(&mut rng, b).resize();
+            let mut power: U4096 = norm.resize();
+            for _ in 0..6 - j {
+                power = power.wrapping_mul(&power);
+            }
+            let exact = power > threshold.resize::<{ U4096::LIMBS }>();
+            assert_eq!(beyond(&norm, j, &threshold), exact, "j {j} t {t} b {b}");
+        }
+    }
 }
