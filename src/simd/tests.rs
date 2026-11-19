@@ -348,6 +348,62 @@ fn byte_projection_equals_the_portable_update() {
     }
 }
 
+/// The primes of `IFMA_PRIMES` are prime, below 2^51, congruent to 1 modulo 2048, with roots of
+/// order exactly 2048, and the IFMA transforms and products equal the scalar code of the same
+/// arithmetic at every degree from 16 to 256, on residues at 0 and p − 1 and random ones, and
+/// a transform followed by its inverse returns its input.
+#[test]
+fn ifma_transforms_equal_the_scalar_ones() {
+    use super::ifma::{forward_scalar, inverse_scalar, mac_scalar};
+    use crate::math::ntt::{NttPlan, pow_mod};
+    for (p, root) in super::IFMA_PRIMES {
+        assert!(
+            crate::math::int::is_prime(p) && p < 1 << 51 && p % 2048 == 1,
+            "prime {p}"
+        );
+        assert_eq!(pow_mod(root, 2048, p), 1);
+        assert_eq!(pow_mod(root, 1024, p), p - 1);
+    }
+    if !super::ifma() {
+        eprintln!("no AVX-512 IFMA here (or JALI_SCALAR set): only the scalar code runs");
+        return;
+    }
+    let mut rng = Rng(52);
+    for (p, root) in super::IFMA_PRIMES {
+        for d in [16usize, 32, 64, 128, 256] {
+            let plan = NttPlan::new(p, d, pow_mod(root, (1024 / d) as u64, p)).unwrap();
+            let t = super::IfmaPlan::new(plan);
+            for case in 0..4 {
+                let x: Vec<u64> = (0..d)
+                    .map(|i| match (case, i % 3) {
+                        (0, _) => 0,
+                        (1, _) => p - 1,
+                        (2, 0) => p - 1,
+                        _ => rng.next() % p,
+                    })
+                    .collect();
+                let mut got = x.clone();
+                let mut expect = x.clone();
+                super::ifma_forward(&t, &mut got);
+                forward_scalar(&t, &mut expect);
+                assert_eq!(got, expect, "forward p {p} d {d} case {case}");
+                let mut back = got.clone();
+                super::ifma_inverse(&t, &mut back);
+                assert_eq!(back, x, "inverse of forward p {p} d {d} case {case}");
+                let mut expect_back = got.clone();
+                inverse_scalar(&t, &mut expect_back);
+                assert_eq!(expect_back, x, "scalar inverse p {p} d {d} case {case}");
+                let y: Vec<u64> = (0..d).map(|_| rng.next() % p).collect();
+                let mut acc: Vec<u64> = (0..d).map(|_| rng.next() % p).collect();
+                let mut acc_expect = acc.clone();
+                super::ifma_mac(&t, &mut acc, &got, &y);
+                mac_scalar(&t, &mut acc_expect, &got, &y);
+                assert_eq!(acc, acc_expect, "mac p {p} d {d} case {case}");
+            }
+        }
+    }
+}
+
 /// The kernels of the table of sign patterns, with AVX-512 VBMI where it runs and without it,
 /// against the sums of the table's entries, for λ from 1 to 8, at the largest 32-bit entries
 /// and on random ones, with a map onto every pattern.

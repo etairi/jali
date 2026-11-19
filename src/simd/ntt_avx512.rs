@@ -57,25 +57,25 @@ fn inverse_butterfly(
 /// at distance 4, 2 or 1: `split` gathers the first inputs $`X`$ and the second inputs $`Y`$ of
 /// the eight butterflies, `join` puts the outputs back (indices from 8 on select from the second
 /// register).
-struct Regroup {
-    x: [i64; 8],
-    y: [i64; 8],
-    a: [i64; 8],
-    b: [i64; 8],
+pub(super) struct Regroup {
+    pub(super) x: [i64; 8],
+    pub(super) y: [i64; 8],
+    pub(super) a: [i64; 8],
+    pub(super) b: [i64; 8],
 }
-const BY4: Regroup = Regroup {
+pub(super) const BY4: Regroup = Regroup {
     x: [0, 1, 2, 3, 8, 9, 10, 11],
     y: [4, 5, 6, 7, 12, 13, 14, 15],
     a: [0, 1, 2, 3, 8, 9, 10, 11],
     b: [4, 5, 6, 7, 12, 13, 14, 15],
 };
-const BY2: Regroup = Regroup {
+pub(super) const BY2: Regroup = Regroup {
     x: [0, 1, 4, 5, 8, 9, 12, 13],
     y: [2, 3, 6, 7, 10, 11, 14, 15],
     a: [0, 1, 8, 9, 2, 3, 10, 11],
     b: [4, 5, 12, 13, 6, 7, 14, 15],
 };
-const BY1: Regroup = Regroup {
+pub(super) const BY1: Regroup = Regroup {
     x: [0, 2, 4, 6, 8, 10, 12, 14],
     y: [1, 3, 5, 7, 9, 11, 13, 15],
     a: [0, 8, 1, 9, 2, 10, 3, 11],
@@ -87,7 +87,7 @@ const BY1: Regroup = Regroup {
 /// its butterflies, in the lane order of [`Regroup`]'s `x`.
 #[inline]
 #[target_feature(enable = "avx512f")]
-fn small_twiddles(table: &[u64], k0: usize, len: usize, i: usize) -> __m512i {
+pub(super) fn small_twiddles(table: &[u64], k0: usize, len: usize, i: usize) -> __m512i {
     match len {
         4 => {
             let g = k0 + 2 * i;

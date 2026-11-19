@@ -7,12 +7,14 @@
 #![allow(unsafe_code)]
 
 mod bytes_avx512;
+mod ifma;
 mod keccak_bmi;
 mod lanes;
 mod modular_avx512;
 mod ntt_avx512;
 mod rns_avx512;
 
+pub(crate) use ifma::{IFMA_PRIMES, IfmaPlan};
 pub(crate) use modular_avx512::CrtConstants;
 pub(crate) use rns_avx512::ResidueConstants;
 #[cfg(test)]
@@ -58,6 +60,48 @@ pub(crate) fn avx512() -> bool {
 pub(crate) fn avx512bw() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| avx512() && std::is_x86_feature_detected!("avx512bw"))
+}
+
+/// Whether the IFMA kernels run: [`avx512`] and AVX-512 IFMA. Decided once per process.
+pub(crate) fn ifma() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| avx512() && std::is_x86_feature_detected!("avx512ifma"))
+}
+
+/// The forward transform of an [`IfmaPlan`] (residues in $`[0,p)`$ to Montgomery form with
+/// $`R=2^{52}`$): the IFMA kernel where it runs, the scalar code of the same arithmetic
+/// otherwise.
+#[inline]
+pub(crate) fn ifma_forward(t: &IfmaPlan, a: &mut [u64]) {
+    if ifma() && a.len() >= 16 {
+        // SAFETY: the processor has AVX-512F and AVX-512 IFMA (`ifma`), and the kernel reads and
+        // writes only the slice's elements, whose length it checks against the plan.
+        unsafe { ifma::forward(t, a) };
+    } else {
+        ifma::forward_scalar(t, a);
+    }
+}
+
+/// The inverse of [`ifma_forward`], as it.
+#[inline]
+pub(crate) fn ifma_inverse(t: &IfmaPlan, a: &mut [u64]) {
+    if ifma() && a.len() >= 16 {
+        // SAFETY: as in `ifma_forward`.
+        unsafe { ifma::inverse(t, a) };
+    } else {
+        ifma::inverse_scalar(t, a);
+    }
+}
+
+/// `acc += a ⊙ b` for transforms of an [`IfmaPlan`], as [`ifma_forward`].
+#[inline]
+pub(crate) fn ifma_mac(t: &IfmaPlan, acc: &mut [u64], a: &[u64], b: &[u64]) {
+    if ifma() && acc.len() == a.len() && a.len() == b.len() && acc.len().is_multiple_of(8) {
+        // SAFETY: as in `ifma_forward`, with the lengths checked here.
+        unsafe { ifma::mac(t, acc, a, b) };
+    } else {
+        ifma::mac_scalar(t, acc, a, b);
+    }
 }
 
 /// Whether the AVX-512 kernels that need AVX-512VL run: [`avx512`] and AVX-512VL. Decided once
