@@ -3,6 +3,49 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
+## [0.3.3] - 2026-11-19
+
+Proofs and transcripts are those of 0.3.2, in both modes and with every feature (checked on
+aarch64 and x86-64).
+
+### Added
+
+- **The `simd` feature**: AVX-512 versions of the NTT on x86-64, chosen at run time when the
+  processor has AVX-512F and AVX-512DQ and the environment variable `JALI_SCALAR` is unset.
+  They return the scalar code's outputs, which a test compares for every NTT prime at every
+  degree from 16 to 1024. Their module is the only code that may use `unsafe`, and without the
+  feature, or off x86-64, the crate forbids `unsafe` code as before.
+
+### Changed
+
+- **Faster, with byte-identical proofs.**
+  - Polynomials keep their coefficients in the words of the ring's arithmetic, one word below
+    $`2^{63}`$, two words up to $`2^{126}`$ and 256-bit values above, instead of 256-bit values
+    for every modulus. `Poly::coefficients` still returns `&[U256]`, now a copy made on its
+    first call and dropped when the coefficients change.
+  - LaBRADOR sums the projection columns of moduli from $`2^{58}`$ in fixed-size accumulators
+    reduced by Shoup multiplications instead of 128-bit divisions, and its lifts, scaled vector
+    operations and proof codes take fewer divisions.
+  - The LNP22 norm and range proofs weight their projection rows by table lookups from 128
+    columns on, the transcript encodes runs of uniform coefficients with one width computation,
+    and the Gaussian sampler's Bernoulli step encloses the exponential with five Taylor terms
+    instead of thirteen.
+  - On aarch64 the NTT runs two stages per pass. On x86 the Gaussian masks read their keystream
+    in batches of 1 KiB, the batch of VAES-512.
+
+  On one thread of an Apple M4, an end-to-end lattice test with $`q\approx2^{69.4}`$ needs 17.4%
+  fewer instructions, 15.6% in the straight-line extractable mode, LNP22 provers 1.11 to 1.27
+  times fewer and their verifiers 1.28 to 1.58 times, and LaBRADOR 1.09 to 1.13 times fewer at
+  $`q\approx2^{32}`$ and 1.40 to 1.69 times at $`q\approx2^{61}`$. On one thread of an Intel Xeon
+  Platinum 8581C the lattice test takes 18% fewer cycles in both modes (27% with `simd`), and
+  its peak memory falls from 237 to 137 MiB (301 to 175 MiB in the extractable mode). There
+  LNP22 provers run 1.20 to 1.30 times faster (1.39 to 1.52 with `simd`), their verifiers 1.26 to
+  1.50 times (1.43 to 1.71), and LaBRADOR 1.10 to 1.27 times at $`q\approx2^{61}`$ (1.27 to 1.47).
+  At $`q\approx2^{32}`$ LaBRADOR proves within 1% of 0.3.2 there and verifies up to 1.8% slower,
+  and with `simd` it runs 1.11 to 1.16 times faster.
+- Documentation: the notes of 0.3.0 and some test comments describe the statements they
+  measured instead of naming the system the statements came from.
+
 ## [0.3.2] - 2026-11-17
 
 ### Changed
