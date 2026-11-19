@@ -149,3 +149,177 @@ fn out_of_range_terms_and_other_rings_are_refused() {
         Some(Error::Dimension)
     );
 }
+
+/// The expansion of 0.3.3, one `mul` and one `add` per product: the oracle of the expansion
+/// that transforms the map's constants once and sums the products on the constant term.
+fn substitute_reference(form: &QuadEq, map: &[Affine], dimension: usize) -> QuadEq {
+    let ring = form.r0.ring().clone();
+    let mut matrix = BTreeMap::new();
+    let mut vector = BTreeMap::new();
+    let mut constant = form.r0.clone();
+    let add = |entry: &mut Poly, value: &Poly| *entry = entry.add(value).unwrap();
+    let zero = || Poly::zero(ring.clone());
+    for ((i, j), a) in form.r2.entries() {
+        let (x, y) = (&map[usize::from(i)], &map[usize::from(j)]);
+        for (u, cu) in &x.terms {
+            let acu = a.mul(cu).unwrap();
+            for (v, cv) in &y.terms {
+                let key = ((*u).min(*v), (*u).max(*v));
+                add(
+                    matrix.entry(key).or_insert_with(zero),
+                    &acu.mul(cv).unwrap(),
+                );
+            }
+        }
+        if !y.constant.is_zero() {
+            let ay = a.mul(&y.constant).unwrap();
+            for (u, cu) in &x.terms {
+                add(vector.entry(*u).or_insert_with(zero), &ay.mul(cu).unwrap());
+            }
+            if !x.constant.is_zero() {
+                add(&mut constant, &ay.mul(&x.constant).unwrap());
+            }
+        }
+        if !x.constant.is_zero() {
+            let ax = a.mul(&x.constant).unwrap();
+            for (v, cv) in &y.terms {
+                add(vector.entry(*v).or_insert_with(zero), &ax.mul(cv).unwrap());
+            }
+        }
+    }
+    for (i, a) in form.r1.entries() {
+        let x = &map[usize::from(i)];
+        for (u, cu) in &x.terms {
+            add(vector.entry(*u).or_insert_with(zero), &a.mul(cu).unwrap());
+        }
+        if !x.constant.is_zero() {
+            add(&mut constant, &a.mul(&x.constant).unwrap());
+        }
+    }
+    QuadEq {
+        r2: SparsePolyMat::new(
+            ring.clone(),
+            dimension,
+            matrix.into_iter().map(|((i, j), p)| (i, j, p)).collect(),
+        )
+        .unwrap(),
+        r1: SparsePolyVec::new(ring, dimension, vector.into_iter().collect()).unwrap(),
+        r0: constant,
+    }
+}
+
+/// A polynomial of each shape the expansion tells apart: zero, a scalar, a monomial or dense,
+/// with coefficients below `q` from four random words.
+fn shaped(rng: &mut Rng, ring: &Arc<Ring>, general_share: u64) -> Poly {
+    let d = ring.degree();
+    let q = ring.modulus();
+    let value = |rng: &mut Rng| {
+        let words = [rng.next(), rng.next(), rng.next(), rng.next()];
+        U256::from_le_slice(&words.map(u64::to_le_bytes).concat())
+            .rem_vartime(&crypto_bigint::NonZero::new(q).unwrap())
+    };
+    let mut values = vec![U256::ZERO; d];
+    match rng.below(4 + general_share) {
+        0 => {}
+        1 => values[0] = value(rng),
+        2 => values[1 + rng.below(d as u64 - 1) as usize] = value(rng),
+        _ => values.iter_mut().for_each(|x| *x = value(rng)),
+    }
+    Poly::from_canonical(ring.clone(), values)
+}
+
+#[test]
+fn transformed_constants_give_the_reference_expansion() {
+    // One-word, two-word and 256-bit coefficients, both degrees, forms and maps of every shape
+    // (cheap and general terms, constants and coefficients), and keys that collide.
+    let moduli = [
+        U256::from_u64(1099511627917),
+        U256::from_u128(800602353498606932557),
+        U256::ONE.shl_vartime(127).wrapping_add(&U256::from_u8(45)),
+    ];
+    let mut rng = Rng(0x2567_2303);
+    for q in moduli {
+        for d in [64, 128] {
+            let ring = Ring::with_modulus(q, d).unwrap();
+            for _ in 0..12 {
+                let n = 1 + rng.below(8) as usize;
+                let dimension = 1 + rng.below(10) as usize;
+                let mut form = QuadEq::zero(ring.clone(), n).unwrap();
+                let mut linear = BTreeMap::new();
+                for _ in 0..rng.below(7) {
+                    linear.insert(rng.below(n as u64) as u16, shaped(&mut rng, &ring, 4));
+                }
+                let mut quadratic = BTreeMap::new();
+                for _ in 0..rng.below(7) {
+                    let (i, j) = (rng.below(n as u64) as u16, rng.below(n as u64) as u16);
+                    quadratic.insert((i.min(j), i.max(j)), shaped(&mut rng, &ring, 4));
+                }
+                form.r1 =
+                    SparsePolyVec::new(ring.clone(), n, linear.into_iter().collect()).unwrap();
+                form.r2 = SparsePolyMat::new(
+                    ring.clone(),
+                    n,
+                    quadratic.into_iter().map(|((i, j), p)| (i, j, p)).collect(),
+                )
+                .unwrap();
+                form.r0 = shaped(&mut rng, &ring, 1);
+                let map: Vec<Affine> = (0..n)
+                    .map(|_| Affine {
+                        terms: (0..rng.below(4))
+                            .map(|_| {
+                                (
+                                    rng.below(dimension as u64) as u16,
+                                    shaped(&mut rng, &ring, 1),
+                                )
+                            })
+                            .collect(),
+                        constant: shaped(&mut rng, &ring, 4),
+                    })
+                    .collect();
+                assert_eq!(
+                    form.substitute(&map, dimension).unwrap(),
+                    substitute_reference(&form, &map, dimension),
+                    "q {q} d {d}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn more_constant_products_than_one_sum_holds() {
+    // 200 linear and 100 quadratic entries whose general products all land on the constant term:
+    // past NADDS = 128 the sum spills into the constant and starts again.
+    let ring = Ring::with_modulus(U256::from_u128(800602353498606932557), 64).unwrap();
+    let mut rng = Rng(0x2567_2304);
+    let n = 200;
+    let dense = |rng: &mut Rng| loop {
+        let p = shaped(rng, &ring, 1000);
+        if crate::math::terms::Shape::of(&p) == crate::math::terms::Shape::General {
+            break p;
+        }
+    };
+    let mut form = QuadEq::zero(ring.clone(), n).unwrap();
+    form.r1 = SparsePolyVec::new(
+        ring.clone(),
+        n,
+        (0..n as u16).map(|i| (i, dense(&mut rng))).collect(),
+    )
+    .unwrap();
+    form.r2 = SparsePolyMat::new(
+        ring.clone(),
+        n,
+        (0..100u16).map(|i| (i, i + 100, dense(&mut rng))).collect(),
+    )
+    .unwrap();
+    form.r0 = dense(&mut rng);
+    let map: Vec<Affine> = (0..n)
+        .map(|_| Affine {
+            terms: vec![],
+            constant: dense(&mut rng),
+        })
+        .collect();
+    let expanded = form.substitute(&map, 1).unwrap();
+    assert_eq!(expanded, substitute_reference(&form, &map, 1));
+    assert!(expanded.r1.entries().next().is_none() && expanded.r2.entries().next().is_none());
+}
