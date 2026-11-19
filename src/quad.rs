@@ -753,11 +753,7 @@ fn encode_poly(w: &mut impl CodeWriter, p: &Poly) -> Result<(), Error> {
     }
     let q = p.ring().modulus();
     match int::to_u128(&q) {
-        Some(m) => {
-            for x in p.coefficients() {
-                w.uniform(int::low_u128(x), m)?;
-            }
-        }
+        Some(m) => w.uniform_each(p.coefficients(), m)?,
         None => {
             for x in p.coefficients() {
                 w.uniform_u256(x, &q)?;

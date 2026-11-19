@@ -470,3 +470,67 @@ fn zero_runs_across_a_chunk_boundary_equal_the_bit_writer() {
         "{chunks:?}"
     );
 }
+
+/// [`CodeWriter::uniform`] of each value in turn, up to the first error.
+fn uniform_one_by_one(w: &mut impl CodeWriter, values: &[U256], m: u128) -> Result<(), Error> {
+    values
+        .iter()
+        .try_for_each(|x| w.uniform(crate::math::int::low_u128(x), m))
+}
+
+#[test]
+fn uniform_runs_equal_one_code_per_value() {
+    // CodeWriter::uniform_each against one code per value, in both writers: the same result and
+    // the same bytes, for runs that cross the segment writer's spills, a value at the modulus
+    // somewhere in a run, and the moduli 0 and 1, refused unless the run is empty.
+    let mut rng = Rng(21);
+    let moduli = [
+        0u128,
+        1,
+        2,
+        3,
+        3329,
+        (1 << 32) - 5,
+        u128::from(u64::MAX) - 58,
+        800602353498606932557,
+        (1 << 127) - 1,
+        u128::MAX,
+    ];
+    let (mut failed, mut empty) = (0, 0);
+    for case in 0..400 {
+        let m = moduli[rng.below(moduli.len() as u64) as usize];
+        let len = match rng.below(4) {
+            0 => 0,
+            1 => rng.below(8),
+            _ => rng.below(3000),
+        } as usize;
+        let mut values: Vec<U256> = (0..len)
+            .map(|_| {
+                let v = (u128::from(rng.next()) << 64) | u128::from(rng.next());
+                U256::from_u128(if m < 2 { v } else { v % m })
+            })
+            .collect();
+        if len > 0 && m >= 2 && rng.below(4) == 0 {
+            values[rng.below(len as u64) as usize] = U256::from_u128(m);
+        }
+        let (mut a, mut b) = (BitWriter::new(), BitWriter::new());
+        let (mut s, mut t) = (SegmentWriter::new(), SegmentWriter::new());
+        let results = [
+            CodeWriter::uniform_each(&mut a, &values, m),
+            uniform_one_by_one(&mut b, &values, m),
+            CodeWriter::uniform_each(&mut s, &values, m),
+            uniform_one_by_one(&mut t, &values, m),
+        ];
+        assert!(
+            results.iter().all(|r| *r == results[0]),
+            "case {case}: {results:?}"
+        );
+        failed += usize::from(results[0].is_err());
+        empty += usize::from(len == 0 && m < 2);
+        let bytes = a.finish();
+        assert_eq!(b.finish(), bytes, "case {case}");
+        assert_eq!(s.finish().to_vec(), bytes, "case {case}");
+        assert_eq!(t.finish().to_vec(), bytes, "case {case}");
+    }
+    assert!(failed > 40 && empty > 5, "{failed} {empty}");
+}
