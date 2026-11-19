@@ -314,8 +314,8 @@ fn trace_and_resize_equal_the_copying_ones() {
     }
 }
 
-/// A form with `entries` linear keys among `n`, most of them explicit zeros, as the statement
-/// forms of a credential have them.
+/// A form with `entries` linear keys among `n`, most of them explicit zeros, as the forms of
+/// large compiled statements have them.
 fn mostly_zero(rng: &mut Rng, ring: &Arc<Ring>, n: usize, entries: usize) -> QuadEq {
     let mut linear = BTreeMap::new();
     while linear.len() < entries {
