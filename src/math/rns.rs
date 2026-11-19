@@ -1,6 +1,7 @@
 use super::{
     Poly, Ring,
     ntt::{add_mod, sub_mod},
+    poly::Coeffs,
     ring::RingCrt,
 };
 #[cfg(test)]
@@ -9,9 +10,8 @@ use super::{
     ring::{Basis, Crt},
 };
 use crate::{Error, math::int, params::moduli::NADDS};
-use crypto_bigint::U256;
 #[cfg(test)]
-use crypto_bigint::{U64, Uint};
+use crypto_bigint::{U64, U256, Uint};
 use std::sync::Arc;
 use zeroize::Zeroize;
 
@@ -54,7 +54,7 @@ impl PolyNtt {
             .iter()
             .enumerate()
             .map(|(i, plan)| {
-                let mut x = centred_residues(ring, &a.coeffs, i);
+                let mut x = centred_residues(ring, a.coeffs(), i);
                 plan.forward_mont(&mut x);
                 x
             })
@@ -275,42 +275,41 @@ impl Drop for LazySum {
 }
 
 /// The residues modulo prime $`i`$ of the centred representatives of canonical coefficients.
-fn centred_residues(ring: &Ring, coeffs: &[U256], i: usize) -> Vec<u64> {
+fn centred_residues(ring: &Ring, coeffs: &Coeffs, i: usize) -> Vec<u64> {
     let p = ring.plans[i].modulus();
     let q = ring.q_mod_p[i];
-    match ring.small_crt() {
-        // A canonical value is below q < 2^63, so its residue is native.
-        Some(small) => coeffs
-            .iter()
-            .map(|x| {
-                let v = int::low_u64(x);
-                let mut r = v;
-                while r >= p {
-                    r -= p;
-                }
-                if v > small.half_q {
-                    sub_mod(r, q, p)
-                } else {
-                    r
-                }
-            })
-            .collect(),
-        None => match ring.narrow {
-            // 2^63 <= q < 2^128: the sign test and the remainder in words. As q > p, no
-            // value is its own residue.
-            Some(modulus) => {
-                let half = modulus >> 1;
-                let reducer = &ring.reducers[i];
-                coeffs
-                    .iter()
-                    .map(|x| {
-                        let v = int::low_u128(x);
-                        let r = reducer.reduce(v);
-                        if v > half { sub_mod(r, q, p) } else { r }
-                    })
-                    .collect()
-            }
-            None => coeffs
+    // Below 2^128, the sign test and the remainder in words: as q > p from 2^63 on, no value
+    // is its own residue there.
+    let reducer = ring.reducers[i];
+    let narrow = move |v: u128, half: u128| {
+        let r = reducer.reduce(v);
+        if v > half { sub_mod(r, q, p) } else { r }
+    };
+    match coeffs {
+        // q < 2^63: a canonical value is a word, and its residue is native.
+        Coeffs::Word(values) => {
+            let half = ring.small_crt().expect("one-word coefficients").half_q;
+            values
+                .iter()
+                .map(|&v| {
+                    let mut r = v;
+                    while r >= p {
+                        r -= p;
+                    }
+                    if v > half { sub_mod(r, q, p) } else { r }
+                })
+                .collect()
+        }
+        Coeffs::Double(values) => {
+            let half = ring.narrow.expect("two-word coefficients") >> 1;
+            values.iter().map(|&v| narrow(v, half)).collect()
+        }
+        Coeffs::Wide(values) => match ring.narrow {
+            Some(modulus) => values
+                .iter()
+                .map(|x| narrow(int::low_u128(x), modulus >> 1))
+                .collect(),
+            None => values
                 .iter()
                 .map(|x| {
                     let r = ring.residue(x, i);
@@ -334,11 +333,21 @@ fn reconstruct_owned(ring: &Arc<Ring>, mut coeffs: Residues) -> Result<Poly, Err
     for (values, plan) in coeffs.0.iter_mut().zip(&ring.plans) {
         plan.inverse_mont(values);
     }
+    // Each CRT writes the words that the ring's polynomials keep.
     let out = match &ring.crt {
-        RingCrt::Small(small) => small.reconstruct_all(&coeffs.0),
-        RingCrt::Wide(wide) => wide.reconstruct_all(&coeffs.0, &ring.nonzero, ring.small.as_ref()),
+        RingCrt::Small(small) => {
+            let mut out = vec![0; ring.d];
+            small.reconstruct_into(&coeffs.0, &mut out);
+            Coeffs::Word(out)
+        }
+        RingCrt::Wide(wide) if ring.wide.is_some() => {
+            Coeffs::Double(wide.reconstruct_all_u128(&coeffs.0, &ring.nonzero, ring.small.as_ref()))
+        }
+        RingCrt::Wide(wide) => {
+            Coeffs::Wide(wide.reconstruct_all(&coeffs.0, &ring.nonzero, ring.small.as_ref()))
+        }
     };
-    Ok(Poly::from_canonical(ring.clone(), out))
+    Ok(Poly::from_coeffs(ring.clone(), out))
 }
 /// Mixed-radix CRT of each coefficient in a `C`-limb accumulator, then the canonical
 /// representative modulo $`q`$ of the centred integer: the reference reconstruction, kept as

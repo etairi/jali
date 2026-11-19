@@ -16,10 +16,14 @@ pub(crate) trait CodeWriter {
     fn uniform_u256(&mut self, value: &U256, modulus: &U256) -> Result<(), Error>;
     /// `count` zero bits, as [`BitWriter::zeros`] appends them.
     fn zeros(&mut self, count: u64);
-    /// [`BitWriter::uniform`] of the low 128 bits of each value, in order: the same codes and
-    /// the same error at the first value not below `modulus`, with the width and the checks
-    /// of the modulus taken once (and none for no values).
-    fn uniform_each(&mut self, values: &[U256], modulus: u128) -> Result<(), Error>;
+    /// [`BitWriter::uniform`] of each value, in order: the same codes and the same error at
+    /// the first value not below `modulus`, with the width and the checks of the modulus taken
+    /// once (and none for no values).
+    fn uniform_each(
+        &mut self,
+        values: impl Iterator<Item = u128>,
+        modulus: u128,
+    ) -> Result<(), Error>;
 }
 
 /// Append-only LSB-first bit writer.
@@ -237,13 +241,18 @@ impl CodeWriter for BitWriter {
     fn zeros(&mut self, count: u64) {
         BitWriter::zeros(self, count)
     }
-    fn uniform_each(&mut self, values: &[U256], modulus: u128) -> Result<(), Error> {
-        if values.is_empty() {
+    fn uniform_each(
+        &mut self,
+        values: impl Iterator<Item = u128>,
+        modulus: u128,
+    ) -> Result<(), Error> {
+        let mut values = values.peekable();
+        if values.peek().is_none() {
             return Ok(());
         }
         let bits = uniform_bits(modulus)?;
         for x in values {
-            self.put(below(crate::math::int::low_u128(x), modulus)?, bits);
+            self.put(below(x, modulus)?, bits);
         }
         Ok(())
     }
@@ -335,13 +344,18 @@ impl CodeWriter for SegmentWriter {
         self.spill(STAGE);
         result
     }
-    fn uniform_each(&mut self, values: &[U256], modulus: u128) -> Result<(), Error> {
-        if values.is_empty() {
+    fn uniform_each(
+        &mut self,
+        values: impl Iterator<Item = u128>,
+        modulus: u128,
+    ) -> Result<(), Error> {
+        let mut values = values.peekable();
+        if values.peek().is_none() {
             return Ok(());
         }
         let bits = uniform_bits(modulus)?;
         for x in values {
-            let value = below(crate::math::int::low_u128(x), modulus);
+            let value = below(x, modulus);
             if let Ok(value) = value {
                 self.bits.put(value, bits);
             }

@@ -208,7 +208,7 @@ impl Statement {
                 .evaluate(s1, m)?
                 .entries()
                 .iter()
-                .any(|p| p.coefficients().iter().any(|x| *x > U256::ONE))
+                .any(|p| p.values().any(|x| x > U256::ONE))
         {
             return Err(Error::Witness);
         }

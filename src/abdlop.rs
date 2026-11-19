@@ -17,7 +17,7 @@ use crate::{
     rand::{
         AesPrg, ByteStream, bounded, derive_key, domain, gaussian,
         reject::{self, Policy, Variance},
-        secret, take_seed, uniform_ring,
+        secret, take_seed, uniform_poly,
     },
     transcript::{Protocol, Transcript},
 };
@@ -246,14 +246,7 @@ pub(crate) fn matrix_entries(
     dom: u32,
 ) -> Result<Vec<Poly>, Error> {
     range
-        .map(|i| {
-            let values = uniform_ring(
-                &mut AesPrg::new(seed, domain(dom, i as u32)),
-                ring,
-                ring.degree(),
-            )?;
-            Ok(Poly::from_canonical(ring.clone(), values))
-        })
+        .map(|i| uniform_poly(&mut AesPrg::new(seed, domain(dom, i as u32)), ring))
         .collect()
 }
 
@@ -361,9 +354,7 @@ pub(crate) fn map(a: &PolyVec, f: impl Fn(&U256) -> U256) -> Result<PolyVec, Err
         a.ring().clone(),
         a.entries()
             .iter()
-            .map(|a| {
-                Poly::from_canonical(a.ring().clone(), a.coefficients().iter().map(&f).collect())
-            })
+            .map(|a| Poly::from_canonical(a.ring().clone(), a.values().map(|x| f(&x)).collect()))
             .collect(),
     )
 }
@@ -412,15 +403,16 @@ pub(crate) fn secret_bytes(a: &PolyVec) -> Zeroizing<Vec<u8>> {
     let width = if wide { 32 } else { 16 };
     let mut out = Zeroizing::new(Vec::with_capacity(width * a.len() * ring.degree()));
     for p in a.entries() {
-        for x in p.coefficients() {
+        for i in 0..ring.degree() {
             if wide {
                 // The two's complement bits, wiped like the narrow value.
-                let value = Zeroizing::new(*ring.centred_i256(x).as_uint());
+                let x = Zeroizing::new(p.coefficient(i));
+                let value = Zeroizing::new(*ring.centred_i256(&x).as_uint());
                 for word in value.as_words() {
                     out.extend_from_slice(&word.to_le_bytes());
                 }
             } else {
-                let value = Zeroizing::new(ring.centred_i128(x).expect("q below 2^128"));
+                let value = Zeroizing::new(p.centred(i).expect("q below 2^128"));
                 out.extend_from_slice(&value.to_le_bytes());
             }
         }
@@ -692,7 +684,7 @@ impl Abdlop {
             .t_a
             .entries()
             .iter()
-            .any(|p| p.coefficients().iter().any(|x| *x > max_high))
+            .any(|p| p.values().any(|x| x > max_high))
         {
             return Err(Error::InvalidProof);
         }
@@ -720,11 +712,11 @@ impl Abdlop {
     ) -> Result<(), Error> {
         let (bits, max_high) = (self.high_bits(), self.max_high());
         for p in commitment.t_a.entries() {
-            for x in p.coefficients() {
-                if *x > max_high {
+            for x in p.values() {
+                if x > max_high {
                     return Err(Error::Encoding);
                 }
-                w.unsigned_u256(x, bits)?;
+                w.unsigned_u256(&x, bits)?;
             }
         }
         fields::write_below(w, &commitment.t_b, &self.ring.q)
@@ -1172,10 +1164,9 @@ impl Abdlop {
             .map(|(r, z)| {
                 Poly::from_canonical(
                     self.ring.clone(),
-                    r.coefficients()
-                        .iter()
-                        .zip(z.coefficients())
-                        .map(|(r, z)| self.ring.reduce_i256(&self.compression.make_hint(z, r)))
+                    r.values()
+                        .zip(z.values())
+                        .map(|(r, z)| self.ring.reduce_i256(&self.compression.make_hint(&z, &r)))
                         .collect(),
                 )
             })
@@ -1231,7 +1222,7 @@ impl Abdlop {
         c.ring() == &self.ring
             && c.auto() == *c
             && c.norm_infinity() <= U256::from_u128(self.checked.omega as u128)
-            && c.coefficients()[self.ring.degree() / 2] == U256::ZERO
+            && c.coefficient(self.ring.degree() / 2) == U256::ZERO
     }
     /// Whether $`\|z_1\|^2`$ is within `z1_bound_squared`. Prover and verifier share this test.
     pub(crate) fn z1_within_bound(&self, z1: &PolyVec) -> Result<bool, Error> {
@@ -1330,10 +1321,9 @@ impl Abdlop {
             .map(|(r, h)| {
                 Ok(Poly::from_canonical(
                     self.ring.clone(),
-                    r.coefficients()
-                        .iter()
-                        .zip(h.coefficients())
-                        .map(|(r, h)| self.compression.use_hint(&self.ring.centred_i256(h), r))
+                    r.values()
+                        .zip(h.values())
+                        .map(|(r, h)| self.compression.use_hint(&self.ring.centred_i256(&h), &r))
                         .collect::<Result<_, _>>()?,
                 ))
             })
@@ -1344,9 +1334,9 @@ impl Abdlop {
     /// against the canonical hint interval $`(-m/2,m/2]`$.
     pub(crate) fn write_hints(&self, w: &mut BitWriter, hints: &PolyVec) -> Result<(), Error> {
         for p in hints.entries() {
-            for x in p.coefficients() {
+            for x in p.values() {
                 self.compression
-                    .use_hint(&self.ring.centred_i256(x), &U256::ZERO)?;
+                    .use_hint(&self.ring.centred_i256(&x), &U256::ZERO)?;
             }
         }
         fields::write_signed(w, hints, self.checked.hint_width)
@@ -1361,8 +1351,8 @@ impl Abdlop {
             self.checked.hint_width,
         )?;
         for p in hints.entries() {
-            for x in p.coefficients() {
-                let x = self.ring.centred_i128(x).ok_or(Error::Encoding)?;
+            for i in 0..self.ring.degree() {
+                let x = p.centred(i).ok_or(Error::Encoding)?;
                 self.compression
                     .use_hint(&I256::from_i128(x), &U256::ZERO)?;
             }

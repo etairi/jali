@@ -272,7 +272,7 @@ fn native_residues_equal_the_reference_formula() {
                 })
                 .collect();
             assert_eq!(
-                centred_residues(&ring, &values, i),
+                centred_residues(&ring, &Coeffs::from_u256(&ring, values.clone()), i),
                 expected,
                 "q {q}, prime {i}"
             );
@@ -327,7 +327,7 @@ fn wide_centred_residues_equal_a_big_integer_formula() {
                     .map(|x| centred_residue_big(x, &qb, plan.modulus()))
                     .collect();
                 assert_eq!(
-                    centred_residues(&ring, &padded, i),
+                    centred_residues(&ring, &Coeffs::from_u256(&ring, padded.clone()), i),
                     expected,
                     "q {q}, d {d}, prime {i}"
                 );

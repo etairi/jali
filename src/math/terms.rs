@@ -24,19 +24,11 @@ pub(crate) enum Shape {
 impl Shape {
     /// Classify the canonical coefficients of `p`, in variable time.
     pub(crate) fn of(p: &Poly) -> Self {
-        let mut found = None;
-        for (i, x) in p.coefficients().iter().enumerate() {
-            if !x.is_zero_vartime() {
-                if found.is_some() {
-                    return Shape::General;
-                }
-                found = Some((i, *x));
-            }
-        }
-        match found {
-            None => Shape::Zero,
-            Some((0, c)) => Shape::Scalar(c),
-            Some((k, c)) => Shape::Monomial(k, c),
+        match p.sole_nonzero() {
+            None => Shape::General,
+            Some(None) => Shape::Zero,
+            Some(Some((0, c))) => Shape::Scalar(c),
+            Some(Some((k, c))) => Shape::Monomial(k, c),
         }
     }
     /// `out += self * x`, where `self` is the shape of a polynomial $`a`$: exact for every

@@ -14,7 +14,7 @@ use crate::{
     math::{Poly, PolyVec, Ring, SparsePolyVec, U256},
     quad::{self, QuadEq, QuadProof},
     quad_many,
-    rand::{AesPrg, derive_key, domain, secret, take_seed, uniform_ring},
+    rand::{AesPrg, derive_key, domain, secret, take_seed, uniform_poly},
     transcript::{Protocol, Transcript},
 };
 use std::{borrow::Cow, sync::Arc};
@@ -375,12 +375,10 @@ pub(crate) fn prove_in<E: EvalRows + ?Sized>(
     let ring = scheme.ring();
     let mut garbage = Vec::new();
     for i in 0..scheme.checked.lambda / 2 {
-        let values = uniform_ring(
+        let mut g = uniform_poly(
             &mut AesPrg::new(&key, domain(secret::GARBAGE, i as u32)),
             ring,
-            ring.degree(),
         )?;
-        let mut g = Poly::from_canonical(ring.clone(), values);
         g.set_coefficient(0, 0)?;
         g.set_coefficient(ring.degree() / 2, 0)?;
         garbage.push(g);
@@ -456,8 +454,7 @@ fn check_responses(scheme: &Abdlop, proof: &EvalProof) -> Result<(), Error> {
         return Err(Error::RingMismatch);
     }
     if proof.h.entries().iter().any(|h| {
-        !h.coefficients()[0].is_zero_vartime()
-            || !h.coefficients()[ring.degree() / 2].is_zero_vartime()
+        !h.coefficient(0).is_zero_vartime() || !h.coefficient(ring.degree() / 2).is_zero_vartime()
     }) {
         return Err(Error::InvalidProof);
     }

@@ -109,13 +109,20 @@ pub fn uniform_u256(
     Err(Error::Randomness)
 }
 
-/// [`uniform_u256`] modulo the ring modulus.
-pub(crate) fn uniform_ring(
-    stream: &mut impl ByteStream,
-    ring: &Ring,
-    count: usize,
-) -> Result<Vec<U256>, Error> {
-    uniform_u256(stream, &ring.modulus(), count)
+/// A polynomial of [`uniform_u256`] coefficients modulo the ring modulus, the ring's degree of
+/// them: below $`2^{128}`$ the values of [`uniform`] from the same bytes, kept in the ring's
+/// coefficient width without a 256-bit copy.
+pub(crate) fn uniform_poly(stream: &mut impl ByteStream, ring: &Arc<Ring>) -> Result<Poly, Error> {
+    match int::to_u128(&ring.modulus()) {
+        Some(m) => Ok(Poly::from_canonical_u128(
+            ring.clone(),
+            uniform(stream, m, ring.degree())?,
+        )),
+        None => Ok(Poly::from_canonical(
+            ring.clone(),
+            uniform_u256(stream, &ring.modulus(), ring.degree())?,
+        )),
+    }
 }
 
 /// Uniform integer samples from an inclusive interval.

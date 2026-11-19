@@ -2,6 +2,7 @@
 //! sign tests, magnitudes, centred values, residues, reduction) against big integers, on moduli
 //! at both sides of $`2^{63}`$, $`2^{64}`$, $`2^{126}`$ and $`2^{128}`$.
 use super::*;
+use crate::math::Poly;
 use num_bigint::{BigInt, BigUint};
 
 struct Rng(u64);
@@ -93,31 +94,39 @@ fn native_ring_operations_equal_big_integer_ones() {
                 let p = BigUint::from(plan.modulus());
                 assert_eq!(BigUint::from(ring.residue(a, i)), &ab % &p, "q {q} x {a}");
             }
-            // products and Shoup multipliers
-            let multiplier = ring.scalar_multiplier(a);
-            let native = int::to_u128(&q).is_some_and(|v| v < 1 << 126);
-            assert_eq!(multiplier.is_some(), native, "q {q}");
+            // products, and the scaled sums of polynomials in the ring's coefficient width
             let expect: Vec<U256> = xs.iter().map(|b| u256(&((&ab * big(b)) % &qb))).collect();
             for (b, e) in xs.iter().zip(&expect) {
                 assert_eq!(ring.mul(a, b), *e, "q {q} a {a} b {b}");
             }
-            if let Some(m) = &multiplier {
-                assert_eq!(m.apply_all(&xs), expect, "q {q} w {a}");
-                let mut in_place = xs.clone();
-                m.apply_in_place(&mut in_place);
-                assert_eq!(in_place, expect, "q {q} w {a}");
-                // out + xs w and out - xs w, from an arbitrary canonical out.
-                let start: Vec<U256> = xs.iter().rev().copied().collect();
-                let mut added = start.clone();
-                m.add_scaled::<false>(&mut added, &xs);
-                let mut subtracted = start.clone();
-                m.add_scaled::<true>(&mut subtracted, &xs);
-                for ((s0, e), (p, n)) in
-                    start.iter().zip(&expect).zip(added.iter().zip(&subtracted))
-                {
-                    assert_eq!(*p, ring.add(s0, e), "q {q} w {a}");
-                    assert_eq!(*n, ring.sub(s0, e), "q {q} w {a}");
-                }
+            let cycle = |v: &[U256]| -> Vec<U256> { (0..64).map(|i| v[i % v.len()]).collect() };
+            let x = Poly::from_canonical(ring.clone(), cycle(&xs));
+            let products = cycle(&expect);
+            assert_eq!(
+                x.scale_u256(a).unwrap().coefficients(),
+                &products[..],
+                "q {q} w {a}"
+            );
+            let mut in_place = x.clone();
+            in_place.scale_assign(a);
+            assert_eq!(in_place.coefficients(), &products[..], "q {q} w {a}");
+            // out + x a and out + X^k x a, from an arbitrary canonical out.
+            let start: Vec<U256> = cycle(&xs).into_iter().rev().collect();
+            let mut added = Poly::from_canonical(ring.clone(), start.clone());
+            added.add_scaled_assign(&x, a).unwrap();
+            for ((s0, e), p) in start.iter().zip(&products).zip(added.coefficients()) {
+                assert_eq!(*p, ring.add(s0, e), "q {q} w {a}");
+            }
+            let k = 5;
+            let mut shifted = Poly::from_canonical(ring.clone(), start.clone());
+            shifted.add_monomial_product_assign(&x, k, a).unwrap();
+            for (i, s) in shifted.coefficients().iter().enumerate() {
+                let e = if i >= k {
+                    ring.add(&start[i], &products[i - k])
+                } else {
+                    ring.sub(&start[i], &products[64 + i - k])
+                };
+                assert_eq!(*s, e, "q {q} w {a} i {i}");
             }
         }
         // reduction of arbitrary 256-bit values
