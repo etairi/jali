@@ -515,17 +515,21 @@ fn projection_blocks<T: Send>(
 /// only take residues of sums of entries, so they do not change.
 fn projection_table(ring: &Rq, omega: &[Vec<u64>]) -> Vec<i64> {
     let lambda = omega.len();
-    let q = i128::from(ring.modulus());
     let mut table = vec![0i64; 64 * 256 * lambda];
     for (k, w) in omega.iter().enumerate() {
         for group in 0..64 {
             for byte in 0..256usize {
-                let mut s = 0i128;
+                // The entries are in {-1, 0, 1}: the residue of the sum by modular additions
+                // and subtractions of the canonical `w`.
+                let mut s = 0u64;
                 for (e, v) in DECODE[byte].iter().enumerate() {
-                    s += i128::from(*v) * i128::from(w[4 * group + e]);
+                    match v {
+                        1 => s = ring.add(s, w[4 * group + e]),
+                        -1 => s = ring.sub(s, w[4 * group + e]),
+                        _ => {}
+                    }
                 }
-                let s = s.rem_euclid(q);
-                table[(group * 256 + byte) * lambda + k] = if 2 * s > q { s - q } else { s } as i64;
+                table[(group * 256 + byte) * lambda + k] = ring.center(s);
             }
         }
     }
@@ -542,20 +546,17 @@ fn block_polys(
     indices: core::ops::Range<usize>,
 ) -> Result<BlockPolys, Error> {
     let d = ring.degree();
-    let q = ring.modulus() as i64;
-    // 64 centred residues of at most q/2 each: `i64` sums while q < 2^58, `i128` from there.
-    let wide = (ring.modulus() >= 1 << 58).then(|| i128::from(ring.modulus()));
     let stride = lambda * d;
     let mut data = vec![0u64; indices.len() * stride];
     let mut tmp = vec![0u64; d];
     let mut column = [0u8; 64];
-    let mut sums = vec![0i64; lambda];
+    let mut sums = vec![0u64; lambda];
     for polys in data.chunks_exact_mut(stride) {
         for c in 0..d {
             projection.column_bytes(&mut column)?;
-            column_sums(table, lambda, &column, &mut sums, wide);
+            column_sums(ring, table, lambda, &column, &mut sums);
             for (poly, s) in polys.chunks_exact_mut(d).zip(&sums) {
-                poly[c] = s.rem_euclid(q) as u64;
+                poly[c] = *s;
             }
         }
         for poly in polys.chunks_exact_mut(d) {
@@ -570,32 +571,16 @@ fn block_polys(
     })
 }
 
-/// `sums[k]` $`=\sum_g`$ `table[(256g + column[g])λ + k]` for $`k<\lambda`$, the λ sums
-/// side by side in `table`. Specialized for each λ of the supported moduli (3 to 8), so that
-/// the sums stay in registers, with the general loop for any other. With `wide` $`=q`$ the
-/// sums are taken in `i128` and returned modulo $`q`$ (for $`q\ge2^{58}`$, where 64 entries of
-/// $`q/2`$ leave `i64`).
-fn column_sums(
-    table: &[i64],
-    lambda: usize,
-    column: &[u8; 64],
-    sums: &mut [i64],
-    wide: Option<i128>,
-) {
-    if let Some(q) = wide {
-        let mut acc = vec![0i128; lambda];
-        for (g, b) in column.iter().enumerate() {
-            let at = (g * 256 + usize::from(*b)) * lambda;
-            for (s, t) in acc.iter_mut().zip(&table[at..at + lambda]) {
-                *s += i128::from(*t);
-            }
-        }
-        for (s, a) in sums.iter_mut().zip(acc) {
-            *s = a.rem_euclid(q) as i64;
-        }
-        return;
-    }
-    fn fixed<const L: usize>(table: &[i64], column: &[u8; 64], sums: &mut [i64]) {
+/// `sums[k]` $`=\sum_g`$ `table[(256g + column[g])λ + k]` $`\bmod q`$ for $`k<\lambda`$,
+/// canonical, the λ entries of a lookup side by side in `table`.
+///
+/// The 64 entries of a sum are centred residues, at most $`(q-1)/2`$ in magnitude, so the sum
+/// lies within $`\pm32(q-1)`$ and adding $`32q`$ gives a positive value below $`64q`$: one word
+/// while $`q<2^{58}`$, where the sums are taken in `i64`, two from there, in `i128`. One Shoup
+/// reduction of that value replaces the division. Specialized for each λ of the supported
+/// moduli (3 to 8), so that the sums stay in registers, with a loop per lane for any other.
+fn column_sums(ring: &Rq, table: &[i64], lambda: usize, column: &[u8; 64], sums: &mut [u64]) {
+    fn narrow<const L: usize>(ring: &Rq, table: &[i64], column: &[u8; 64], sums: &mut [u64]) {
         let table = table.as_chunks::<L>().0;
         let mut acc = [0i64; L];
         for (g, b) in column.iter().enumerate() {
@@ -603,22 +588,48 @@ fn column_sums(
                 *a += *t;
             }
         }
-        sums.copy_from_slice(&acc);
+        // The sum plus 32q is below 64q < 2^64, so the wrapping addition is exact.
+        let offset = 32 * ring.modulus();
+        for (s, a) in sums.iter_mut().zip(acc) {
+            *s = ring.reduce_word((a as u64).wrapping_add(offset));
+        }
     }
-    match lambda {
-        3 => fixed::<3>(table, column, sums),
-        4 => fixed::<4>(table, column, sums),
-        5 => fixed::<5>(table, column, sums),
-        6 => fixed::<6>(table, column, sums),
-        7 => fixed::<7>(table, column, sums),
-        8 => fixed::<8>(table, column, sums),
+    fn wide<const L: usize>(ring: &Rq, table: &[i64], column: &[u8; 64], sums: &mut [u64]) {
+        let table = table.as_chunks::<L>().0;
+        let mut acc = [0i128; L];
+        for (g, b) in column.iter().enumerate() {
+            for (a, t) in acc.iter_mut().zip(&table[g * 256 + usize::from(*b)]) {
+                *a += i128::from(*t);
+            }
+        }
+        let offset = 32 * i128::from(ring.modulus());
+        for (s, a) in sums.iter_mut().zip(acc) {
+            *s = ring.reduce_wide((a + offset) as u128);
+        }
+    }
+    let narrow_sums = ring.modulus() < 1 << 58;
+    match (lambda, narrow_sums) {
+        (3, true) => narrow::<3>(ring, table, column, sums),
+        (4, true) => narrow::<4>(ring, table, column, sums),
+        (5, true) => narrow::<5>(ring, table, column, sums),
+        (6, true) => narrow::<6>(ring, table, column, sums),
+        (7, true) => narrow::<7>(ring, table, column, sums),
+        (8, true) => narrow::<8>(ring, table, column, sums),
+        (3, false) => wide::<3>(ring, table, column, sums),
+        (4, false) => wide::<4>(ring, table, column, sums),
+        (5, false) => wide::<5>(ring, table, column, sums),
+        (6, false) => wide::<6>(ring, table, column, sums),
+        (7, false) => wide::<7>(ring, table, column, sums),
+        (8, false) => wide::<8>(ring, table, column, sums),
         _ => {
-            sums.fill(0);
-            for (g, b) in column.iter().enumerate() {
-                let at = (g * 256 + usize::from(*b)) * lambda;
-                for (s, t) in sums.iter_mut().zip(&table[at..at + lambda]) {
-                    *s += *t;
-                }
+            let offset = 32 * i128::from(ring.modulus());
+            for (k, s) in sums.iter_mut().enumerate() {
+                let a: i128 = column
+                    .iter()
+                    .enumerate()
+                    .map(|(g, b)| i128::from(table[(g * 256 + usize::from(*b)) * lambda + k]))
+                    .sum();
+                *s = ring.reduce_wide((a + offset) as u128);
             }
         }
     }
@@ -1147,10 +1158,12 @@ fn gaussian_part(nu: usize, i: usize) -> bool {
 /// The bits of `x` in the Gaussian code of [`BitWriter::gaussian`] with parameter `p`: the
 /// unary quotient, its end bit and $`p+1`$ remainder bits.
 pub(crate) fn gaussian_bits(x: i128, p: u32) -> u64 {
+    // The scale is a power of two: the remainder is a mask, and the quotient of the multiple
+    // x - low an exact shift.
     let scale = 1i128 << (p + 1);
-    let r = x.rem_euclid(scale);
+    let r = x & (scale - 1);
     let low = if r >= scale / 2 { r - scale } else { r };
-    let quotient = (x - low) / scale;
+    let quotient = (x - low) >> (p + 1);
     let n = if quotient > 0 {
         2 * quotient - 1
     } else {
@@ -1219,13 +1232,48 @@ fn read_radix(reader: &mut BitReader<'_>, count: usize, h: u128) -> Result<Vec<i
     while out.len() < count {
         let len = k.min(count - out.len());
         let power = (0..len).fold(1u128, |p, _| p * radix);
-        let mut value = reader.uniform(power)?;
-        for _ in 0..len {
-            out.push((value % radix) as i128 - h as i128);
-            value /= radix;
-        }
+        let value = reader.uniform(power)?;
+        push_radix_digits(&mut out, value, len, radix, h);
     }
     Ok(out)
+}
+
+/// The `len` digits of `value` $`<R^{len}`$ in base $`R=`$ `radix` from the least significant
+/// one, each less `h`. Split by $`R^m<2^{64}`$ first, so that most digits come from 64-bit
+/// divisions: the same digits as dividing `value` by $`R`$ `len` times.
+fn push_radix_digits(out: &mut Vec<i128>, mut value: u128, len: usize, radix: u128, h: u128) {
+    let (radix64, h) = (radix as u64, h as i128);
+    if u128::from(radix64) != radix {
+        for _ in 0..len {
+            out.push((value % radix) as i128 - h);
+            value /= radix;
+        }
+        return;
+    }
+    let (mut m, mut piece) = (1usize, radix);
+    while let Some(next) = piece
+        .checked_mul(radix)
+        .filter(|x| *x <= u128::from(u64::MAX))
+    {
+        piece = next;
+        m += 1;
+    }
+    let mut left = len;
+    while left > 0 {
+        let take = m.min(left);
+        let mut low = if take == m {
+            let low = value % piece;
+            value /= piece;
+            low as u64
+        } else {
+            value as u64
+        };
+        for _ in 0..take {
+            out.push(i128::from(low % radix64) - h);
+            low /= radix64;
+        }
+        left -= take;
+    }
 }
 
 /// The final witness, one bit string zero padded to a byte: for each vector, the coefficients
