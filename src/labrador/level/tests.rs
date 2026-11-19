@@ -66,17 +66,19 @@ fn projection_polys_reference(
     shape: &Shape,
 ) -> Vec<Vec<Vec<u64>>> {
     let d = ring.degree();
-    let q = ring.modulus() as i64;
-    let tables: Vec<Vec<i64>> = omega
+    // Exact integer sums of canonical entries, reduced once at the end, for every modulus.
+    let q = i128::from(ring.modulus());
+    let tables: Vec<Vec<i128>> = omega
         .iter()
         .map(|w| {
-            let mut table = vec![0i64; 64 * 256];
+            let mut table = vec![0i128; 64 * 256];
             for group in 0..64 {
                 for byte in 0..256usize {
-                    let mut s = 0i64;
+                    let mut s = 0i128;
                     for e in 0..4 {
-                        let v = ((byte >> (2 * e)) & 1) as i64 - ((byte >> (2 * e + 1)) & 1) as i64;
-                        s += v * w[4 * group + e] as i64;
+                        let v =
+                            ((byte >> (2 * e)) & 1) as i128 - ((byte >> (2 * e + 1)) & 1) as i128;
+                        s += v * i128::from(w[4 * group + e]);
                     }
                     table[group * 256 + byte] = s;
                 }
@@ -94,7 +96,7 @@ fn projection_polys_reference(
             for c in 0..d {
                 projection.column_bytes(&mut column).unwrap();
                 for (poly, table) in polys.iter_mut().zip(&tables) {
-                    let s: i64 = column
+                    let s: i128 = column
                         .iter()
                         .enumerate()
                         .map(|(g, b)| table[g * 256 + usize::from(*b)])
@@ -112,10 +114,22 @@ fn projection_polys_reference(
     out
 }
 
+/// Moduli on both sides of the switch of the column sums to `i128` at $`2^{58}`$, and the
+/// largest below $`2^{62}`$ (prime, 5 mod 8).
+const LARGE: [u64; 4] = [
+    93266870910952069,
+    288230376151711717,
+    288230376151711813,
+    4611686018427387733,
+];
+
 #[test]
 fn interleaved_tables_give_the_same_polynomials() {
     let mut rng = TestRng::new(82);
-    for q in [65557u64, 4294967197, 281474976710597] {
+    for q in [65557u64, 4294967197, 281474976710597]
+        .into_iter()
+        .chain(LARGE)
+    {
         let ring = Rq::new(q, 64).unwrap();
         // the general loop (1, 2, 9) and every specialized width (3 to 8)
         for lambda in 1usize..=9 {
@@ -369,4 +383,124 @@ fn final_witnesses_have_one_encoding() {
         decode(&bytes[..bytes.len() - 1]).err(),
         Some(Error::Encoding)
     );
+}
+
+/// The column sums at the largest magnitudes their bounds allow, every lane at
+/// $`\pm32(q-1)`$, and on random tables, against exact integer sums, on both sides of
+/// $`2^{58}`$ and for every width (the specialized 3 to 8 and the general loop).
+#[test]
+fn column_sums_are_exact_at_their_bounds() {
+    let mut rng = TestRng::new(83);
+    for q in [65557u64, 4294967197].into_iter().chain(LARGE) {
+        let ring = Rq::new(q, 64).unwrap();
+        let half = ((q - 1) / 2) as i64;
+        for lambda in 1usize..=9 {
+            let tables: Vec<Vec<i64>> = vec![
+                vec![half; 64 * 256 * lambda],
+                vec![-half; 64 * 256 * lambda],
+                (0..64 * 256 * lambda)
+                    .map(|i| if i % 2 == 0 { half } else { -half })
+                    .collect(),
+                (0..64 * 256 * lambda)
+                    .map(|_| rng.below(q) as i64 - half)
+                    .collect(),
+            ];
+            for table in &tables {
+                for column in [
+                    [0u8; 64],
+                    [255u8; 64],
+                    core::array::from_fn(|_| rng.below(256) as u8),
+                ] {
+                    let mut sums = vec![0u64; lambda];
+                    column_sums(&ring, table, lambda, &column, &mut sums);
+                    for (k, s) in sums.iter().enumerate() {
+                        let exact: i128 = column
+                            .iter()
+                            .enumerate()
+                            .map(|(g, b)| {
+                                i128::from(table[(g * 256 + usize::from(*b)) * lambda + k])
+                            })
+                            .sum();
+                        assert_eq!(
+                            *s,
+                            exact.rem_euclid(i128::from(q)) as u64,
+                            "q {q} lambda {lambda}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The masks and shifts of `gaussian_bits` against the divisions they replaced.
+#[test]
+fn gaussian_bits_match_the_division_formula() {
+    fn reference(x: i128, p: u32) -> u64 {
+        let scale = 1i128 << (p + 1);
+        let r = x.rem_euclid(scale);
+        let low = if r >= scale / 2 { r - scale } else { r };
+        let quotient = (x - low) / scale;
+        let n = if quotient > 0 {
+            2 * quotient - 1
+        } else {
+            -2 * quotient
+        };
+        n as u64 + 1 + u64::from(p + 1)
+    }
+    let mut rng = TestRng::new(84);
+    let mut values: Vec<i128> = vec![0, 1, -1, 2, -2, 3, -3];
+    for k in 1..100 {
+        let v = 1i128 << k;
+        values.extend([v, -v, v - 1, 1 - v, v + 1, -v - 1]);
+    }
+    values.extend((0..200).map(|_| rng.small(1 << 40) as i128));
+    for p in 0..=100 {
+        for x in &values {
+            // Quotients of more than 2^62 would overflow the bit count of both versions.
+            if (x.unsigned_abs() >> (p + 1)) < 1 << 60 {
+                assert_eq!(gaussian_bits(*x, p), reference(*x, p), "x {x} p {p}");
+            }
+        }
+    }
+}
+
+/// The digits of the radix code from 64-bit pieces against one division per digit, for small
+/// and large radices, the general path above 2^64 included, and every chunk length.
+#[test]
+fn radix_digits_match_digit_by_digit_division() {
+    let mut rng = TestRng::new(85);
+    for h in [
+        1u128,
+        2,
+        3,
+        7,
+        127,
+        1 << 20,
+        (1 << 31) + 5,
+        (1 << 62) - 1,
+        1 << 63,
+        1 << 70,
+    ] {
+        let radix = 2 * h + 1;
+        let k = radix_chunk(radix);
+        for len in 1..=k {
+            let power = (0..len).fold(1u128, |p, _| p * radix);
+            for value in [
+                0,
+                power - 1,
+                (u128::from(rng.next_u64()) << 64 | u128::from(rng.next_u64())) % power,
+            ] {
+                let mut want = Vec::new();
+                let mut v = value;
+                for _ in 0..len {
+                    want.push((v % radix) as i128 - h as i128);
+                    v /= radix;
+                }
+                let mut got = Vec::new();
+                push_radix_digits(&mut got, value, len, radix, h);
+                assert_eq!(got, want, "h {h} len {len}");
+            }
+        }
+    }
 }

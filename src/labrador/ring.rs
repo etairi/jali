@@ -35,6 +35,13 @@ pub struct Rq {
     d: usize,
     plans: Vec<NttPlan>,
     crt: SmallCrt,
+    /// The Shoup constant of the multiplier one: remainders of one word without a division.
+    one_shoup: u64,
+    /// $`2^{64}\bmod q`$ with its Shoup constant: remainders of two words without a division.
+    wrap: (u64, u64),
+    /// The residues of $`2`$ and $`-2`$ with their Shoup constants, for the challenge terms
+    /// beyond $`\pm1`$.
+    twos: [(u64, u64); 2],
 }
 
 /// A sparse polynomial with small integer coefficients, such as a challenge: the nonzero
@@ -66,11 +73,15 @@ impl Rq {
             plans.push(NttPlan::new(*p, d, pow_mod(*root, (1024 / d) as u64, *p))?);
         }
         let primes: Vec<u64> = plans.iter().map(NttPlan::modulus).collect();
+        let wrap = ((1u128 << 64) % u128::from(q)) as u64;
         Ok(Arc::new(Self {
             q,
             d,
             crt: SmallCrt::new(q, &primes),
             plans,
+            one_shoup: shoup(1, q),
+            wrap: (wrap, shoup(wrap, q)),
+            twos: [(2, shoup(2, q)), (q - 2, shoup(q - 2, q))],
         }))
     }
 
@@ -105,22 +116,58 @@ impl Rq {
         }
     }
 
-    /// The canonical residue of any integer.
+    /// The canonical residue of any integer: one addition for $`|x|<q`$, the case of every
+    /// digit and short coefficient, a division otherwise.
     #[inline(always)]
     pub(crate) fn lift(&self, x: i64) -> u64 {
-        x.rem_euclid(self.q as i64) as u64
+        let q = self.q as i64;
+        if (0..q).contains(&x) {
+            x as u64
+        } else if (-q..0).contains(&x) {
+            (x + q) as u64
+        } else {
+            x.rem_euclid(q) as u64
+        }
     }
 
-    /// The canonical residue of any `i128`.
+    /// The canonical residue of any `i128`, as [`Rq::lift`].
     #[inline(always)]
     pub(crate) fn lift_i128(&self, x: i128) -> u64 {
-        x.rem_euclid(i128::from(self.q)) as u64
+        let q = i128::from(self.q);
+        if (0..q).contains(&x) {
+            x as u64
+        } else if (-q..0).contains(&x) {
+            (x + q) as u64
+        } else {
+            x.rem_euclid(q) as u64
+        }
+    }
+
+    /// $`x\bmod q`$ for any $`x<2^{64}`$, by one Shoup product.
+    #[inline(always)]
+    pub(crate) fn reduce_word(&self, x: u64) -> u64 {
+        shoup_mul(x, 1, self.one_shoup, self.q)
+    }
+
+    /// $`x\bmod q`$ for any $`x<2^{128}`$: $`x_12^{64}+x_0\equiv x_1(2^{64}\bmod q)+x_0`$, by
+    /// two Shoup products.
+    #[inline(always)]
+    pub(crate) fn reduce_wide(&self, x: u128) -> u64 {
+        let (wrap, wrap_shoup) = self.wrap;
+        let high = shoup_mul((x >> 64) as u64, wrap, wrap_shoup, self.q);
+        add_mod(high, self.reduce_word(x as u64), self.q)
     }
 
     /// $`a+b\bmod q`$.
     #[inline(always)]
     pub(crate) fn add(&self, a: u64, b: u64) -> u64 {
         add_mod(a, b, self.q)
+    }
+
+    /// $`a-b\bmod q`$.
+    #[inline(always)]
+    pub(crate) fn sub(&self, a: u64, b: u64) -> u64 {
+        sub_mod(a, b, self.q)
     }
 
     /// $`ab\bmod q`$.
@@ -151,21 +198,24 @@ impl Rq {
         }
     }
 
-    /// `a += s * b` coefficientwise for a scalar $`s\in[0,q)`$.
+    /// `a += s * b` coefficientwise for a scalar $`s\in[0,q)`$, with one Shoup constant for
+    /// all the products.
     pub(crate) fn add_scaled_assign(&self, a: &mut [u64], b: &[u64], s: u64) {
         debug_assert_eq!(a.len(), b.len());
         if s == 0 {
             return;
         }
+        let s_shoup = shoup(s, self.q);
         for (x, y) in a.iter_mut().zip(b) {
-            *x = add_mod(*x, mul_mod(*y, s, self.q), self.q);
+            *x = add_mod(*x, shoup_mul(*y, s, s_shoup, self.q), self.q);
         }
     }
 
-    /// `a *= s` coefficientwise for a scalar $`s\in[0,q)`$.
+    /// `a *= s` coefficientwise for a scalar $`s\in[0,q)`$, with one Shoup constant.
     pub(crate) fn scale_assign(&self, a: &mut [u64], s: u64) {
+        let s_shoup = shoup(s, self.q);
         for x in a.iter_mut() {
-            *x = mul_mod(*x, s, self.q);
+            *x = shoup_mul(*x, s, s_shoup, self.q);
         }
     }
 
@@ -328,9 +378,16 @@ impl Rq {
                     self.add_assign(low, tail);
                 }
                 _ => {
-                    // One Shoup constant per term, so no product divides.
-                    let v = self.lift(value);
-                    let v_shoup = shoup(v, q);
+                    // One Shoup constant per term, so no product divides. Challenges have
+                    // coefficients up to 2 in magnitude, whose constants the ring keeps.
+                    let (v, v_shoup) = match value {
+                        2 => self.twos[0],
+                        -2 => self.twos[1],
+                        _ => {
+                            let v = self.lift(value);
+                            (v, shoup(v, q))
+                        }
+                    };
                     for (o, x) in high.iter_mut().zip(head) {
                         *o = add_mod(*o, shoup_mul(*x, v, v_shoup, q), q);
                     }

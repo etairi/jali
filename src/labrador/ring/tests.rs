@@ -197,7 +197,10 @@ fn sparse_products_match_dense_ones_for_every_degree_position_and_value() {
     // The moduli near both ends of the range (q = 5 mod 8, prime), positions 0 and d - 1, the
     // values +-1 (added or subtracted directly), +-2 to +-15, and values near +-q.
     let mut rng = TestRng::new(5);
-    for q in [65557u64, 4294967197, 281474976710597] {
+    for q in [65557u64, 4294967197, 281474976710597]
+        .into_iter()
+        .chain(LARGE)
+    {
         for d in [64, 128, 256] {
             let ring = Rq::new(q, d).unwrap();
             let big = (q - 3) as i64;
@@ -242,4 +245,97 @@ fn scalars_norms_and_centring() {
     let mut c = a.clone();
     ring.add_scaled_assign(&mut c, &a, q - 1);
     assert!(c.iter().all(|x| *x == 0));
+}
+
+/// Moduli at the switch of the column sums to `i128` ($`2^{58}-27`$, $`2^{58}+69`$), of 61.1
+/// bits, and the largest below $`2^{62}`$ ($`2^{62}-171`$), all prime and $`\equiv5\pmod8`$.
+const LARGE: [u64; 4] = [
+    288230376151711717,
+    288230376151711813,
+    2402958527344632421,
+    4611686018427387733,
+];
+
+/// The division-free lifts, remainders and scaled vectors against division, at the edges of
+/// their fast paths and beyond.
+#[test]
+fn lifts_remainders_and_scaled_vectors_match_division() {
+    let mut rng = TestRng::new(6);
+    for q in MODULI.into_iter().chain(LARGE) {
+        let ring = Rq::new(q, 64).unwrap();
+        let (qi, qw) = (q as i64, i128::from(q));
+        for x in [
+            0,
+            1,
+            -1,
+            qi - 1,
+            1 - qi,
+            qi,
+            -qi,
+            qi + 1,
+            -qi - 1,
+            2 * qi,
+            -2 * qi,
+            i64::MAX,
+            i64::MIN,
+            i64::MIN + 1,
+            rng.next_u64() as i64,
+        ] {
+            assert_eq!(ring.lift(x), x.rem_euclid(qi) as u64, "q {q} x {x}");
+            assert_eq!(
+                ring.lift_i128(x.into()),
+                i128::from(x).rem_euclid(qw) as u64
+            );
+        }
+        for x in [
+            i128::MAX,
+            i128::MIN,
+            qw << 64,
+            -(qw << 64) - 1,
+            qw * qw,
+            -qw * qw,
+        ] {
+            assert_eq!(ring.lift_i128(x), x.rem_euclid(qw) as u64, "q {q} x {x}");
+        }
+        for x in [
+            0u64,
+            1,
+            q - 1,
+            q,
+            q + 1,
+            q.saturating_mul(64) - 1,
+            u64::MAX,
+            rng.next_u64(),
+        ] {
+            assert_eq!(ring.reduce_word(x), x % q, "q {q} x {x}");
+        }
+        for x in [
+            0u128,
+            u128::MAX,
+            1 << 64,
+            64 * u128::from(q) - 1,
+            (u128::from(rng.next_u64()) << 64) | u128::from(rng.next_u64()),
+        ] {
+            assert_eq!(
+                ring.reduce_wide(x),
+                (x % u128::from(q)) as u64,
+                "q {q} x {x}"
+            );
+        }
+        let a = random_poly(&ring, &mut rng);
+        for scalar in [0, 1, 2, q - 2, q - 1, rng.below(q)] {
+            let product = |y: &u64| (u128::from(*y) * u128::from(scalar) % u128::from(q)) as u64;
+            let mut scaled = a.clone();
+            ring.scale_assign(&mut scaled, scalar);
+            assert_eq!(scaled, a.iter().map(product).collect::<Vec<_>>(), "q {q}");
+            let mut sum = random_poly(&ring, &mut rng);
+            let want: Vec<u64> = sum
+                .iter()
+                .zip(&a)
+                .map(|(x, y)| ((u128::from(*x) + u128::from(product(y))) % u128::from(q)) as u64)
+                .collect();
+            ring.add_scaled_assign(&mut sum, &a, scalar);
+            assert_eq!(sum, want, "q {q} scalar {scalar}");
+        }
+    }
 }
