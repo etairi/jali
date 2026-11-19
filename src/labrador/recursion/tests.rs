@@ -139,8 +139,16 @@ fn the_next_statement_is_the_verification_equations() {
     let ctx = ctx(&ring);
     let mut t = Transcript::new(Protocol::Labrador, b"test").unwrap();
     let mut out = Vec::new();
-    let (next, wit) =
-        level::prove(&ctx, &statement, &witness.vectors, 0, &mut t, &mut out).unwrap();
+    let (next, wit) = level::prove(
+        &ctx,
+        &statement,
+        &witness.vectors,
+        0,
+        &mut t,
+        &mut out,
+        None,
+    )
+    .unwrap();
     // The honest next witness satisfies every equation.
     let eqs = explicit(&next, &wit);
     assert_eq!(eqs.len(), next.full_count());

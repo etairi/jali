@@ -51,6 +51,23 @@ impl Bytes {
         })
     }
 
+    /// The rest of the buffer, refilled first if it is used up, for reads of `unit` bytes that
+    /// [`Bytes::advance`] then consumes. With a buffer of a whole number of units and reads of
+    /// one unit each, as [`Uniform`] makes them, a unit never crosses the end of the buffer, so
+    /// these are the bytes of [`Bytes::take`] of one unit at a time.
+    fn rest(&mut self) -> Result<&[u8], Error> {
+        if self.pos == self.buf.len() {
+            self.prg.fill(&mut self.buf)?;
+            self.pos = 0;
+        }
+        Ok(&self.buf[self.pos..])
+    }
+
+    /// Consume `n` bytes of [`Bytes::rest`].
+    fn advance(&mut self, n: usize) {
+        self.pos += n;
+    }
+
     /// The next `n` bytes, `n` at most the buffer length. A read that does not fit in the rest
     /// of the buffer refills it and skips that rest, in the same way for every reader.
     fn take(&mut self, n: usize) -> Result<&[u8], Error> {
@@ -89,7 +106,8 @@ impl Uniform {
         }
     }
 
-    /// The next residue.
+    /// The next residue, one word at a time: the reference of [`Uniform::fill`].
+    #[cfg(test)]
     pub(crate) fn next(&mut self) -> Result<u64, Error> {
         loop {
             let mut le = [0u8; 8];
@@ -101,10 +119,48 @@ impl Uniform {
         }
     }
 
-    /// Fill `out` with the next residues.
+    /// Fill `out` with the next residues: the words of [`Uniform::next`], decoded a run of the
+    /// buffer at a time ([`Bytes::rest`], which holds whole words).
     pub(crate) fn fill(&mut self, out: &mut [u64]) -> Result<(), Error> {
-        for x in out {
-            *x = self.next()?;
+        let (q, mask, width) = (self.q, self.mask, self.width);
+        let mut filled = 0;
+        while filled < out.len() {
+            let rest = self.bytes.rest()?;
+            let mut consumed = 0;
+            let mut push = |v: u64| {
+                consumed += width;
+                if v & mask < q {
+                    out[filled] = v & mask;
+                    filled += 1;
+                }
+                filled < out.len()
+            };
+            match width {
+                4 => {
+                    for word in rest.as_chunks::<4>().0 {
+                        if !push(u64::from(u32::from_le_bytes(*word))) {
+                            break;
+                        }
+                    }
+                }
+                8 => {
+                    for word in rest.as_chunks::<8>().0 {
+                        if !push(u64::from_le_bytes(*word)) {
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    for word in rest.chunks_exact(width) {
+                        let mut le = [0u8; 8];
+                        le[..width].copy_from_slice(word);
+                        if !push(u64::from_le_bytes(le)) {
+                            break;
+                        }
+                    }
+                }
+            }
+            self.bytes.advance(consumed);
         }
         Ok(())
     }

@@ -123,7 +123,7 @@ pub fn prove(
     context_bytes: &[u8],
     policy: &Policy,
 ) -> Result<Proof, Error> {
-    statement.check(witness)?;
+    let derived = statement.check_derived(witness)?;
     let (ctx, mut transcript) = context(statement, pp_seed, context_bytes, policy)?;
     let mut out = Vec::new();
     let (mut next, mut wit) = level::prove(
@@ -133,13 +133,14 @@ pub fn prove(
         0,
         &mut transcript,
         &mut out,
+        Some(derived),
     )?;
     let mut level = 1;
     while !next.params.last {
         if level >= MAX_LEVELS {
             return Err(Error::Parameter("too many LaBRADOR levels"));
         }
-        let (n2, w2) = level::prove(&ctx, &next, &wit, level, &mut transcript, &mut out)?;
+        let (n2, w2) = level::prove(&ctx, &next, &wit, level, &mut transcript, &mut out, None)?;
         next = n2;
         wit = w2;
         level += 1;

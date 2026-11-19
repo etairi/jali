@@ -24,6 +24,40 @@ pub(crate) struct Stats<'a> {
     pub(crate) norm_sq: u128,
     /// The garbage $`g_{ij}`$, $`i\le j`$, when known.
     pub(crate) garbage: Option<&'a [Vec<u64>]>,
+    /// What the search derives from the known garbage, once for all the bases it tries.
+    pub(crate) memo: GarbageMemo,
+}
+
+/// The largest magnitude of the known garbage and its decompositions by base and number of
+/// digits: every candidate base of a level's search needs one of a few of these (the base of
+/// the garbage depends on its number of digits alone), so each is computed once. The search
+/// runs on one thread.
+#[derive(Default)]
+pub(crate) struct GarbageMemo {
+    largest: core::cell::OnceCell<u64>,
+    digits: core::cell::RefCell<Vec<(DigitsKey, Decomposition)>>,
+}
+
+/// A base and a number of digits.
+type DigitsKey = (u64, usize);
+/// The squared norm of a decomposition and its largest digit ([`garbage_digits`]).
+type Decomposition = (f64, u64);
+
+impl GarbageMemo {
+    /// [`garbage_digits`] of `garbage` for `(b2, t2)`, computed once.
+    fn digits(&self, ring: &Rq, garbage: &[Vec<u64>], b2: u64, t2: usize) -> (f64, u64) {
+        if let Some((_, found)) = self
+            .digits
+            .borrow()
+            .iter()
+            .find(|(key, _)| *key == (b2, t2))
+        {
+            return *found;
+        }
+        let found = garbage_digits(ring, garbage, b2, t2);
+        self.digits.borrow_mut().push(((b2, t2), found));
+        found
+    }
 }
 
 /// A level's parameters before the splits $`\nu,\mu`$, with the predicted bits per
@@ -182,11 +216,14 @@ fn fit(
     // The garbage g: decomposed exactly when known, predicted otherwise.
     let (b2, t2, g_norm, g_digit) = match stats.garbage {
         Some(garbage) => {
-            let gmax = garbage.iter().map(|p| ring.linf(p)).max().unwrap_or(0);
+            let gmax = *stats
+                .memo
+                .largest
+                .get_or_init(|| garbage.iter().map(|p| ring.linf(p)).max().unwrap_or(0));
             let range = 2 * u128::from(gmax) + 1;
             let t2 = digits_for(range, b);
             let b2 = smallest_odd_base(range, t2);
-            let (norm, digit) = garbage_digits(ring, garbage, b2, t2);
+            let (norm, digit) = stats.memo.digits(ring, garbage, b2, t2);
             (b2, t2, norm, u128::from(digit))
         }
         None => {
@@ -285,6 +322,7 @@ fn followup(ring: &Rq, set: &ChallengeSet, policy: &Policy, shape: &Shape) -> f6
     let stats = Stats {
         norm_sq: shape.norm_sq,
         garbage: None,
+        memo: GarbageMemo::default(),
     };
     let Some(fit) = fit(ring, set, policy, shape, &stats, true, None) else {
         return f64::INFINITY;
@@ -433,6 +471,7 @@ pub(crate) fn predict_bytes(
         let stats = Stats {
             norm_sq: shape.norm_sq,
             garbage: None,
+            memo: GarbageMemo::default(),
         };
         let (params, cost) = choose_with_cost(ring, set, policy, &shape, &stats)?;
         if params.last {

@@ -13,7 +13,7 @@ use super::{
     recursion::{Next, next_witness},
     ring::{Rq, Sparse},
     sample::{ChallengeSet, Matrix, PROJECTION_BLOCK, Projection, purpose},
-    statement::{Aggregate, Relation, all_pairs},
+    statement::{Aggregate, Derived, Relation},
 };
 use crate::{
     Error,
@@ -235,6 +235,9 @@ fn project(
         .max()
         .unwrap_or(0);
     let flush = (max <= i32::MAX as u64).then(|| (i32::MAX as u64 / max.max(1)) as usize);
+    // Coefficients of at most 127 in magnitude (ternary witnesses, small digits) go through
+    // 8-bit lanes, added into the sums every floor(127/M) steps.
+    let byte_flush = (max <= i8::MAX as u64).then(|| (i8::MAX as u64 / max.max(1)) as usize);
     let total: usize = witness.iter().map(|v| v.len()).sum();
     let per_block = BLOCK_BUFFERS * PROJECTION_BLOCK;
     let blocks = total.div_ceil(per_block);
@@ -246,9 +249,10 @@ fn project(
             let range = block_range(block, per_block, total);
             let mut projection = Projection::at(seed, level, block * BLOCK_BUFFERS)?;
             let coefficients = coefficients(witness, range);
-            match flush {
-                Some(flush) => project_lanes(ring, &mut projection, coefficients, flush),
-                None => project_block_wide(ring, &mut projection, coefficients),
+            match (byte_flush, flush) {
+                (Some(flush), _) => project_bytes(ring, &mut projection, coefficients, flush),
+                (None, Some(flush)) => project_lanes(ring, &mut projection, coefficients, flush),
+                (None, None) => project_block_wide(ring, &mut projection, coefficients),
             }
         })?);
         for part in parts.iter() {
@@ -275,6 +279,70 @@ fn coefficients(
         start = e;
         v[range.start.clamp(s, e) - s..range.end.clamp(s, e) - s].iter()
     })
+}
+
+/// The projection of `coefficients` with the columns of `projection`, for coefficients of at
+/// most 127 in magnitude: in 8-bit lanes added into the i128 sums every `flush` steps. Entry
+/// $`e`$ of row $`4g+e`$ is bit $`2e`$ less bit $`2e+1`$ of byte $`g`$ ([`DECODE`]), so its
+/// product with $`s`$ is $`s`$ masked by the first bit less $`s`$ masked by the second: no
+/// multiplication, and the lanes of one entry position side by side, so that the loops run on
+/// vectors. The same integers as [`project_lanes`].
+fn project_bytes<'a>(
+    ring: &Rq,
+    projection: &mut Projection,
+    mut coefficients: impl Iterator<Item = &'a u64>,
+    flush: usize,
+) -> Result<[i128; 256], Error> {
+    // Lane g of `lanes[e]` is row 4g + e.
+    fn add_into(p: &mut [i128; 256], lanes: &mut [[i8; 64]; 4]) {
+        for (e, lane) in lanes.iter_mut().enumerate() {
+            for (g, a) in lane.iter_mut().enumerate() {
+                p[4 * g + e] += i128::from(*a);
+                *a = 0;
+            }
+        }
+    }
+    let mut p = [0i128; 256];
+    let mut lanes = Zeroizing::new([[0i8; 64]; 4]);
+    // Up to `flush` columns of nonzero coefficients at a time, then their sums into p.
+    let mut columns = vec![[0u8; 64]; flush];
+    let mut values = Zeroizing::new(vec![0i8; flush]);
+    loop {
+        let (mut count, mut more) = (0, true);
+        while count < flush {
+            let Some(x) = coefficients.next() else {
+                more = false;
+                break;
+            };
+            // Every coefficient takes its column from the stream, also a zero one.
+            projection.column_bytes(&mut columns[count])?;
+            let s = ring.center(*x) as i8;
+            if s != 0 {
+                values[count] = s;
+                count += 1;
+            }
+        }
+        add_columns(&mut lanes, &columns[..count], &values[..count]);
+        add_into(&mut p, &mut lanes);
+        if !more {
+            return Ok(p);
+        }
+    }
+}
+
+/// The columns `columns` with their coefficients `values` added into the 8-bit lanes of
+/// [`project_bytes`], in loops on vectors of bytes. Every partial sum of a call stays within ±127 (at most `flush` columns).
+fn add_columns(lanes: &mut [[i8; 64]; 4], columns: &[[u8; 64]], values: &[i8]) {
+    for (column, s) in columns.iter().zip(values) {
+        for (e, lane) in lanes.iter_mut().enumerate() {
+            for (a, b) in lane.iter_mut().zip(column) {
+                let b = b >> (2 * e);
+                let plus = (b & 1).wrapping_neg() as i8;
+                let minus = ((b >> 1) & 1).wrapping_neg() as i8;
+                *a += (*s & plus) - (*s & minus);
+            }
+        }
+    }
 }
 
 /// The projection of `coefficients` with the columns of `projection`, in i32 lanes added into
@@ -493,13 +561,7 @@ fn projection_blocks<T: Send>(
             let block = wave + w;
             let mut projection = Projection::at(seed, level, block * BLOCK_BUFFERS)?;
             let indices = block_range(block, per_block, total);
-            work(block_polys(
-                ring,
-                &table,
-                omega.len(),
-                &mut projection,
-                indices,
-            )?)
+            work(block_polys(ring, &table, &mut projection, indices)?)
         })?;
         for result in results {
             absorb(result)?;
@@ -508,64 +570,161 @@ fn projection_blocks<T: Send>(
     Ok(())
 }
 
-/// For each group of 4 rows and each byte, the sums of the 4 weighted entries for every k,
-/// side by side, so that one lookup reads the λ sums of a byte. Each sum is stored as its
-/// centred residue modulo $`q`$ (at most $`q/2`$ in magnitude, while the sum of 4 canonical
-/// residues reaches $`4q`$, beyond `i64` for $`q>2^{61}`$); the polynomials of [`block_polys`]
-/// only take residues of sums of entries, so they do not change.
-fn projection_table(ring: &Rq, omega: &[Vec<u64>]) -> Vec<i64> {
+/// The index of each projection byte among the 81 sign patterns of four entries,
+/// $`\sum_e3^e(x_e+1)`$ for its entries $`x_e`$ ([`DECODE`]): bytes with the same four entries
+/// share their index.
+const PATTERN: [u8; 256] = {
+    let mut out = [0u8; 256];
+    let mut b = 0;
+    while b < 256 {
+        let mut index = 0;
+        let mut e = 4;
+        while e > 0 {
+            e -= 1;
+            index = 3 * index + (DECODE[b][e] + 1) as u8;
+        }
+        out[b] = index;
+        b += 1;
+    }
+    out
+};
+
+/// For each group of 4 rows, the sums of the 4 weighted entries for every k, side by side, so
+/// that one lookup reads the λ sums of a byte of a column. Each sum is stored as its centred
+/// residue modulo $`q`$ (at most $`q/2`$ in magnitude, while the sum of 4 canonical residues
+/// reaches $`4q`$, beyond `i64` for $`q>2^{61}`$). The polynomials of [`block_polys`] only take
+/// residues of sums of entries, so they do not change.
+///
+/// The table holds one sum per sign pattern ([`PATTERN`], 81 per group), in 32 bits below
+/// $`2^{32}`$, so that it stays in a core's first-level cache (about 100 KB at λ = 5). With the
+/// `simd` feature on x86-64, where the AVX-512 kernel runs, it holds one sum per byte instead,
+/// the layout that the kernel reads.
+struct ProjectionTable {
+    lambda: usize,
+    entries: TableEntries,
+}
+
+enum TableEntries {
+    /// One sum per pattern, below $`2^{32}`$ in magnitude.
+    Narrow(Vec<i32>),
+    /// One sum per pattern.
+    Wide(Vec<i64>),
+    /// One sum per byte, for the AVX-512 kernel ($`q<2^{58}`$).
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    Bytes(Vec<i64>),
+}
+
+fn projection_table(ring: &Rq, omega: &[Vec<u64>]) -> ProjectionTable {
     let lambda = omega.len();
-    let mut table = vec![0i64; 64 * 256 * lambda];
-    for (k, w) in omega.iter().enumerate() {
+    debug_assert!(lambda <= MAX_LAMBDA);
+    // The centred residue of the sum of the weighted entries of a group with signs `signs`:
+    // entries in {-1, 0, 1}, so modular additions and subtractions of the canonical `w`.
+    let sum = |k: usize, group: usize, signs: &[i8; 4]| -> i64 {
+        let mut s = 0u64;
+        for (e, v) in signs.iter().enumerate() {
+            match v {
+                1 => s = ring.add(s, omega[k][4 * group + e]),
+                -1 => s = ring.sub(s, omega[k][4 * group + e]),
+                _ => {}
+            }
+        }
+        ring.center(s)
+    };
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    if ring.modulus() < 1 << 58 && crate::simd::avx512() {
+        let mut table = vec![0i64; 64 * 256 * lambda];
         for group in 0..64 {
-            for byte in 0..256usize {
-                // The entries are in {-1, 0, 1}: the residue of the sum by modular additions
-                // and subtractions of the canonical `w`.
-                let mut s = 0u64;
-                for (e, v) in DECODE[byte].iter().enumerate() {
-                    match v {
-                        1 => s = ring.add(s, w[4 * group + e]),
-                        -1 => s = ring.sub(s, w[4 * group + e]),
-                        _ => {}
-                    }
+            for (byte, signs) in DECODE.iter().enumerate() {
+                for k in 0..lambda {
+                    table[(group * 256 + byte) * lambda + k] = sum(k, group, signs);
                 }
-                table[(group * 256 + byte) * lambda + k] = ring.center(s);
+            }
+        }
+        return ProjectionTable {
+            lambda,
+            entries: TableEntries::Bytes(table),
+        };
+    }
+    // Every pattern has bytes, any of which stands for it.
+    let mut patterns = [[0i8; 4]; 81];
+    for (byte, signs) in DECODE.iter().enumerate() {
+        patterns[usize::from(PATTERN[byte])] = *signs;
+    }
+    let mut table = vec![0i64; 64 * 81 * lambda];
+    for group in 0..64 {
+        for (pattern, signs) in patterns.iter().enumerate() {
+            for k in 0..lambda {
+                table[(group * 81 + pattern) * lambda + k] = sum(k, group, signs);
             }
         }
     }
-    table
+    let entries = if ring.modulus() < 1 << 32 {
+        TableEntries::Narrow(
+            table
+                .iter()
+                .map(|x| i32::try_from(*x).expect("a centred residue below 2^31"))
+                .collect(),
+        )
+    } else {
+        TableEntries::Wide(table)
+    };
+    ProjectionTable { lambda, entries }
 }
+
+/// The largest λ: $`\lceil128/\lfloor\log_2q\rfloor\rceil`$ for the moduli above $`2^{16}`$
+/// (`ring::MIN_MODULUS`), the length of the sums of [`ProjectionTable::sums`].
+const MAX_LAMBDA: usize = 8;
+
+/// Columns whose sums [`block_polys`] takes side by side, as many as keep their sums in
+/// registers: four with the 31 general registers of aarch64, two elsewhere.
+#[cfg(target_arch = "aarch64")]
+const COLUMNS: usize = 4;
+#[cfg(not(target_arch = "aarch64"))]
+const COLUMNS: usize = 2;
 
 /// The polynomials of [`projection_blocks`] for the polynomial indices `indices` $`=in+x`$,
 /// whose columns `projection` reads in order.
 fn block_polys(
     ring: &Rq,
-    table: &[i64],
-    lambda: usize,
+    table: &ProjectionTable,
     projection: &mut Projection,
     indices: core::ops::Range<usize>,
 ) -> Result<BlockPolys, Error> {
-    let d = ring.degree();
+    let (d, lambda) = (ring.degree(), table.lambda);
     let stride = lambda * d;
     let mut data = vec![0u64; indices.len() * stride];
     let mut tmp = vec![0u64; d];
-    let mut column = [0u8; 64];
-    let mut sums = vec![0u64; lambda];
     for polys in data.chunks_exact_mut(stride) {
-        // Eight columns at a time in AVX-512 registers where they run, below 2^58 (the narrow
-        // sums of `column_sums`, with its reduction), the rest column by column.
+        // Eight columns at a time in AVX-512 registers where they run (the byte table, below
+        // 2^58, with the narrow sums of `ProjectionTable::sums` and its reduction), then
+        // `COLUMNS` at a time, then one by one. Whether a kernel runs is
+        // known before a column is read, and a kernel that declines leaves its columns to
+        // `ProjectionTable::sums`, so every column is summed once in stream order.
         #[allow(unused_mut)]
         let mut first = 0;
         #[cfg(all(feature = "simd", target_arch = "x86_64"))]
-        if ring.modulus() < 1 << 58 && crate::simd::avx512() {
+        {
+            let kernel = match &table.entries {
+                TableEntries::Narrow(_) => false,
+                TableEntries::Bytes(_) => true,
+                TableEntries::Wide(_) => false,
+            };
             let mut columns = [[0u8; 64]; 8];
             let mut raw = [[0i64; 8]; 8];
-            let offset = 32 * ring.modulus();
-            while first + 8 <= d {
+            // The kernels run below 2^58 only, where 32q does not overflow.
+            let offset = if kernel { 32 * ring.modulus() } else { 0 };
+            while kernel && first + 8 <= d {
                 for c in columns.iter_mut() {
                     projection.column_bytes(c)?;
                 }
-                if crate::simd::table_sums8(table, lambda, &columns, &mut raw) {
+                let done = match &table.entries {
+                    TableEntries::Narrow(_) => false,
+                    TableEntries::Bytes(t) => {
+                        crate::simd::table_sums8(t, lambda, &columns, &mut raw)
+                    }
+                    TableEntries::Wide(_) => false,
+                };
+                if done {
                     for (j, r) in raw.iter().enumerate() {
                         for (k, s) in r[..lambda].iter().enumerate() {
                             polys[k * d + first + j] =
@@ -573,9 +732,10 @@ fn block_polys(
                         }
                     }
                 } else {
-                    for (j, c) in columns.iter().enumerate() {
-                        column_sums(ring, table, lambda, c, &mut sums);
-                        for (k, s) in sums.iter().enumerate() {
+                    let mut sums = [[0u64; MAX_LAMBDA]; 8];
+                    table.sums(ring, &columns, &mut sums);
+                    for (j, s) in sums.iter().enumerate() {
+                        for (k, s) in s[..lambda].iter().enumerate() {
                             polys[k * d + first + j] = *s;
                         }
                     }
@@ -583,11 +743,26 @@ fn block_polys(
                 first += 8;
             }
         }
+        let mut columns = [[0u8; 64]; COLUMNS];
+        let mut sums = [[0u64; 8]; COLUMNS];
+        while first + COLUMNS <= d {
+            for c in columns.iter_mut() {
+                projection.column_bytes(c)?;
+            }
+            table.sums(ring, &columns, &mut sums);
+            for (j, s) in sums.iter().enumerate() {
+                for (k, s) in s[..lambda].iter().enumerate() {
+                    polys[k * d + first + j] = *s;
+                }
+            }
+            first += COLUMNS;
+        }
+        let (mut column, mut sum) = ([[0u8; 64]; 1], [[0u64; 8]; 1]);
         for c in first..d {
-            projection.column_bytes(&mut column)?;
-            column_sums(ring, table, lambda, &column, &mut sums);
-            for (poly, s) in polys.chunks_exact_mut(d).zip(&sums) {
-                poly[c] = *s;
+            projection.column_bytes(&mut column[0])?;
+            table.sums(ring, &column, &mut sum);
+            for (k, s) in sum[0][..lambda].iter().enumerate() {
+                polys[k * d + c] = *s;
             }
         }
         for poly in polys.chunks_exact_mut(d) {
@@ -602,66 +777,132 @@ fn block_polys(
     })
 }
 
-/// `sums[k]` $`=\sum_g`$ `table[(256g + column[g])λ + k]` $`\bmod q`$ for $`k<\lambda`$,
-/// canonical, the λ entries of a lookup side by side in `table`.
-///
-/// The 64 entries of a sum are centred residues, at most $`(q-1)/2`$ in magnitude, so the sum
-/// lies within $`\pm32(q-1)`$ and adding $`32q`$ gives a positive value below $`64q`$: one word
-/// while $`q<2^{58}`$, where the sums are taken in `i64`, two from there, in `i128`. One Shoup
-/// reduction of that value replaces the division. Specialized for each λ of the supported
-/// moduli (3 to 8), so that the sums stay in registers, with a loop per lane for any other.
-fn column_sums(ring: &Rq, table: &[i64], lambda: usize, column: &[u8; 64], sums: &mut [u64]) {
-    fn narrow<const L: usize>(ring: &Rq, table: &[i64], column: &[u8; 64], sums: &mut [u64]) {
-        let table = table.as_chunks::<L>().0;
-        let mut acc = [0i64; L];
-        for (g, b) in column.iter().enumerate() {
-            for (a, t) in acc.iter_mut().zip(&table[g * 256 + usize::from(*b)]) {
-                *a += *t;
+impl ProjectionTable {
+    /// `sums[c][k]` $`=\sum_g`$ (the sum of group $`g`$ at byte `columns[c][g]`, entry $`k`$)
+    /// $`\bmod q`$ for $`k<\lambda`$, canonical, for each column of `columns`.
+    ///
+    /// The 64 entries of a sum are centred residues, at most $`(q-1)/2`$ in magnitude, so the
+    /// sum lies within $`\pm32(q-1)`$ and adding $`32q`$ gives a positive value below $`64q`$:
+    /// one word while $`q<2^{58}`$, where the sums are taken in `i64`, two from there, in
+    /// `i128`. One Shoup reduction of that value replaces the division. Specialized for each λ
+    /// of the supported moduli (3 to 8), so that the sums of all the columns stay in
+    /// registers, with a loop per lane for any other λ and for the byte table.
+    fn sums<const B: usize>(
+        &self,
+        ring: &Rq,
+        columns: &[[u8; 64]; B],
+        sums: &mut [[u64; MAX_LAMBDA]; B],
+    ) {
+        let narrow = ring.modulus() < 1 << 58;
+        match (&self.entries, self.lambda) {
+            (TableEntries::Narrow(t), 3) => narrow_sums::<i32, 3, B>(ring, t, columns, sums),
+            (TableEntries::Narrow(t), 4) => narrow_sums::<i32, 4, B>(ring, t, columns, sums),
+            (TableEntries::Narrow(t), 5) => narrow_sums::<i32, 5, B>(ring, t, columns, sums),
+            (TableEntries::Narrow(t), 6) => narrow_sums::<i32, 6, B>(ring, t, columns, sums),
+            (TableEntries::Narrow(t), 7) => narrow_sums::<i32, 7, B>(ring, t, columns, sums),
+            (TableEntries::Narrow(t), 8) => narrow_sums::<i32, 8, B>(ring, t, columns, sums),
+            (TableEntries::Wide(t), 3) if narrow => {
+                narrow_sums::<i64, 3, B>(ring, t, columns, sums)
+            }
+            (TableEntries::Wide(t), 4) if narrow => {
+                narrow_sums::<i64, 4, B>(ring, t, columns, sums)
+            }
+            (TableEntries::Wide(t), 5) if narrow => {
+                narrow_sums::<i64, 5, B>(ring, t, columns, sums)
+            }
+            (TableEntries::Wide(t), 6) if narrow => {
+                narrow_sums::<i64, 6, B>(ring, t, columns, sums)
+            }
+            (TableEntries::Wide(t), 7) if narrow => {
+                narrow_sums::<i64, 7, B>(ring, t, columns, sums)
+            }
+            (TableEntries::Wide(t), 8) if narrow => {
+                narrow_sums::<i64, 8, B>(ring, t, columns, sums)
+            }
+            (TableEntries::Wide(t), 3) => wide_sums::<3, B>(ring, t, columns, sums),
+            (TableEntries::Wide(t), 4) => wide_sums::<4, B>(ring, t, columns, sums),
+            (TableEntries::Wide(t), 5) => wide_sums::<5, B>(ring, t, columns, sums),
+            (TableEntries::Wide(t), 6) => wide_sums::<6, B>(ring, t, columns, sums),
+            (TableEntries::Wide(t), 7) => wide_sums::<7, B>(ring, t, columns, sums),
+            (TableEntries::Wide(t), 8) => wide_sums::<8, B>(ring, t, columns, sums),
+            _ => {
+                let offset = 32 * i128::from(ring.modulus());
+                for (s, column) in sums.iter_mut().zip(columns) {
+                    for (k, s) in s[..self.lambda].iter_mut().enumerate() {
+                        let a: i128 = column
+                            .iter()
+                            .enumerate()
+                            .map(|(g, b)| i128::from(self.entry(g, *b, k)))
+                            .sum();
+                        *s = ring.reduce_wide((a + offset) as u128);
+                    }
+                }
             }
         }
-        // The sum plus 32q is below 64q < 2^64, so the wrapping addition is exact.
-        let offset = 32 * ring.modulus();
-        for (s, a) in sums.iter_mut().zip(acc) {
+    }
+
+    /// The sum of group `g` at byte `byte`, entry `k`.
+    fn entry(&self, g: usize, byte: u8, k: usize) -> i64 {
+        let pattern = || (g * 81 + usize::from(PATTERN[usize::from(byte)])) * self.lambda + k;
+        match &self.entries {
+            TableEntries::Narrow(t) => i64::from(t[pattern()]),
+            TableEntries::Wide(t) => t[pattern()],
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            TableEntries::Bytes(t) => t[(g * 256 + usize::from(byte)) * self.lambda + k],
+        }
+    }
+}
+
+/// [`ProjectionTable::sums`] for λ = `L` over pattern sums of type `T`, in `i64`
+/// ($`q<2^{58}`$).
+fn narrow_sums<T: Copy + Into<i64>, const L: usize, const B: usize>(
+    ring: &Rq,
+    table: &[T],
+    columns: &[[u8; 64]; B],
+    sums: &mut [[u64; 8]; B],
+) {
+    let table = table.as_chunks::<L>().0;
+    let mut acc = [[0i64; L]; B];
+    for g in 0..64 {
+        let group = &table[g * 81..(g + 1) * 81];
+        for (a, column) in acc.iter_mut().zip(columns) {
+            let entry = &group[usize::from(PATTERN[usize::from(column[g])])];
+            for (a, t) in a.iter_mut().zip(entry) {
+                *a += (*t).into();
+            }
+        }
+    }
+    // The sum plus 32q is below 64q < 2^64, so the wrapping addition is exact.
+    let offset = 32 * ring.modulus();
+    for (s, a) in sums.iter_mut().zip(acc) {
+        for (s, a) in s.iter_mut().zip(a) {
             *s = ring.reduce_word((a as u64).wrapping_add(offset));
         }
     }
-    fn wide<const L: usize>(ring: &Rq, table: &[i64], column: &[u8; 64], sums: &mut [u64]) {
-        let table = table.as_chunks::<L>().0;
-        let mut acc = [0i128; L];
-        for (g, b) in column.iter().enumerate() {
-            for (a, t) in acc.iter_mut().zip(&table[g * 256 + usize::from(*b)]) {
+}
+
+/// [`ProjectionTable::sums`] for λ = `L`, in `i128` ($`q\ge2^{58}`$).
+fn wide_sums<const L: usize, const B: usize>(
+    ring: &Rq,
+    table: &[i64],
+    columns: &[[u8; 64]; B],
+    sums: &mut [[u64; 8]; B],
+) {
+    let table = table.as_chunks::<L>().0;
+    let mut acc = [[0i128; L]; B];
+    for g in 0..64 {
+        let group = &table[g * 81..(g + 1) * 81];
+        for (a, column) in acc.iter_mut().zip(columns) {
+            let entry = &group[usize::from(PATTERN[usize::from(column[g])])];
+            for (a, t) in a.iter_mut().zip(entry) {
                 *a += i128::from(*t);
             }
         }
-        let offset = 32 * i128::from(ring.modulus());
-        for (s, a) in sums.iter_mut().zip(acc) {
-            *s = ring.reduce_wide((a + offset) as u128);
-        }
     }
-    let narrow_sums = ring.modulus() < 1 << 58;
-    match (lambda, narrow_sums) {
-        (3, true) => narrow::<3>(ring, table, column, sums),
-        (4, true) => narrow::<4>(ring, table, column, sums),
-        (5, true) => narrow::<5>(ring, table, column, sums),
-        (6, true) => narrow::<6>(ring, table, column, sums),
-        (7, true) => narrow::<7>(ring, table, column, sums),
-        (8, true) => narrow::<8>(ring, table, column, sums),
-        (3, false) => wide::<3>(ring, table, column, sums),
-        (4, false) => wide::<4>(ring, table, column, sums),
-        (5, false) => wide::<5>(ring, table, column, sums),
-        (6, false) => wide::<6>(ring, table, column, sums),
-        (7, false) => wide::<7>(ring, table, column, sums),
-        (8, false) => wide::<8>(ring, table, column, sums),
-        _ => {
-            let offset = 32 * i128::from(ring.modulus());
-            for (k, s) in sums.iter_mut().enumerate() {
-                let a: i128 = column
-                    .iter()
-                    .enumerate()
-                    .map(|(g, b)| i128::from(table[(g * 256 + usize::from(*b)) * lambda + k]))
-                    .sum();
-                *s = ring.reduce_wide((a + offset) as u128);
-            }
+    let offset = 32 * i128::from(ring.modulus());
+    for (s, a) in sums.iter_mut().zip(acc) {
+        for (s, a) in s.iter_mut().zip(a) {
+            *s = ring.reduce_wide((a + offset) as u128);
         }
     }
 }
@@ -767,14 +1008,52 @@ fn complete(
     Ok(())
 }
 
-/// $`\varphi_z=\sum_ic_i\varphi_i`$.
-fn phi_z(ring: &Rq, phi: &[Vec<u64>], challenges: &[Sparse], n: usize) -> Vec<u64> {
-    let d = ring.degree();
-    let mut out = vec![0u64; n * d];
-    for (c, v) in challenges.iter().zip(phi) {
-        for x in 0..n {
-            ring.mul_sparse_add(c, &v[x * d..(x + 1) * d], &mut out[x * d..(x + 1) * d]);
+/// The transforms of the challenges, for [`combine_hats`] and [`combine`].
+fn challenge_hats(ring: &Rq, challenges: &[Sparse]) -> Vec<Vec<u64>> {
+    challenges
+        .iter()
+        .map(|c| ring.ntt(&c.dense(ring)))
+        .collect()
+}
+
+/// $`\sum_ic_iv_i`$ for the challenges whose transforms are `c_hats` and $`r`$ vectors of `n`
+/// polynomials whose transforms are `v_hats`: the products accumulated in the transform domain
+/// and one inverse transform per polynomial. Each coefficient of the sum, from centred
+/// operands, is an integer below $`r\|c\|_1(q-1)/2`$ in magnitude, which the CRT reconstructs
+/// exactly (`Rq::intt_into`), so the residues are those of the sparse products
+/// ([`Rq::mul_sparse_add`]). The sums are wiped on drop, as $`z`$ is secret.
+fn combine_hats(
+    ring: &Rq,
+    c_hats: &[Vec<u64>],
+    v_hats: &[impl AsRef<[u64]>],
+    n: usize,
+) -> Zeroizing<Vec<u64>> {
+    let (d, k) = (ring.degree(), ring.hat_len());
+    let mut out = Zeroizing::new(vec![0u64; n * d]);
+    let mut acc = Zeroizing::new(vec![0u64; k]);
+    for (x, poly) in out.chunks_exact_mut(d).enumerate() {
+        acc.fill(0);
+        for (c_hat, v) in c_hats.iter().zip(v_hats) {
+            ring.mac(&mut acc, c_hat, &v.as_ref()[x * k..(x + 1) * k]);
         }
+        ring.intt_into(&mut acc, poly);
+    }
+    out
+}
+
+/// [`combine_hats`] of vectors given by their coefficients, each polynomial transformed where
+/// it is used: $`\varphi_z=\sum_ic_i\varphi_i`$ for the verifier, which keeps no transforms.
+fn combine(ring: &Rq, c_hats: &[Vec<u64>], v: &[Vec<u64>], n: usize) -> Vec<u64> {
+    let (d, k) = (ring.degree(), ring.hat_len());
+    let mut out = vec![0u64; n * d];
+    let (mut acc, mut hat) = (vec![0u64; k], vec![0u64; k]);
+    for (x, poly) in out.chunks_exact_mut(d).enumerate() {
+        acc.fill(0);
+        for (c_hat, v) in c_hats.iter().zip(v) {
+            ring.ntt_into(&v[x * d..(x + 1) * d], &mut hat);
+            ring.mac(&mut acc, c_hat, &hat);
+        }
+        ring.intt_into(&mut acc, poly);
     }
     out
 }
@@ -799,7 +1078,8 @@ pub(crate) fn evaluate_aggregate(ring: &Rq, agg: &Aggregate, hats: &[Vec<u64>]) 
 
 /// Run one level as the prover: choose its parameters, then try attempts until the next
 /// witness meets its bound. Appends the level's bytes to `out` and returns the next statement
-/// and witness.
+/// and witness. `derived` is what the statement's check already derived from `witness`, if it
+/// ran (the first level), and is computed here otherwise.
 pub(crate) fn prove<R: Relation>(
     ctx: &Ctx,
     rel: &R,
@@ -807,17 +1087,16 @@ pub(crate) fn prove<R: Relation>(
     level: u32,
     transcript: &mut Transcript,
     out: &mut Vec<u8>,
+    derived: Option<Derived>,
 ) -> Result<NextLevel, Error> {
     let ring = &ctx.ring;
     let shape = rel.shape();
     // Everything derived from the witness is wiped on drop.
-    let hats: Zeroizing<Vec<Vec<u64>>> =
-        Zeroizing::new(witness.iter().map(|v| ring.ntt_many(v)).collect());
-    let pairs = Zeroizing::new(all_pairs(ring, &hats));
-    let norm_sq: u128 = witness
-        .iter()
-        .map(|v| ring.norm_sq(v))
-        .fold(0, u128::saturating_add);
+    let Derived {
+        hats,
+        pairs,
+        norm_sq,
+    } = derived.unwrap_or_else(|| Derived::of(ring, witness));
     if norm_sq > shape.norm_sq {
         return Err(Error::Witness);
     }
@@ -829,6 +1108,7 @@ pub(crate) fn prove<R: Relation>(
         &Stats {
             norm_sq,
             garbage: Some(&pairs),
+            memo: plan::GarbageMemo::default(),
         },
     )?;
     for attempt in 0..MAX_ATTEMPTS {
@@ -1038,12 +1318,9 @@ fn attempt_level<R: Relation>(
     let challenges = (0..r)
         .map(|i| ctx.set.sample(&c_seed, i as u32, &ctx.eta_ring))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut z = Zeroizing::new(vec![0u64; n * d]);
-    for (c, s) in challenges.iter().zip(witness) {
-        for x in 0..n {
-            ring.mul_sparse_add(c, &s[x * d..(x + 1) * d], &mut z[x * d..(x + 1) * d]);
-        }
-    }
+    // z = sum_i c_i s_i from the transforms of the witness (`combine_hats`).
+    let c_hats = challenge_hats(ring, &challenges);
+    let z = combine_hats(ring, &c_hats, hats, n);
     let next_wit = next_witness(ring, params, &layout, &z, &v);
     let next_norm: u128 = next_wit
         .iter()
@@ -1058,7 +1335,7 @@ fn attempt_level<R: Relation>(
         level,
         params: *params,
         layout,
-        phi_z: phi_z(ring, &agg.phi, &challenges, n),
+        phi_z: combine_hats(ring, &c_hats, &phi_hats, n).to_vec(),
         challenges,
         u1,
         u2,
@@ -1158,7 +1435,7 @@ pub(crate) fn verify<R: Relation>(
         pp_seed: ctx.pp_seed,
         level,
         params,
-        phi_z: phi_z(ring, &agg.phi, &challenges, shape.n),
+        phi_z: combine(ring, &challenge_hats(ring, &challenges), &agg.phi, shape.n),
         layout,
         challenges,
         u1,

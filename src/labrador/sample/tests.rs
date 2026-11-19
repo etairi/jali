@@ -130,3 +130,30 @@ fn projection_blocks_start_where_the_stream_reaches_them() {
         }
     }
 }
+
+/// `Uniform::fill` against residues read one word at a time (`Uniform::next`), for words of 3,
+/// 4, 5 and 8 bytes, moduli just above a power of two (about half the words rejected) and
+/// just below one, and lengths that cross the buffer's refills.
+#[test]
+fn runs_of_residues_equal_the_words_one_at_a_time() {
+    let moduli = [
+        65557u64,
+        (1 << 24) + 43,
+        4294967197,
+        (1 << 32) + 15,
+        (1 << 40) + 21,
+        (1 << 61) - 1,
+        4611686018427387733,
+    ];
+    for (k, q) in moduli.into_iter().enumerate() {
+        let seed = [k as u8 + 1; 32];
+        let mut runs = Uniform::new(&seed, 7, 3, q);
+        let mut words = Uniform::new(&seed, 7, 3, q);
+        for len in [1usize, 64, 4095, 4096, 9000, 64] {
+            let mut out = vec![0u64; len];
+            runs.fill(&mut out).unwrap();
+            let expect: Vec<u64> = (0..len).map(|_| words.next().unwrap()).collect();
+            assert_eq!(out, expect, "q {q} len {len}");
+        }
+    }
+}
