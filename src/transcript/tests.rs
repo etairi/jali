@@ -288,3 +288,41 @@ fn barrett_remainders_equal_the_native_ones() {
         }
     }
 }
+
+/// The two-word Horner reduction of `uints` against `DecodeUint`, for moduli from just above
+/// $`2^{64}`$ to just below $`2^{126}`$, every chunk length up to 32 bytes, all-ones and random
+/// chunks.
+#[test]
+fn two_word_reductions_equal_decode_uint() {
+    let mut state = 0x243f_6a88_85a3_08d3u64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let moduli = [
+        (1u128 << 64) + 13,
+        800602353498606932557,
+        (1 << 100) + 277,
+        (1 << 125) + 99,
+        (1 << 126) - 1,
+    ];
+    for q in moduli {
+        let modulus = U256::from_u128(q);
+        let m = Mod128::new(&modulus).expect("a two-word modulus");
+        for len in 1..=32usize {
+            let mut chunks = vec![vec![0xffu8; len], vec![0u8; len]];
+            for _ in 0..50 {
+                chunks.push((0..len).map(|_| next() as u8).collect());
+            }
+            for chunk in chunks {
+                assert_eq!(
+                    U256::from_u128(reduce_le128(&m, &chunk)),
+                    decode_uint(&chunk, &modulus).unwrap(),
+                    "q {q} len {len}"
+                );
+            }
+        }
+    }
+}

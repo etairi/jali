@@ -31,6 +31,8 @@ mod digits_tests;
 #[cfg(test)]
 mod integer_tests;
 #[cfg(test)]
+mod norm_tests;
+#[cfg(test)]
 mod selector_tests;
 
 /// Integer witness bounds, applied to the whole named block.
@@ -1102,18 +1104,59 @@ fn ceil_sqrt(x: Bound) -> Bound {
         r.wrapping_add(&Bound::ONE)
     }
 }
-/// Exact squared Euclidean norm of the centred representatives.
+/// Exact squared Euclidean norm of the centred representatives. Below $`2^{128}`$ a
+/// magnitude is below $`2^{127}`$, its square takes two words and the sum of at most $`2^{64}`$
+/// of them three, so the sum is taken in words and widened once.
 fn exact_norm_squared(p: &Poly) -> Result<Bound, Error> {
+    let words = p.fold_magnitudes((0u128, 0u128, 0u64), |(low, high, top), m| {
+        let (square_low, square_high) = square_u128(m);
+        let (low, carry) = low.overflowing_add(square_low);
+        // square_high < 2^126, so adding the carry does not overflow.
+        let (high, carry) = high.overflowing_add(square_high + u128::from(carry));
+        (low, high, top + u64::from(carry))
+    });
+    if let Some((low, high, top)) = words {
+        return Ok(bound_from_words(low, high, top));
+    }
     (0..p.ring().degree()).try_fold(Bound::ZERO, |sum, i| {
         let m = p.magnitude(i).resize::<{ Bound::LIMBS }>();
         add_bound(sum, m.wrapping_mul(&m))
     })
 }
-/// $`\|p\|_1`$ of the centred representatives.
+/// $`\|p\|_1`$ of the centred representatives, in words below $`2^{128}`$ (magnitudes below
+/// $`2^{127}`$, at most $`2^{64}`$ of them) as [`exact_norm_squared`].
 fn l1_norm(p: &Poly) -> Result<Bound, Error> {
+    let words = p.fold_magnitudes((0u128, 0u64), |(low, top), m| {
+        let (low, carry) = low.overflowing_add(m);
+        (low, top + u64::from(carry))
+    });
+    if let Some((low, top)) = words {
+        return Ok(bound_from_words(low, u128::from(top), 0));
+    }
     (0..p.ring().degree()).try_fold(Bound::ZERO, |sum, i| {
         add_bound(sum, p.magnitude(i).resize::<{ Bound::LIMBS }>())
     })
+}
+/// $`m^2`$ as its low and high words, for $`m<2^{127}`$.
+fn square_u128(m: u128) -> (u128, u128) {
+    let (a, b) = ((m >> 64) as u64, m as u64);
+    let (aa, ab, bb) = (
+        u128::from(a) * u128::from(a),
+        u128::from(a) * u128::from(b),
+        u128::from(b) * u128::from(b),
+    );
+    // m^2 = aa 2^128 + 2ab 2^64 + bb, with 2ab < 2^128 as a < 2^63.
+    let middle = ab << 1;
+    let (low, carry) = bb.overflowing_add(middle << 64);
+    (low, aa + (middle >> 64) + u128::from(carry))
+}
+/// `low` $`+2^{128}`$`high` $`+2^{256}`$`top` as a [`Bound`].
+fn bound_from_words(low: u128, high: u128, top: u64) -> Bound {
+    let mut bytes = [0u8; Bound::BYTES];
+    bytes[..16].copy_from_slice(&low.to_le_bytes());
+    bytes[16..32].copy_from_slice(&high.to_le_bytes());
+    bytes[32..40].copy_from_slice(&top.to_le_bytes());
+    Bound::from_le_slice(&bytes)
 }
 /// A value below $`2^{256}`$, and [`Error::Overflow`] otherwise.
 fn narrow_bound(x: Bound) -> Result<U256, Error> {
