@@ -120,7 +120,10 @@ impl Uniform {
     }
 
     /// Fill `out` with the next residues: the words of [`Uniform::next`], decoded a run of the
-    /// buffer at a time ([`Bytes::rest`], which holds whole words).
+    /// buffer at a time ([`Bytes::rest`], which holds whole words). Each word is written to
+    /// the next free place and kept by advancing past it, without a branch on the comparison
+    /// (near $`2^{61}`$ about half the words are rejected): the run stops at the word that
+    /// fills the last place, so a free place remains before every word.
     pub(crate) fn fill(&mut self, out: &mut [u64]) -> Result<(), Error> {
         let (q, mask, width) = (self.q, self.mask, self.width);
         let mut filled = 0;
@@ -129,10 +132,8 @@ impl Uniform {
             let mut consumed = 0;
             let mut push = |v: u64| {
                 consumed += width;
-                if v & mask < q {
-                    out[filled] = v & mask;
-                    filled += 1;
-                }
+                out[filled] = v & mask;
+                filled += usize::from(v & mask < q);
                 filled < out.len()
             };
             match width {
