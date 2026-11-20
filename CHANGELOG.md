@@ -3,6 +3,59 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
+## [0.3.4] - 2026-11-20
+
+Proofs and transcripts are those of 0.3.3, in both modes and with every feature (checked on
+aarch64 and x86-64).
+
+### Changed
+
+- **`simd` is a default feature.** Its kernels are chosen at run time and fall back to the scalar
+  code on processors without the instructions, and the environment variable `JALI_SCALAR` keeps
+  the scalar code everywhere. With `default-features = false` the crate compiles no `unsafe`
+  code.
+- **Faster, with byte-identical proofs.**
+  - LNP22: the range proofs' projections sum the signed entries straight from the packed matrix
+    bytes, in `i64` where their bound allows, the public matrices take every entry's stream
+    from one AES-256 key schedule and keep sampled words without a branch, the verifier weights
+    its projection rows below $`2^{55}`$ from a table of the 81 sign patterns of four entries,
+    substitutions transform each constant of an affine map once, and the uniform sampler and
+    the bit writer read and write whole words.
+  - The statement compiler's exact norms and the transcript's residues modulo two-word moduli
+    are computed in machine words instead of wide integers.
+  - SHAKE128 is the crate's own (FIPS 202), over the `keccak` crate's permutation, so that the
+    permutation can suit the processor. `keccak` is now a dependency and `shake` only a
+    dev-dependency.
+  - LaBRADOR: the projection's column sums take a table of the 81 sign patterns, in split
+    64-bit lanes from $`2^{58}`$, the witness projection runs in 8-bit lanes, the amortized
+    opening and $`\varphi_z`$ combine the challenges in the transform domain, products are
+    reconstructed from the transform blocks without copies, the public matrices decode their
+    residues in runs and keep sampled words without a branch, the prover reuses the transforms
+    of its statement check and of $`\varphi`$, the planner computes the garbage's
+    decompositions once per level, and challenges are rejected early by an exact lower bound
+    on their moment, with the same decisions.
+  - With `simd` on x86-64: a Keccak permutation compiled for BMI1 and BMI2, AVX-512 kernels for
+    the centred residues, lazy sums and CRT of the RNS products and for LaBRADOR's ring
+    arithmetic, projection and column sums (AVX-512BW, VL and VBMI), and with AVX-512 IFMA the
+    transforms, products and CRT of every LaBRADOR ring (the fewest of four primes below
+    $`2^{51}`$ whose product meets the ring's bound) and of the LNP22 rings that need no more
+    of these primes than of the 62-bit ones. Each kernel returns the scalar code's outputs,
+    which tests compare.
+
+  On one thread of an Apple M4, an end-to-end lattice test with $`q\approx2^{69.4}`$ needs 19.4%
+  fewer instructions than with 0.3.3, 15.6% in the straight-line extractable mode, LNP22 provers
+  1.07 to 1.26 times fewer and their verifiers 1.09 to 1.53 times, and LaBRADOR proves with 1.28
+  to 1.30 times fewer and verifies with 1.25 to 1.26 times fewer at $`q\approx2^{32}`$, 1.19 to
+  1.20 and 1.08 to 1.10 times fewer at $`q\approx2^{61}`$. On one thread of an Intel Xeon
+  Platinum 8581C the default build, now with `simd`, takes 38.4% fewer cycles than 0.3.3's for
+  the lattice test (36.9% extractable), proves LNP22 statements 1.64 to 2.16 times and verifies
+  them 1.40 to 2.03 times faster, and LaBRADOR proves 6.05 to 6.43 times and verifies 4.74 to
+  4.93 times faster at $`q\approx2^{32}`$, 4.75 to 4.98 and 3.55 to 3.60 times at
+  $`q\approx2^{61}`$. Without `simd` the lattice test takes 17.0% fewer cycles there (13.0%
+  extractable), LNP22 proves 1.07 to 1.26 times and verifies 1.06 to 1.44 times faster, and
+  LaBRADOR 1.24 to 1.27 and 1.15 to 1.17 times at $`q\approx2^{32}`$, 1.25 and 1.08 to 1.11
+  times at $`q\approx2^{61}`$. The lattice test's peak memory is unchanged.
+
 ## [0.3.3] - 2026-11-19
 
 Proofs and transcripts are those of 0.3.2, in both modes and with every feature (checked on
