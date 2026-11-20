@@ -216,6 +216,29 @@ modular!(
     centred(a: &[u64], q: u64, p: u64, out: &mut [u64]) where a.len() == out.len()
 );
 
+/// The residues modulo the prime of `t` of the centred representatives of `a`, canonical below
+/// $`q<2^{63}`$ with $`\lfloor q/2\rfloor=`$ `half`, for $`q\ge2p`$ (`ifma::centred_large`),
+/// with the scalar code of the same rule where AVX-512 does not run (an IFMA ring exists only
+/// where it does).
+#[inline]
+pub(crate) fn ifma_centred(t: &IfmaPlan, a: &[u64], half: u64, q_mod_p: u64, out: &mut [u64]) {
+    if a.len() == out.len() && avx512() {
+        // SAFETY: the processor has AVX-512F (`avx512`), and the kernel reads `a` and writes
+        // `out` within their equal lengths.
+        unsafe { ifma::centred_large(t, a, half, q_mod_p, out) };
+        return;
+    }
+    let p = t.plan.modulus();
+    for (o, x) in out.iter_mut().zip(a) {
+        let r = x % p;
+        *o = if *x > half {
+            crate::math::ntt::sub_mod(r, q_mod_p, p)
+        } else {
+            r
+        };
+    }
+}
+
 /// `SmallCrt::reconstruct_fixed` of the first coefficients of `out` when the AVX-512 kernels
 /// run: how many it wrote (a multiple of eight, all but the last `out.len() % 8`), zero
 /// otherwise. Each residue slice must hold at least `out.len()` values.
@@ -226,6 +249,17 @@ pub(crate) fn small_crt<const K: usize>(
     out: &mut [u64],
 ) -> usize {
     if residues.iter().all(|r| r.len() >= out.len()) && avx512() {
+        if c.primes.iter().all(|p| *p < 1 << 51) && ifma() {
+            // SAFETY: the processor has AVX-512F, DQ and IFMA (`ifma` within `avx512`), and
+            // the kernels read the residues and write `out` within their lengths.
+            return unsafe {
+                if c.q < 1 << 51 {
+                    ifma::small_crt(residues, c, out)
+                } else {
+                    ifma::small_crt_mixed(residues, c, out)
+                }
+            };
+        }
         // SAFETY: as in `lazy_mac`.
         return unsafe { modular_avx512::small_crt(residues, c, out) };
     }
