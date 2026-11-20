@@ -269,7 +269,7 @@ fn coefficients(
 }
 
 /// The projection of `coefficients` with the columns of `projection`, for coefficients of at
-/// most 127 in magnitude: in 8-bit lanes added into the i128 sums every `flush` steps. Entry
+/// most 127 in magnitude: in 8-bit lanes added into 32-bit lanes every `flush` steps. Entry
 /// $`e`$ of row $`4g+e`$ is bit $`2e`$ less bit $`2e+1`$ of byte $`g`$ ([`DECODE`]), so its
 /// product with $`s`$ is $`s`$ masked by the first bit less $`s`$ masked by the second: no
 /// multiplication, and the lanes of one entry position side by side, so that the loops run on
@@ -280,9 +280,12 @@ fn project_bytes<'a>(
     mut coefficients: impl Iterator<Item = &'a u64>,
     flush: usize,
 ) -> Result<[i128; 256], Error> {
-    // Lane g of `lanes[e]` is row 4g + e.
-    fn add_into(p: &mut [i128; 256], lanes: &mut [[i8; 64]; 4]) {
-        for (e, lane) in lanes.iter_mut().enumerate() {
+    // Lane g of `lanes[e]` and of `wide[e]` is row 4g + e. The byte lanes are added into the
+    // 32-bit lanes after each batch, at most 127 in magnitude each time, and those into p
+    // every `BATCHES` batches and at the end: the same sums as adding into p each time.
+    const BATCHES: usize = (i32::MAX / 127) as usize;
+    fn add_into(p: &mut [i128; 256], wide: &mut [[i32; 64]; 4]) {
+        for (e, lane) in wide.iter_mut().enumerate() {
             for (g, a) in lane.iter_mut().enumerate() {
                 p[4 * g + e] += i128::from(*a);
                 *a = 0;
@@ -291,9 +294,12 @@ fn project_bytes<'a>(
     }
     let mut p = [0i128; 256];
     let mut lanes = Zeroizing::new([[0i8; 64]; 4]);
-    // Up to `flush` columns of nonzero coefficients at a time, then their sums into p.
+    let mut wide = Zeroizing::new([[0i32; 64]; 4]);
+    // Up to `flush` columns of nonzero coefficients at a time, then their sums into the 32-bit
+    // lanes.
     let mut columns = vec![[0u8; 64]; flush];
     let mut values = Zeroizing::new(vec![0i8; flush]);
+    let mut batches = 0;
     loop {
         let (mut count, mut more) = (0, true);
         while count < flush {
@@ -301,16 +307,25 @@ fn project_bytes<'a>(
                 more = false;
                 break;
             };
-            // Every coefficient takes its column from the stream, also a zero one.
+            // Every coefficient takes its column from the stream, also a zero one, whose
+            // place the next coefficient's column then takes: no branch on the value.
             projection.column_bytes(&mut columns[count])?;
             let s = ring.center(*x) as i8;
-            if s != 0 {
-                values[count] = s;
-                count += 1;
-            }
+            values[count] = s;
+            count += usize::from(s != 0);
         }
         add_columns(&mut lanes, &columns[..count], &values[..count]);
-        add_into(&mut p, &mut lanes);
+        for (w, lane) in wide.iter_mut().zip(lanes.iter_mut()) {
+            for (t, a) in w.iter_mut().zip(lane.iter_mut()) {
+                *t += i32::from(*a);
+                *a = 0;
+            }
+        }
+        batches += 1;
+        if batches == BATCHES || !more {
+            add_into(&mut p, &mut wide);
+            batches = 0;
+        }
         if !more {
             return Ok(p);
         }
@@ -864,20 +879,26 @@ fn wide_sums<const L: usize, const B: usize>(
     columns: &[[u8; 64]; B],
     sums: &mut [[u64; 8]; B],
 ) {
+    // Each entry t is hi 2^32 + lo for its low 32 bits lo (unsigned) and hi = t >> 32, below
+    // 2^31 in magnitude: the 64 entries of a column sum to less than 2^38 in lo and to less
+    // than 2^37 in magnitude in hi, so both sums take 64-bit lanes, and they are joined once.
     let table = table.as_chunks::<L>().0;
-    let mut acc = [[0i128; L]; B];
+    let mut low = [[0u64; L]; B];
+    let mut high = [[0i64; L]; B];
     for g in 0..64 {
         let group = &table[g * 81..(g + 1) * 81];
-        for (a, column) in acc.iter_mut().zip(columns) {
+        for ((lo, hi), column) in low.iter_mut().zip(high.iter_mut()).zip(columns) {
             let entry = &group[usize::from(PATTERN[usize::from(column[g])])];
-            for (a, t) in a.iter_mut().zip(entry) {
-                *a += i128::from(*t);
+            for ((l, h), t) in lo.iter_mut().zip(hi.iter_mut()).zip(entry) {
+                *l += u64::from(*t as u32);
+                *h += *t >> 32;
             }
         }
     }
     let offset = 32 * i128::from(ring.modulus());
-    for (s, a) in sums.iter_mut().zip(acc) {
-        for (s, a) in s.iter_mut().zip(a) {
+    for ((s, lo), hi) in sums.iter_mut().zip(low).zip(high) {
+        for ((s, l), h) in s.iter_mut().zip(lo).zip(hi) {
+            let a = (i128::from(h) << 32) + i128::from(l);
             *s = ring.reduce_wide((a + offset) as u128);
         }
     }
@@ -1036,6 +1057,23 @@ fn combine(ring: &Rq, c_hats: &[Vec<u64>], v: &[Vec<u64>], n: usize) -> Vec<u64>
 
 /// $`F(w)`$ for an aggregate and a witness given by its transforms.
 pub(crate) fn evaluate_aggregate(ring: &Rq, agg: &Aggregate, hats: &[Vec<u64>]) -> Vec<u64> {
+    let phi_hats: Vec<Option<Vec<u64>>> = agg
+        .phi
+        .iter()
+        .map(|phi| phi.iter().any(|x| *x != 0).then(|| ring.ntt_many(phi)))
+        .collect();
+    let phi_hats: Vec<Option<&[u64]>> = phi_hats.iter().map(|h| h.as_deref()).collect();
+    evaluate_with(ring, agg, &phi_hats, hats)
+}
+
+/// [`evaluate_aggregate`] with the transforms of the nonzero vectors $`\varphi_i`$ given, as
+/// the prover has them for its garbage terms.
+fn evaluate_with(
+    ring: &Rq,
+    agg: &Aggregate,
+    phi_hats: &[Option<&[u64]>],
+    hats: &[Vec<u64>],
+) -> Vec<u64> {
     let mut value = vec![0u64; ring.degree()];
     for (i, j, a) in &agg.quad {
         ring.add_assign(
@@ -1043,9 +1081,9 @@ pub(crate) fn evaluate_aggregate(ring: &Rq, agg: &Aggregate, hats: &[Vec<u64>]) 
             &ring.poly_mul(a, &ring.inner_hat(&hats[*i], &hats[*j])),
         );
     }
-    for (phi, hat) in agg.phi.iter().zip(hats) {
-        if phi.iter().any(|x| *x != 0) {
-            ring.add_assign(&mut value, &ring.inner_hat(&ring.ntt_many(phi), hat));
+    for (phi_hat, hat) in phi_hats.iter().zip(hats) {
+        if let Some(phi_hat) = phi_hat {
+            ring.add_assign(&mut value, &ring.inner_hat(phi_hat, hat));
         }
     }
     ring.sub_assign(&mut value, &agg.constant);
@@ -1257,12 +1295,22 @@ fn attempt_level<R: Relation>(
     };
     complete(ring, &mut agg, &projection, &shape, &beta, &bpp)?;
     drop(kept);
-    if evaluate_aggregate(ring, &agg, hats).iter().any(|x| *x != 0) {
+    // The transforms of phi, for the check and the garbage terms both.
+    let phi_hats: Vec<Vec<u64>> = agg.phi.iter().map(|v| ring.ntt_many(v)).collect();
+    let nonzero: Vec<Option<&[u64]>> = agg
+        .phi
+        .iter()
+        .zip(&phi_hats)
+        .map(|(phi, hat)| phi.iter().any(|x| *x != 0).then_some(&hat[..]))
+        .collect();
+    if evaluate_with(ring, &agg, &nonzero, hats)
+        .iter()
+        .any(|x| *x != 0)
+    {
         return Err(Error::Witness);
     }
 
     // Garbage h and the second outer commitment.
-    let phi_hats: Vec<Vec<u64>> = agg.phi.iter().map(|v| ring.ntt_many(v)).collect();
     for i in 0..r {
         for j in i..r {
             let mut h = Zeroizing::new(ring.inner_hat(&phi_hats[i], &hats[j]));
