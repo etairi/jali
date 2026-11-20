@@ -144,6 +144,90 @@ pub(crate) fn pattern_sums8(
     true
 }
 
+/// [`pattern_sums8`] on the padded table of patterns: eight `i32` per pattern, the first λ used
+/// and the others zero, from a start that the caller aligns to 32 bytes, when the AVX-512VL
+/// kernels run: `true` if they did.
+#[inline]
+pub(crate) fn padded_sums8(
+    table: &[i32],
+    map: &[u8; 256],
+    columns: &[[u8; 64]; 8],
+    out: &mut [[i64; 8]; 8],
+) -> bool {
+    if table.len() < 64 * 81 * 8 || !avx512vl() {
+        return false;
+    }
+    if vbmi() {
+        // SAFETY: the processor has AVX-512F, VL, BW and VBMI (`vbmi`), and the kernel reads
+        // only the table's entries, by slices whose bounds it checks.
+        unsafe { modular_avx512::padded_sums8_vbmi(table, map, columns, out) };
+    } else {
+        // SAFETY: as above, with AVX-512F and VL (`avx512vl`).
+        unsafe { modular_avx512::padded_sums8(table, map, columns, out) };
+    }
+    true
+}
+
+/// The column sums of eight columns on the padded wide table of patterns (four `i64` per
+/// pattern, λ at most 4) as split halves (`modular_avx512::wide_sums8_vbmi`), when the AVX-512VL
+/// kernels run: `true` if they did.
+#[inline]
+pub(crate) fn wide_sums8(
+    table: &[i64],
+    map: &[u8; 256],
+    columns: &[[u8; 64]; 8],
+    low: &mut [[u64; 4]; 8],
+    high: &mut [[i64; 4]; 8],
+) -> bool {
+    if table.len() < 64 * 81 * 4 || !avx512vl() {
+        return false;
+    }
+    if vbmi() {
+        // SAFETY: as in `padded_sums8`.
+        unsafe { modular_avx512::wide_sums8_vbmi(table, map, columns, low, high) };
+    } else {
+        // SAFETY: as in `padded_sums8`.
+        unsafe { modular_avx512::wide_sums8(table, map, columns, low, high) };
+    }
+    true
+}
+
+/// [`modular_avx512::reduce_sums8`] when the AVX-512 kernels run: `true` if it did.
+#[inline]
+pub(crate) fn reduce_sums8(
+    raw: &[[i64; 8]; 8],
+    offset: u64,
+    q: u64,
+    one_shoup: u64,
+    out: &mut [[u64; 8]; 8],
+) -> bool {
+    if !avx512() {
+        return false;
+    }
+    // SAFETY: the processor has AVX-512F and DQ (`avx512`), and the kernel reads and writes
+    // only its arrays.
+    unsafe { modular_avx512::reduce_sums8(raw, offset, q, one_shoup, out) };
+    true
+}
+
+/// [`modular_avx512::reduce_wide8`] when the AVX-512VL kernels run: `true` if it did.
+#[inline]
+pub(crate) fn reduce_wide8(
+    low: &[[u64; 4]; 8],
+    high: &[[i64; 4]; 8],
+    q: u64,
+    shift_shoup: u64,
+    out: &mut [[u64; 4]; 8],
+) -> bool {
+    if !avx512vl() {
+        return false;
+    }
+    // SAFETY: the processor has AVX-512F, VL and DQ (`avx512vl`), and the kernel reads and
+    // writes only its arrays.
+    unsafe { modular_avx512::reduce_wide8(low, high, q, shift_shoup, out) };
+    true
+}
+
 /// Whether the BMI1 and BMI2 kernels run: the processor has both, and `JALI_SCALAR` is unset.
 /// Decided once per process.
 pub(crate) fn bmi() -> bool {

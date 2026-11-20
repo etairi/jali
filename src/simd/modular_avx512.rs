@@ -337,3 +337,173 @@ fn bytemuck_i64(a: &[i64]) -> &[u64] {
     // SAFETY: i64 and u64 have the same size, alignment and valid bit patterns.
     unsafe { core::slice::from_raw_parts(a.as_ptr().cast(), a.len()) }
 }
+
+/// [`pattern_sums8_vbmi`] on the padded table: eight `i32` per pattern (the first λ used, the
+/// others zero), so that each lookup is one whole 256-bit load from an entry that a 32-byte
+/// aligned table keeps within one cache line, without a mask.
+#[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512vbmi")]
+pub(super) fn padded_sums8_vbmi(
+    table: &[i32],
+    map: &[u8; 256],
+    columns: &[[u8; 64]; 8],
+    out: &mut [[i64; 8]; 8],
+) {
+    let patterns = patterns8_vbmi(map, columns);
+    padded_sums8_from(table, &patterns, out);
+}
+
+/// [`padded_sums8_vbmi`] without AVX-512 VBMI: each pattern from the map.
+#[target_feature(enable = "avx512f,avx512vl")]
+pub(super) fn padded_sums8(
+    table: &[i32],
+    map: &[u8; 256],
+    columns: &[[u8; 64]; 8],
+    out: &mut [[i64; 8]; 8],
+) {
+    let mut patterns = [[0u8; 64]; 8];
+    for (p, c) in patterns.iter_mut().zip(columns) {
+        for (x, b) in p.iter_mut().zip(c) {
+            *x = map[usize::from(*b)];
+        }
+    }
+    padded_sums8_from(table, &patterns, out);
+}
+
+#[inline]
+#[target_feature(enable = "avx512f,avx512vl")]
+fn padded_sums8_from(table: &[i32], patterns: &[[u8; 64]; 8], out: &mut [[i64; 8]; 8]) {
+    let table = table.as_chunks::<8>().0;
+    assert!(table.len() >= 64 * 81);
+    let mut acc = [_mm512_setzero_si512(); 8];
+    for g in 0..64 {
+        let group = &table[g * 81..(g + 1) * 81];
+        for (a, p) in acc.iter_mut().zip(patterns) {
+            let entry = &group[usize::from(p[g])];
+            // SAFETY: the load reads the eight `i32` of one entry, unaligned.
+            let v = unsafe { _mm256_loadu_si256(entry.as_ptr().cast()) };
+            *a = _mm512_add_epi64(*a, _mm512_cvtepi32_epi64(v));
+        }
+    }
+    store_sums(&acc, out);
+}
+
+/// The column sums of LaBRADOR's wide table of sign patterns (from $`2^{58}`$, λ at most 4) for
+/// eight columns: four `i64` per pattern (the first λ used, the others zero), each entry
+/// $`t=h2^{32}+l`$ split into its low 32 bits $`l`$ (unsigned) and $`h=t\gg32`$, whose sums over
+/// the 64 groups of a column stay below $`2^{38}`$ and $`2^{37}`$ in magnitude in 64-bit lanes:
+/// `low[c][k]` and `high[c][k]`, joined by the caller as `ProjectionTable::sums` joins them.
+#[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512vbmi")]
+pub(super) fn wide_sums8_vbmi(
+    table: &[i64],
+    map: &[u8; 256],
+    columns: &[[u8; 64]; 8],
+    low: &mut [[u64; 4]; 8],
+    high: &mut [[i64; 4]; 8],
+) {
+    let patterns = patterns8_vbmi(map, columns);
+    wide_sums8_from(table, &patterns, low, high);
+}
+
+/// [`wide_sums8_vbmi`] without AVX-512 VBMI: each pattern from the map.
+#[target_feature(enable = "avx512f,avx512vl")]
+pub(super) fn wide_sums8(
+    table: &[i64],
+    map: &[u8; 256],
+    columns: &[[u8; 64]; 8],
+    low: &mut [[u64; 4]; 8],
+    high: &mut [[i64; 4]; 8],
+) {
+    let mut patterns = [[0u8; 64]; 8];
+    for (p, c) in patterns.iter_mut().zip(columns) {
+        for (x, b) in p.iter_mut().zip(c) {
+            *x = map[usize::from(*b)];
+        }
+    }
+    wide_sums8_from(table, &patterns, low, high);
+}
+
+#[inline]
+#[target_feature(enable = "avx512f,avx512vl")]
+fn wide_sums8_from(
+    table: &[i64],
+    patterns: &[[u8; 64]; 8],
+    low: &mut [[u64; 4]; 8],
+    high: &mut [[i64; 4]; 8],
+) {
+    let table = table.as_chunks::<4>().0;
+    assert!(table.len() >= 64 * 81);
+    let mask = _mm256_set1_epi64x(0xffff_ffff);
+    let mut accl = [_mm256_setzero_si256(); 8];
+    let mut acch = [_mm256_setzero_si256(); 8];
+    for g in 0..64 {
+        let group = &table[g * 81..(g + 1) * 81];
+        for ((l, h), p) in accl.iter_mut().zip(acch.iter_mut()).zip(patterns) {
+            let entry = &group[usize::from(p[g])];
+            // SAFETY: the load reads the four `i64` of one entry, unaligned.
+            let v = unsafe { _mm256_loadu_si256(entry.as_ptr().cast()) };
+            *l = _mm256_add_epi64(*l, _mm256_and_si256(v, mask));
+            *h = _mm256_add_epi64(*h, _mm256_srai_epi64::<32>(v));
+        }
+    }
+    for (((lo, hi), l), h) in low.iter_mut().zip(high.iter_mut()).zip(accl).zip(acch) {
+        // SAFETY: each store writes the four words of one output row, unaligned.
+        unsafe {
+            _mm256_storeu_si256(lo.as_mut_ptr().cast(), l);
+            _mm256_storeu_si256(hi.as_mut_ptr().cast(), h);
+        }
+    }
+}
+
+/// The canonical residues of eight columns' raw sums of the narrow kernels, as
+/// `Rq::reduce_word` gives them: `out[c][k]` $`=(s_{ck}+\text{offset})\bmod q`$ for the sums
+/// $`s`$ in `raw` (offset $`32q`$ makes each value positive and below $`64q<2^{64}`$), by the
+/// Shoup product with one, eight lanes at a time.
+#[target_feature(enable = "avx512f,avx512dq")]
+pub(super) fn reduce_sums8(
+    raw: &[[i64; 8]; 8],
+    offset: u64,
+    q: u64,
+    one_shoup: u64,
+    out: &mut [[u64; 8]; 8],
+) {
+    let (qv, one, os, off) = (splat(q), splat(1), splat(one_shoup), splat(offset));
+    for (o, r) in out.iter_mut().zip(raw) {
+        let words: &[u64; 8] = bytemuck_i64(r).try_into().expect("eight words");
+        store(o, shoup(_mm512_add_epi64(load(words), off), one, os, qv));
+    }
+}
+
+/// The canonical residues modulo $`q`$ ($`2^{32}<q<2^{62}`$) of eight columns' sums from the
+/// split halves of the wide kernel: $`h2^{32}+l`$ with $`|h|<2^{37}`$ and $`l<2^{38}`$, as
+/// $`((h\bmod q)\,2^{32}\bmod q)+l`$ by one Shoup product with $`w=2^{32}`$ ($`w'=`$ `shift_shoup`
+/// $`=\lfloor2^{96}/q\rfloor`$), below $`q+2^{38}<2q`$ before one conditional subtraction.
+#[target_feature(enable = "avx512f,avx512vl,avx512dq")]
+pub(super) fn reduce_wide8(
+    low: &[[u64; 4]; 8],
+    high: &[[i64; 4]; 8],
+    q: u64,
+    shift_shoup: u64,
+    out: &mut [[u64; 4]; 8],
+) {
+    let (qv, w, ws) = (splat(q), splat(1 << 32), splat(shift_shoup));
+    // Two columns per register: lanes 0 to 3 the first, 4 to 7 the second.
+    for c in (0..8).step_by(2) {
+        let pair = |a: &[u64; 4], b: &[u64; 4]| -> [u64; 8] {
+            core::array::from_fn(|i| if i < 4 { a[i] } else { b[i - 4] })
+        };
+        let lo = pair(&low[c], &low[c + 1]);
+        let hi = pair(
+            bytemuck_i64(&high[c]).try_into().expect("four words"),
+            bytemuck_i64(&high[c + 1]).try_into().expect("four words"),
+        );
+        let (lo, hi) = (load(&lo), load(&hi));
+        let negative = _mm512_movepi64_mask(hi);
+        let h = _mm512_mask_add_epi64(hi, negative, hi, qv);
+        let t = shoup(h, w, ws, qv);
+        let r = csub(_mm512_add_epi64(t, lo), qv);
+        let mut words = [0u64; 8];
+        store(&mut words, r);
+        out[c].copy_from_slice(&words[..4]);
+        out[c + 1].copy_from_slice(&words[4..]);
+    }
+}

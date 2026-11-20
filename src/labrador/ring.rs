@@ -189,6 +189,12 @@ impl Rq {
         shoup_mul(x, 1, self.one_shoup, self.q)
     }
 
+    /// The Shoup constant of one, $`\lfloor2^{64}/q\rfloor`$, for the column-sum kernels.
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    pub(crate) fn one_shoup(&self) -> u64 {
+        self.one_shoup
+    }
+
     /// $`x\bmod q`$ for any $`x<2^{128}`$: $`x_12^{64}+x_0\equiv x_1(2^{64}\bmod q)+x_0`$, by
     /// two Shoup products.
     #[inline(always)]

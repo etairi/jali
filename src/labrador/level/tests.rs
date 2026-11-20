@@ -418,6 +418,36 @@ fn column_sums_are_exact_at_their_bounds() {
                         entries: TableEntries::Narrow(values.iter().map(|x| *x as i32).collect()),
                     });
                 }
+                // The same sums padded from an unaligned start as the AVX-512 layouts store
+                // them (eight per pattern below 2^32, four from 2^58 for λ at most 4).
+                #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+                {
+                    let padded = |stride: usize, start: usize| -> Vec<i64> {
+                        let mut out = vec![0i64; start + 64 * 81 * stride];
+                        for (i, v) in values.iter().enumerate() {
+                            out[start + (i / lambda) * stride + i % lambda] = *v;
+                        }
+                        out
+                    };
+                    if lambda <= 4 {
+                        tables.push(ProjectionTable {
+                            lambda,
+                            entries: TableEntries::WidePadded {
+                                table: padded(4, 3),
+                                start: 3,
+                            },
+                        });
+                    }
+                    if q < 1 << 32 {
+                        tables.push(ProjectionTable {
+                            lambda,
+                            entries: TableEntries::NarrowPadded {
+                                table: padded(8, 5).iter().map(|x| *x as i32).collect(),
+                                start: 5,
+                            },
+                        });
+                    }
+                }
                 for table in &tables {
                     let columns: [[u8; 64]; 4] = [
                         [0u8; 64],

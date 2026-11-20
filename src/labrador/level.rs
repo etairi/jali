@@ -584,10 +584,11 @@ fn projection_blocks<T: Send>(
 /// residues of sums of entries, so they do not change.
 ///
 /// The table holds one sum per sign pattern ([`PATTERN`], 81 per group), in 32 bits below
-/// $`2^{32}`$, so that it stays in a core's first-level cache (about 100 KB at λ = 5). With the
-/// `simd` feature on x86-64, where the AVX-512 kernels run, a kernel reads the table of patterns
-/// below $`2^{32}`$, and from $`2^{32}`$ to $`2^{58}`$ the table holds one sum per byte instead,
-/// the layout that the other kernel reads.
+/// $`2^{32}`$ (about 100 KB at λ = 5, within the 128 KB first-level data cache of an Apple M4
+/// core). With the `simd` feature on x86-64, where the AVX-512 kernels run, a kernel reads the
+/// table of patterns below $`2^{32}`$ padded to eight sums per pattern, from $`2^{32}`$ to
+/// $`2^{58}`$ the table holds one sum per byte instead, the layout that another kernel reads,
+/// and from $`2^{58}`$ a kernel reads it padded to four sums per pattern for λ at most 4.
 struct ProjectionTable {
     lambda: usize,
     entries: TableEntries,
@@ -601,6 +602,15 @@ enum TableEntries {
     /// One sum per byte, for the AVX-512 kernel ($`2^{32}\le q<2^{58}`$).
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     Bytes(Vec<i64>),
+    /// The sums of [`TableEntries::Narrow`] padded to eight per pattern (the first λ used, the
+    /// others zero) from the index `start`, past which the table starts on 32 bytes so that no
+    /// entry crosses a cache line, for the AVX-512VL kernel.
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    NarrowPadded { table: Vec<i32>, start: usize },
+    /// The sums of [`TableEntries::Wide`] from $`2^{58}`$ padded to four per pattern for λ at
+    /// most 4, from `start` as above, for the wide AVX-512VL kernel.
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    WidePadded { table: Vec<i64>, start: usize },
 }
 
 fn projection_table(ring: &Rq, omega: &[Vec<u64>]) -> ProjectionTable {
@@ -638,6 +648,45 @@ fn projection_table(ring: &Rq, omega: &[Vec<u64>]) -> ProjectionTable {
     let mut patterns = [[0i8; 4]; 81];
     for (byte, signs) in DECODE.iter().enumerate() {
         patterns[usize::from(PATTERN[byte])] = *signs;
+    }
+    // The padded layouts where their AVX-512 kernels run: eight i32 per pattern below 2^32,
+    // four i64 from 2^58 for λ at most 4, from the first index past which the table starts on
+    // 32 bytes.
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    {
+        let q = ring.modulus();
+        let aligned = |address: usize, size: usize| (32 - address % 32) % 32 / size;
+        if crate::simd::avx512vl() && q < 1 << 32 {
+            let mut table = vec![0i32; 64 * 81 * 8 + 8];
+            let start = aligned(table.as_ptr() as usize, 4);
+            for group in 0..64 {
+                for (pattern, signs) in patterns.iter().enumerate() {
+                    for k in 0..lambda {
+                        table[start + (group * 81 + pattern) * 8 + k] =
+                            i32::try_from(sum(k, group, signs)).expect("a centred residue");
+                    }
+                }
+            }
+            return ProjectionTable {
+                lambda,
+                entries: TableEntries::NarrowPadded { table, start },
+            };
+        }
+        if crate::simd::avx512vl() && q >= 1 << 58 && lambda <= 4 {
+            let mut table = vec![0i64; 64 * 81 * 4 + 4];
+            let start = aligned(table.as_ptr() as usize, 8);
+            for group in 0..64 {
+                for (pattern, signs) in patterns.iter().enumerate() {
+                    for k in 0..lambda {
+                        table[start + (group * 81 + pattern) * 4 + k] = sum(k, group, signs);
+                    }
+                }
+            }
+            return ProjectionTable {
+                lambda,
+                entries: TableEntries::WidePadded { table, start },
+            };
+        }
     }
     let mut table = vec![0i64; 64 * 81 * lambda];
     for group in 0..64 {
@@ -695,18 +744,29 @@ fn block_polys(
         {
             let kernel = match &table.entries {
                 TableEntries::Narrow(_) => crate::simd::avx512vl(),
-                TableEntries::Bytes(_) => true,
+                TableEntries::Bytes(_)
+                | TableEntries::NarrowPadded { .. }
+                | TableEntries::WidePadded { .. } => true,
                 TableEntries::Wide(_) => false,
             };
             let mut columns = [[0u8; 64]; 8];
             let mut raw = [[0i64; 8]; 8];
-            // The kernels run below 2^58 only, where 32q does not overflow.
-            let offset = if kernel { 32 * ring.modulus() } else { 0 };
+            // The narrow kernels run below 2^58, where 32q does not overflow, the wide one from
+            // there, whose sums take i128 (`ProjectionTable::sums`).
+            let narrow = ring.modulus() < 1 << 58;
+            let offset = if kernel && narrow {
+                32 * ring.modulus()
+            } else {
+                0
+            };
             while kernel && first + 8 <= d {
                 for c in columns.iter_mut() {
                     projection.column_bytes(c)?;
                 }
                 let done = match &table.entries {
+                    TableEntries::NarrowPadded { table: t, start } => {
+                        crate::simd::padded_sums8(&t[*start..], &PATTERN, &columns, &mut raw)
+                    }
                     TableEntries::Narrow(t) => {
                         crate::simd::pattern_sums8(t, lambda, &PATTERN, &columns, &mut raw)
                     }
@@ -714,12 +774,55 @@ fn block_polys(
                         crate::simd::table_sums8(t, lambda, &columns, &mut raw)
                     }
                     TableEntries::Wide(_) => false,
+                    TableEntries::WidePadded { table: t, start } => {
+                        let (mut low, mut high) = ([[0u64; 4]; 8], [[0i64; 4]; 8]);
+                        let done = crate::simd::wide_sums8(
+                            &t[*start..],
+                            &PATTERN,
+                            &columns,
+                            &mut low,
+                            &mut high,
+                        );
+                        if done {
+                            // The canonical residues of hi 2^32 + lo, in lanes where they run.
+                            let mut reduced = [[0u64; 4]; 8];
+                            let q = ring.modulus();
+                            let shift_shoup = ((1u128 << 96) / u128::from(q)) as u64;
+                            if !crate::simd::reduce_wide8(&low, &high, q, shift_shoup, &mut reduced)
+                            {
+                                let offset = 32 * i128::from(q);
+                                for ((o, l), h) in reduced.iter_mut().zip(&low).zip(&high) {
+                                    for ((x, l), h) in o.iter_mut().zip(l).zip(h) {
+                                        let a = (i128::from(*h) << 32) + i128::from(*l);
+                                        *x = ring.reduce_wide((a + offset) as u128);
+                                    }
+                                }
+                            }
+                            for (j, r) in reduced.iter().enumerate() {
+                                for (k, s) in r[..lambda].iter().enumerate() {
+                                    polys[k * d + first + j] = *s;
+                                }
+                            }
+                            first += 8;
+                            continue;
+                        }
+                        false
+                    }
                 };
                 if done {
-                    for (j, r) in raw.iter().enumerate() {
+                    // The lanes past λ hold zero sums, whose residues are not written.
+                    let mut reduced = [[0u64; 8]; 8];
+                    let q = ring.modulus();
+                    if !crate::simd::reduce_sums8(&raw, offset, q, ring.one_shoup(), &mut reduced) {
+                        for (o, r) in reduced.iter_mut().zip(&raw) {
+                            for (x, s) in o.iter_mut().zip(r) {
+                                *x = ring.reduce_word((*s as u64).wrapping_add(offset));
+                            }
+                        }
+                    }
+                    for (j, r) in reduced.iter().enumerate() {
                         for (k, s) in r[..lambda].iter().enumerate() {
-                            polys[k * d + first + j] =
-                                ring.reduce_word((*s as u64).wrapping_add(offset));
+                            polys[k * d + first + j] = *s;
                         }
                     }
                 } else {
@@ -777,7 +880,7 @@ impl ProjectionTable {
     /// one word while $`q<2^{58}`$, where the sums are taken in `i64`, two from there, in
     /// `i128`. One Shoup reduction of that value replaces the division. Specialized for each λ
     /// of the supported moduli (3 to 8), so that the sums of all the columns stay in
-    /// registers, with a loop per lane for any other λ and for the byte table.
+    /// registers, with a loop per lane for any other λ and for the byte and padded tables.
     fn sums<const B: usize>(
         &self,
         ring: &Rq,
@@ -840,6 +943,15 @@ impl ProjectionTable {
             TableEntries::Wide(t) => t[pattern()],
             #[cfg(all(feature = "simd", target_arch = "x86_64"))]
             TableEntries::Bytes(t) => t[(g * 256 + usize::from(byte)) * self.lambda + k],
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            TableEntries::NarrowPadded { table, start } => {
+                let at = (g * 81 + usize::from(PATTERN[usize::from(byte)])) * 8 + k;
+                i64::from(table[start + at])
+            }
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            TableEntries::WidePadded { table, start } => {
+                table[start + (g * 81 + usize::from(PATTERN[usize::from(byte)])) * 4 + k]
+            }
         }
     }
 }

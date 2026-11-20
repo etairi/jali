@@ -461,3 +461,162 @@ fn pattern_sums_equal_the_scalar_sums() {
         }
     }
 }
+
+#[test]
+fn padded_and_wide_sums_equal_the_scalar_sums() {
+    // The kernels of the padded tables against exact sums: eight i32 per pattern at the
+    // largest magnitudes and random, and four i64 per pattern at the largest magnitudes that a
+    // centred residue below 2^62 reaches and random, joined from their split halves, for λ 1 to
+    // 8 (narrow) and 1 to 4 (wide), with and without VBMI where it runs.
+    if !super::avx512vl() {
+        eprintln!("no AVX-512VL here (or JALI_SCALAR set): only the portable sums run");
+        return;
+    }
+    let mut rng = Rng(82);
+    let map: [u8; 256] = core::array::from_fn(|b| ((b * 7) % 81) as u8);
+    let columns = |rng: &mut Rng| {
+        let mut columns = [[0u8; 64]; 8];
+        columns[1] = [255; 64];
+        for c in columns.iter_mut().skip(2) {
+            *c = core::array::from_fn(|_| rng.next() as u8);
+        }
+        columns
+    };
+    for lambda in 1..=8usize {
+        let n = 64 * 81 * 8;
+        let mut tables: Vec<Vec<i32>> = vec![vec![i32::MAX; n], vec![-i32::MAX; n]];
+        tables.push((0..n).map(|_| rng.next() as i32).collect());
+        for table in &mut tables {
+            for (i, x) in table.iter_mut().enumerate() {
+                if i % 8 >= lambda {
+                    *x = 0;
+                }
+            }
+            let columns = columns(&mut rng);
+            let mut expect = [[0i64; 8]; 8];
+            for (e, column) in expect.iter_mut().zip(&columns) {
+                for (g, b) in column.iter().enumerate() {
+                    let at = (81 * g + usize::from(map[usize::from(*b)])) * 8;
+                    for (k, x) in e.iter_mut().enumerate() {
+                        *x += i64::from(table[at + k]);
+                    }
+                }
+            }
+            let mut got = [[0i64; 8]; 8];
+            assert!(super::padded_sums8(table, &map, &columns, &mut got));
+            let mut plain = [[0i64; 8]; 8];
+            // SAFETY: the processor has AVX-512F and VL (checked above).
+            unsafe { super::modular_avx512::padded_sums8(table, &map, &columns, &mut plain) };
+            assert_eq!(got, expect, "padded, lambda {lambda}");
+            assert_eq!(plain, expect, "padded without VBMI, lambda {lambda}");
+        }
+    }
+    let largest = (1i64 << 61) - 1;
+    for lambda in 1..=4usize {
+        let n = 64 * 81 * 4;
+        let mut tables: Vec<Vec<i64>> = vec![vec![largest; n], vec![-largest; n]];
+        tables.push((0..n).map(|_| (rng.next() as i64) >> 2).collect());
+        for table in &mut tables {
+            for (i, x) in table.iter_mut().enumerate() {
+                if i % 4 >= lambda {
+                    *x = 0;
+                }
+            }
+            let columns = columns(&mut rng);
+            let mut expect = [[0i128; 4]; 8];
+            for (e, column) in expect.iter_mut().zip(&columns) {
+                for (g, b) in column.iter().enumerate() {
+                    let at = (81 * g + usize::from(map[usize::from(*b)])) * 4;
+                    for (k, x) in e.iter_mut().enumerate() {
+                        *x += i128::from(table[at + k]);
+                    }
+                }
+            }
+            let join = |low: &[[u64; 4]; 8], high: &[[i64; 4]; 8]| -> [[i128; 4]; 8] {
+                core::array::from_fn(|c| {
+                    core::array::from_fn(|k| (i128::from(high[c][k]) << 32) + i128::from(low[c][k]))
+                })
+            };
+            let (mut low, mut high) = ([[0u64; 4]; 8], [[0i64; 4]; 8]);
+            assert!(super::wide_sums8(
+                table, &map, &columns, &mut low, &mut high
+            ));
+            assert_eq!(join(&low, &high), expect, "wide, lambda {lambda}");
+            let (mut low, mut high) = ([[0u64; 4]; 8], [[0i64; 4]; 8]);
+            // SAFETY: the processor has AVX-512F and VL (checked above).
+            unsafe {
+                super::modular_avx512::wide_sums8(table, &map, &columns, &mut low, &mut high)
+            };
+            assert_eq!(
+                join(&low, &high),
+                expect,
+                "wide without VBMI, lambda {lambda}"
+            );
+        }
+    }
+}
+
+#[test]
+fn column_sum_reductions_equal_the_remainders() {
+    // The reductions of the column-sum kernels against i128 remainders: raw sums at
+    // +-32(q - 1) and random below 2^58, and split halves at the ends of their ranges (h up to
+    // +-2^37, l below 2^38) and random from 2^58 to 2^62.
+    if !super::avx512vl() {
+        eprintln!("no AVX-512VL here (or JALI_SCALAR set): only the scalar reductions run");
+        return;
+    }
+    let mut rng = Rng(83);
+    for q in [65557u64, 4294967197, (1 << 58) - 27] {
+        let one_shoup = ((1u128 << 64) / u128::from(q)) as u64;
+        let half = 32 * (q as i64 - 1);
+        let mut raw = [[0i64; 8]; 8];
+        for (c, r) in raw.iter_mut().enumerate() {
+            for (k, x) in r.iter_mut().enumerate() {
+                *x = match (c + k) % 3 {
+                    0 => half,
+                    1 => -half,
+                    _ => {
+                        let half = i128::from(half);
+                        (i128::from(rng.next()) % (2 * half + 1) - half) as i64
+                    }
+                };
+            }
+        }
+        let mut out = [[0u64; 8]; 8];
+        assert!(super::reduce_sums8(&raw, 32 * q, q, one_shoup, &mut out));
+        for (o, r) in out.iter().zip(&raw) {
+            for (x, s) in o.iter().zip(r) {
+                assert_eq!(
+                    *x,
+                    (i128::from(*s)).rem_euclid(i128::from(q)) as u64,
+                    "q {q}"
+                );
+            }
+        }
+    }
+    for q in [(1u64 << 58) + 27, 2402958527344632421, (1 << 62) - 57] {
+        let shift_shoup = ((1u128 << 96) / u128::from(q)) as u64;
+        let (mut low, mut high) = ([[0u64; 4]; 8], [[0i64; 4]; 8]);
+        for c in 0..8 {
+            for k in 0..4 {
+                (low[c][k], high[c][k]) = match (c + k) % 4 {
+                    0 => ((1 << 38) - 1, (1 << 37) - 1),
+                    1 => (0, -(1 << 37) + 1),
+                    2 => ((1 << 38) - 1, -(1 << 37) + 1),
+                    _ => (
+                        rng.next() % (1 << 38),
+                        (rng.next() % (1 << 38)) as i64 - (1 << 37),
+                    ),
+                };
+            }
+        }
+        let mut out = [[0u64; 4]; 8];
+        assert!(super::reduce_wide8(&low, &high, q, shift_shoup, &mut out));
+        for c in 0..8 {
+            for k in 0..4 {
+                let a = (i128::from(high[c][k]) << 32) + i128::from(low[c][k]);
+                assert_eq!(out[c][k], a.rem_euclid(i128::from(q)) as u64, "q {q}");
+            }
+        }
+    }
+}
