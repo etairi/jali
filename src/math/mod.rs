@@ -9,6 +9,7 @@ mod poly;
 mod ring;
 mod rns;
 pub(crate) mod terms;
+pub(crate) mod ternary;
 
 pub(crate) use constant::ConstantSum;
 pub use containers::{PolyMat, PolyVec, SparsePolyMat, SparsePolyVec};

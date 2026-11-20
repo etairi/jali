@@ -18,6 +18,7 @@ use crate::{
     math::{
         Poly, PolyNtt, PolyVec, Ring, SparsePolyVec, U256, int,
         terms::{Accumulator, Term},
+        ternary::{PATTERN, pattern_signs},
     },
     params::{ExtractionParams, response_width},
     quad::{self, QuadEq},
@@ -376,19 +377,65 @@ impl Projections {
             approx_cols,
         }
     }
-    /// Row `index` of the exact block's matrix, or of the approximate block's.
-    fn row(&self, exact: bool, index: usize) -> Vec<i8> {
-        let (matrix, cols) = if exact {
+    /// The packed matrix of the exact block, or of the approximate block, and its width.
+    fn block(&self, exact: bool) -> (&[u8], usize) {
+        if exact {
             (&self.exact, self.exact_cols)
         } else {
             (&self.approx, self.approx_cols)
-        };
+        }
+    }
+    /// Row `index` of the exact block's matrix, or of the approximate block's.
+    fn row(&self, exact: bool, index: usize) -> Vec<i8> {
+        let (matrix, cols) = self.block(exact);
         (index * cols..(index + 1) * cols)
             .map(|i| crate::transcript::ternary_entry(matrix, i))
             .collect()
     }
 }
+/// The 256 projections $`\sum_jr_{ij}v_j`$ of `values` by the rows $`r_i`$ of a block's
+/// matrix, exact (an overflow of `i128` is an error). Byte-aligned rows of values at most
+/// $`(2^{63}-1)/n`$ in magnitude, for $`n`$ columns, are summed in `i64` straight from the
+/// packed bytes, where no partial sum can overflow, the others by [`projections_checked`].
 fn projections(matrices: &Projections, exact: bool, values: &[i128]) -> Result<Vec<i128>, Error> {
+    let (matrix, cols) = matrices.block(exact);
+    if values.len() != cols {
+        return Err(Error::Dimension);
+    }
+    let max = values.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0);
+    if !cols.is_multiple_of(4) || max > i64::MAX as u128 / cols.max(1) as u128 {
+        return projections_checked(matrices, exact, values);
+    }
+    let words = Zeroizing::new(values.iter().map(|v| *v as i64).collect::<Vec<_>>());
+    let row_bytes = cols / 4;
+    // In parallel with the `parallel` feature, in order.
+    crate::par::try_map(256, |i| {
+        Ok(i128::from(signed_sum(
+            &matrix[i * row_bytes..(i + 1) * row_bytes],
+            &words,
+        )))
+    })
+}
+/// The sum of `values` with the entries of one packed row (four per byte, as
+/// [`crate::transcript::ternary_entry`] reads them), each entry's term selected by masks: the
+/// value where its first bit is set, minus the value where its second is.
+fn signed_sum(row: &[u8], values: &[i64]) -> i64 {
+    let mut sums = [0i64; 4];
+    for (byte, v) in row.iter().zip(values.as_chunks::<4>().0) {
+        for (k, (sum, x)) in sums.iter_mut().zip(v).enumerate() {
+            let plus = -i64::from((byte >> (2 * k)) & 1);
+            let minus = -i64::from((byte >> (2 * k + 1)) & 1);
+            *sum += (x & plus) - (x & minus);
+        }
+    }
+    sums.iter().sum()
+}
+/// [`projections`] row by row in checked `i128` arithmetic, for every width and magnitude.
+fn projections_checked(
+    matrices: &Projections,
+    exact: bool,
+    values: &[i128],
+) -> Result<Vec<i128>, Error> {
     let compute_row = |i| {
         let row = matrices.row(exact, i);
         if row.len() != values.len() {
@@ -637,8 +684,9 @@ impl ProjectionRows<'_> {
 }
 /// For each weight vector `weights[k]` (256 canonical weights), the canonical
 /// $`\sum_jw_{kj}r_{j,c}`$ for every column $`c`$ of the 256 matrix rows $`r_j`$ of a family,
-/// whose entries are in $`\{-1,0,1\}`$. Below $`2^{119}`$ and from [`TABLE_MIN_COLS`] columns
-/// on, by the table of [`weighted_rows_by_table`]. Otherwise below $`2^{120}`$ each row is
+/// whose entries are in $`\{-1,0,1\}`$. From [`TABLE_MIN_COLS`] columns on, by the table of
+/// sign patterns of [`weighted_rows_by_patterns`] below $`2^{55}`$ and by the byte table of
+/// [`weighted_rows_by_table`] below $`2^{119}`$. Otherwise below $`2^{120}`$ each row is
 /// decoded once and a column's positive and negative weights are summed in `u128`, where 256 of
 /// them stay below $`2^{128}`$, and reduced once. Above, each entry is a modular addition.
 fn weighted_rows(
@@ -649,8 +697,12 @@ fn weighted_rows(
     weights: &[&[U256]],
 ) -> Result<Vec<Vec<U256>>, Error> {
     let lambda = weights.len();
+    let table = cols >= TABLE_MIN_COLS && cols.is_multiple_of(4);
     match int::to_u128(&ring.modulus()).filter(|q| *q < 1 << 120) {
-        Some(q) if q < 1 << 119 && cols >= TABLE_MIN_COLS && cols.is_multiple_of(4) => {
+        Some(q) if q < 1 << 55 && table => {
+            weighted_rows_by_patterns(matrices, exact, cols, weights, q as u64)
+        }
+        Some(q) if q < 1 << 119 && table => {
             weighted_rows_by_table(matrices, exact, cols, weights, q)
         }
         Some(q) => {
@@ -709,29 +761,7 @@ fn weighted_rows_by_table(
     q: u128,
 ) -> Result<Vec<Vec<U256>>, Error> {
     let lambda = weights.len();
-    let (matrix, matrix_cols) = if exact {
-        (&matrices.exact, matrices.exact_cols)
-    } else {
-        (&matrices.approx, matrices.approx_cols)
-    };
-    if matrix_cols != cols || matrix.len() != 64 * cols {
-        return Err(Error::Dimension);
-    }
-    // Rows are byte aligned (`cols` is a multiple of 4): the 4 rows of group g give, byte by
-    // byte, the entries of 4 columns, which become byte g of each of those columns.
-    let row_bytes = cols / 4;
-    let mut columns = vec![0u8; 64 * cols];
-    for g in 0..64 {
-        let at = |e: usize| &matrix[(4 * g + e) * row_bytes..(4 * g + e + 1) * row_bytes];
-        let (r0, r1, r2, r3) = (at(0), at(1), at(2), at(3));
-        for b in 0..row_bytes {
-            for e in 0..4 {
-                let field = |r: &[u8]| (r[b] >> (2 * e)) & 3;
-                columns[(4 * b + e) * 64 + g] =
-                    field(r0) | (field(r1) << 2) | (field(r2) << 4) | (field(r3) << 6);
-            }
-        }
-    }
+    let columns = matrix_columns(matrices, exact, cols)?;
     let w: Vec<Vec<i128>> = weights
         .iter()
         .map(|w| w.iter().map(|x| int::low_u128(x) as i128).collect())
@@ -793,6 +823,117 @@ fn weighted_rows_by_table(
                             .iter()
                             .enumerate()
                             .map(|(g, b)| table[(g * 256 + usize::from(*b)) * lambda + k])
+                            .sum()
+                    })
+                    .collect();
+                write(c, &sums);
+            }
+        }
+    }
+    Ok(out)
+}
+/// A block's matrix with each column as 64 bytes: byte $`g`$ holds the column's entries of rows
+/// $`4g`$ to $`4g+3`$, 2 bits each as [`crate::transcript::ternary_entry`] packs them. Rows are
+/// byte aligned (`cols` is a multiple of 4): the 4 rows of group $`g`$ give, byte by byte, the
+/// entries of 4 columns, which become byte $`g`$ of each of those columns.
+fn matrix_columns(matrices: &Projections, exact: bool, cols: usize) -> Result<Vec<u8>, Error> {
+    let (matrix, matrix_cols) = matrices.block(exact);
+    if matrix_cols != cols || matrix.len() != 64 * cols || !cols.is_multiple_of(4) {
+        return Err(Error::Dimension);
+    }
+    let row_bytes = cols / 4;
+    let mut columns = vec![0u8; 64 * cols];
+    // The bytes b of rows 4g to 4g + 3 as the word x = r0 | r1 << 8 | r2 << 16 | r3 << 24 hold
+    // field e of row i at bit 8i + 2e; byte e of the column bytes holds it at 8e + 2i. Swapping
+    // the 2 x 2 blocks of fields (distance 12) and then the fields within them (distance 6)
+    // transposes the 4 x 4 fields. Sixteen row bytes at a time (64 columns), so that the
+    // columns written and the rows read stay in the first-level cache.
+    let transpose = |x: u32| {
+        let t = ((x >> 12) ^ x) & 0x0000_f0f0;
+        let x = x ^ t ^ (t << 12);
+        let t = ((x >> 6) ^ x) & 0x00cc_00cc;
+        x ^ t ^ (t << 6)
+    };
+    for first in (0..row_bytes).step_by(16) {
+        let block = first..(first + 16).min(row_bytes);
+        for g in 0..64 {
+            let row = |e: usize| &matrix[(4 * g + e) * row_bytes..(4 * g + e + 1) * row_bytes];
+            let (r0, r1, r2, r3) = (row(0), row(1), row(2), row(3));
+            for b in block.clone() {
+                let y = transpose(u32::from_le_bytes([r0[b], r1[b], r2[b], r3[b]]));
+                for (e, byte) in y.to_le_bytes().into_iter().enumerate() {
+                    columns[(4 * b + e) * 64 + g] = byte;
+                }
+            }
+        }
+    }
+    Ok(columns)
+}
+/// [`weighted_rows`] below $`2^{55}`$ by a table of sign patterns, as LaBRADOR sums its
+/// projection: for each group $`g`$ of 4 rows, each of the 81 patterns of 4 entries
+/// ([`PATTERN`]) and each challenge row $`k`$, the weighted sum of the entries in `i64`, and
+/// each column's sums as 64 lookups through the pattern of each of its bytes. 256 weights below
+/// $`q<2^{55}`$ stay below $`256q<2^{63}`$ in magnitude, so the sums are exact, and reduced once.
+/// The table holds 5184 sums per challenge row, against the byte table's 16384.
+fn weighted_rows_by_patterns(
+    matrices: &Projections,
+    exact: bool,
+    cols: usize,
+    weights: &[&[U256]],
+    q: u64,
+) -> Result<Vec<Vec<U256>>, Error> {
+    let lambda = weights.len();
+    let columns = matrix_columns(matrices, exact, cols)?;
+    let w: Vec<Vec<i64>> = weights
+        .iter()
+        .map(|w| w.iter().map(|x| int::low_u128(x) as i64).collect())
+        .collect();
+    let mut table = vec![0i64; 64 * 81 * lambda];
+    for (g, block) in table.chunks_exact_mut(81 * lambda).enumerate() {
+        for (p, sums) in block.chunks_exact_mut(lambda).enumerate() {
+            let signs = pattern_signs(p);
+            for (sum, w) in sums.iter_mut().zip(&w) {
+                *sum = (0..4).map(|e| i64::from(signs[e]) * w[4 * g + e]).sum();
+            }
+        }
+    }
+    let mut out = vec![vec![U256::ZERO; cols]; lambda];
+    let modulus = q as i64;
+    let mut write = |c: usize, sums: &[i64]| {
+        for (o, sum) in out.iter_mut().zip(sums) {
+            o[c] = U256::from_u64(sum.rem_euclid(modulus) as u64);
+        }
+    };
+    fn fixed<const L: usize>(table: &[i64], column: &[u8]) -> [i64; L] {
+        let table = table.as_chunks::<L>().0;
+        let mut acc = [0i64; L];
+        for (g, b) in column.iter().enumerate() {
+            let entry = &table[g * 81 + usize::from(PATTERN[usize::from(*b)])];
+            for (a, t) in acc.iter_mut().zip(entry) {
+                *a += *t;
+            }
+        }
+        acc
+    }
+    for (c, column) in columns.as_chunks::<64>().0.iter().enumerate() {
+        match lambda {
+            1 => write(c, &fixed::<1>(&table, column)),
+            2 => write(c, &fixed::<2>(&table, column)),
+            3 => write(c, &fixed::<3>(&table, column)),
+            4 => write(c, &fixed::<4>(&table, column)),
+            5 => write(c, &fixed::<5>(&table, column)),
+            6 => write(c, &fixed::<6>(&table, column)),
+            7 => write(c, &fixed::<7>(&table, column)),
+            8 => write(c, &fixed::<8>(&table, column)),
+            _ => {
+                let sums: Vec<i64> = (0..lambda)
+                    .map(|k| {
+                        column
+                            .iter()
+                            .enumerate()
+                            .map(|(g, b)| {
+                                table[(g * 81 + usize::from(PATTERN[usize::from(*b)])) * lambda + k]
+                            })
                             .sum()
                     })
                     .collect();

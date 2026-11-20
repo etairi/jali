@@ -103,3 +103,59 @@ fn wide_uniform_values_equal_the_reference_sampler_on_shared_streams() {
         assert_eq!(x, y, "consumption, modulus {modulus}");
     }
 }
+
+#[test]
+fn public_values_equal_the_uniform_sampler_on_shared_streams() {
+    // The public sampler against `uniform` on two copies of a stream: the same values and the
+    // same bytes read, at the edges of its 64-bit words (57 and 58 bits), of its 128-bit words
+    // (120 and 121 bits), and at moduli with many and few rejections, for counts that leave
+    // partial bytes and need several passes.
+    let moduli: [u128; 22] = [
+        2,
+        3,
+        5,
+        255,
+        256,
+        257,
+        (1 << 31) - 1,
+        (1 << 32) - 99,
+        (1 << 32) + 15,
+        (1 << 56) - 5,
+        1 << 57,
+        (1 << 57) + 1,
+        (1 << 63) - 25,
+        (1 << 64) - 59,
+        800602353498606932557,
+        (1 << 119) - 1,
+        1 << 120,
+        (1 << 120) + 1,
+        (1 << 127) - 1,
+        (1 << 127) + 1,
+        u128::MAX - 158,
+        u128::MAX,
+    ];
+    for (i, m) in moduli.into_iter().enumerate() {
+        for count in [1usize, 7, 64, 300] {
+            let mut public = AesPrg::new(&[6; 32], domain(4, i as u32));
+            let mut reference = AesPrg::new(&[6; 32], domain(4, i as u32));
+            assert_eq!(
+                public_uniform(&mut public, m, count).unwrap(),
+                uniform(&mut reference, m, count).unwrap(),
+                "modulus {m} count {count}"
+            );
+            let (mut x, mut y) = ([0u8; 16], [0u8; 16]);
+            public.fill(&mut x).unwrap();
+            reference.fill(&mut y).unwrap();
+            assert_eq!(x, y, "consumption, modulus {m} count {count}");
+        }
+    }
+    for q in [(1u128 << 32) - 99, 800602353498606932557] {
+        let ring = Ring::new(q as i128, 64).unwrap();
+        let mut public = AesPrg::new(&[7; 32], 3);
+        let mut reference = AesPrg::new(&[7; 32], 3);
+        assert_eq!(
+            public_poly(&mut public, &ring).unwrap(),
+            uniform_poly(&mut reference, &ring).unwrap()
+        );
+    }
+}

@@ -18,7 +18,10 @@ use super::{
 use crate::{
     Error,
     codec::{BitReader, BitWriter},
-    math::{Ring, U256, int},
+    math::{
+        Ring, U256, int,
+        ternary::{DECODE, PATTERN},
+    },
     transcript::Transcript,
 };
 use std::sync::Arc;
@@ -201,22 +204,6 @@ fn matvec(
     }
     Ok(out)
 }
-
-/// The four entries in $`\{-1,0,1\}`$ of each projection byte (entry $`e`$ in bits $`2e`$ and
-/// $`2e+1`$, as `Projection::column` decodes them).
-const DECODE: [[i8; 4]; 256] = {
-    let mut out = [[0i8; 4]; 256];
-    let mut b = 0;
-    while b < 256 {
-        let mut e = 0;
-        while e < 4 {
-            out[b][e] = ((b >> (2 * e)) & 1) as i8 - ((b >> (2 * e + 1)) & 1) as i8;
-            e += 1;
-        }
-        b += 1;
-    }
-    out
-};
 
 /// The projection $`p=\sum_i\Pi_is_i`$ of all witness coefficients, in vector order.
 fn project(
@@ -574,25 +561,6 @@ fn projection_blocks<T: Send>(
     }
     Ok(())
 }
-
-/// The index of each projection byte among the 81 sign patterns of four entries,
-/// $`\sum_e3^e(x_e+1)`$ for its entries $`x_e`$ ([`DECODE`]): bytes with the same four entries
-/// share their index.
-const PATTERN: [u8; 256] = {
-    let mut out = [0u8; 256];
-    let mut b = 0;
-    while b < 256 {
-        let mut index = 0;
-        let mut e = 4;
-        while e > 0 {
-            e -= 1;
-            index = 3 * index + (DECODE[b][e] + 1) as u8;
-        }
-        out[b] = index;
-        b += 1;
-    }
-    out
-};
 
 /// For each group of 4 rows, the sums of the 4 weighted entries for every k, side by side, so
 /// that one lookup reads the λ sums of a byte of a column. Each sum is stored as its centred

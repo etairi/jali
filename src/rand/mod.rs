@@ -19,9 +19,9 @@ pub const MAX_LOG_SIGMA: u32 = 100;
 pub(crate) use key::{derive_key, take_seed};
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) use prg::ReadAhead;
-pub(crate) use prg::secret;
 #[cfg(test)]
 pub(crate) use prg::stream_log;
 pub use prg::{AesPrg, ByteStream, ShakePrg, domain};
+pub(crate) use prg::{PublicAes, secret};
 pub use uniform::{autostable, binomial, bounded, uniform, uniform_u256};
-pub(crate) use uniform::{bits, uniform_poly};
+pub(crate) use uniform::{bits, public_poly, uniform_poly};

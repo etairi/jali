@@ -92,6 +92,78 @@ impl AesPrg {
         Ok(prg)
     }
 }
+/// The streams of [`AesPrg`] under one seed for public data, such as the entries of public
+/// matrices: the same keystreams, one per domain, from one key schedule, with nothing to wipe.
+pub(crate) struct PublicAes {
+    cipher: Aes256,
+    #[cfg(test)]
+    seed: [u8; 32],
+}
+impl PublicAes {
+    pub(crate) fn new(seed: &[u8; 32]) -> Self {
+        use aes::cipher::KeyInit;
+        Self {
+            cipher: Aes256::new(seed.into()),
+            #[cfg(test)]
+            seed: *seed,
+        }
+    }
+    /// The keystream of `AesPrg::new(seed, domain)`: the blocks $`E_K(c+j)`$ for the IV
+    /// `LE64(domain) || 0^8` read as the big-endian counter $`c`$, as `Ctr128BE` forms them.
+    pub(crate) fn stream(&self, domain: u64) -> PublicStream<'_> {
+        #[cfg(test)]
+        stream_log::record(&self.seed, domain);
+        let mut iv = [0u8; 16];
+        iv[..8].copy_from_slice(&domain.to_le_bytes());
+        PublicStream {
+            cipher: &self.cipher,
+            counter: u128::from_be_bytes(iv),
+            block: [0; 16],
+            pos: 16,
+        }
+    }
+}
+/// One keystream of [`PublicAes`].
+pub(crate) struct PublicStream<'a> {
+    cipher: &'a Aes256,
+    /// The counter of the next block to encrypt.
+    counter: u128,
+    /// The last block's keystream bytes from `pos` on, which `fill` returns first.
+    block: [u8; 16],
+    pos: usize,
+}
+impl ByteStream for PublicStream<'_> {
+    fn fill(&mut self, output: &mut [u8]) -> Result<(), Error> {
+        use aes::cipher::BlockCipherEncrypt;
+        let buffered = (16 - self.pos).min(output.len());
+        output[..buffered].copy_from_slice(&self.block[self.pos..self.pos + buffered]);
+        self.pos += buffered;
+        let rest = &mut output[buffered..];
+        let (whole, tail) = rest.split_at_mut(rest.len() / 16 * 16);
+        // Whole blocks 32 at a time, through the cipher's parallel backend.
+        let mut blocks = [aes::Block::default(); 32];
+        for chunk in whole.chunks_mut(16 * blocks.len()) {
+            let blocks = &mut blocks[..chunk.len() / 16];
+            for block in blocks.iter_mut() {
+                *block = self.counter.to_be_bytes().into();
+                self.counter = self.counter.wrapping_add(1);
+            }
+            self.cipher.encrypt_blocks(blocks);
+            for (out, block) in chunk.as_chunks_mut::<16>().0.iter_mut().zip(blocks.iter()) {
+                out.copy_from_slice(block);
+            }
+        }
+        if !tail.is_empty() {
+            let mut block: aes::Block = self.counter.to_be_bytes().into();
+            self.counter = self.counter.wrapping_add(1);
+            self.cipher.encrypt_block(&mut block);
+            self.block.copy_from_slice(&block);
+            tail.copy_from_slice(&self.block[..tail.len()]);
+            self.pos = tail.len();
+        }
+        Ok(())
+    }
+}
 impl ByteStream for AesPrg {
     fn fill(&mut self, output: &mut [u8]) -> Result<(), Error> {
         // The buffered bytes come first. Once they are used up, the cipher stands right after
@@ -304,6 +376,38 @@ mod tests {
             prg.fill(head).unwrap();
             prg.fill(tail).unwrap();
             assert_eq!(&got[..], &all[offset..], "offset {offset}");
+        }
+    }
+    #[test]
+    fn public_streams_equal_the_aes_streams() {
+        // One key schedule per seed: every domain's stream against `AesPrg`'s, through reads
+        // of sizes around a block and the 32-block batch, and across domains in turn.
+        for seed in [[1u8; 32], [0xa5; 32]] {
+            let public = super::PublicAes::new(&seed);
+            for domain in [0u64, 1, 7, super::domain(2, 9), u64::MAX] {
+                for sizes in [
+                    vec![1usize, 15, 16, 17, 31],
+                    vec![512, 513, 1, 511, 3],
+                    vec![560, 9, 80, 16 * 32 + 16],
+                ] {
+                    let total = 6000;
+                    let mut expected = vec![0u8; total];
+                    super::AesPrg::new(&seed, domain)
+                        .fill(&mut expected)
+                        .unwrap();
+                    let mut stream = public.stream(domain);
+                    let mut got = Vec::with_capacity(total);
+                    let mut k = 0;
+                    while got.len() < total {
+                        let n = sizes[k % sizes.len()].min(total - got.len());
+                        let mut buf = vec![0u8; n];
+                        stream.fill(&mut buf).unwrap();
+                        got.extend_from_slice(&buf);
+                        k += 1;
+                    }
+                    assert_eq!(got, expected, "domain {domain} sizes {sizes:?}");
+                }
+            }
         }
     }
     #[test]

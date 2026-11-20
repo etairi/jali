@@ -134,6 +134,80 @@ pub(crate) fn uniform_poly(stream: &mut impl ByteStream, ring: &Arc<Ring>) -> Re
     }
 }
 
+/// [`uniform_poly`] for public polynomials, such as the entries of public matrices: the same
+/// coefficients from the same bytes, read by [`public_uniform`] without wiping. Moduli from
+/// $`2^{128}`$ on take [`uniform_poly`].
+pub(crate) fn public_poly(stream: &mut impl ByteStream, ring: &Arc<Ring>) -> Result<Poly, Error> {
+    match int::to_u128(&ring.modulus()) {
+        Some(m) => Ok(Poly::from_canonical_u128(
+            ring.clone(),
+            public_uniform(stream, m, ring.degree())?,
+        )),
+        None => uniform_poly(stream, ring),
+    }
+}
+
+/// [`uniform`] for public values: each pass reads the byte-rounded buffer that [`uniform`]
+/// reads for the missing elements and keeps the same words, without wiping. A field starts at
+/// most 7 bits into its first byte, so words of at most 57 bits are read as 64-bit words and
+/// words of at most 120 bits as 128-bit words, from a buffer padded with 16 zero bytes that
+/// the masks clear. Wider words take [`bits`]. Every word is written to the next free place
+/// and kept by advancing past it, without a branch on the comparison: a pass decodes as many
+/// words as places are free, so the next free place before a word is at most `count - 1`.
+pub(crate) fn public_uniform(
+    stream: &mut impl ByteStream,
+    modulus: u128,
+    count: usize,
+) -> Result<Vec<u128>, Error> {
+    if modulus == 0 || count > (1 << 24) {
+        return Err(Error::Parameter("uniform sampler dimensions"));
+    }
+    if modulus == 1 {
+        return Ok(vec![0; count]);
+    }
+    let mbits = 128 - (modulus - 1).leading_zeros();
+    let width = mbits as usize;
+    let mut out = vec![0u128; count];
+    let mut filled = 0;
+    let mut bytes = Vec::new();
+    for _ in 0..1024 {
+        let missing = count - filled;
+        if missing == 0 {
+            return Ok(out);
+        }
+        let len = (missing * width).div_ceil(8);
+        bytes.clear();
+        bytes.resize(len + 16, 0);
+        stream.fill(&mut bytes[..len])?;
+        let starts = (0..missing).map(|i| i * width);
+        let mut keep = |value: u128| {
+            out[filled] = value;
+            filled += usize::from(value < modulus);
+        };
+        if mbits <= 57 {
+            let mask = (1u64 << mbits) - 1;
+            for start in starts {
+                let at = start / 8;
+                let word = u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"));
+                keep(u128::from((word >> (start % 8)) & mask));
+            }
+        } else if mbits <= 120 {
+            let mask = (1u128 << mbits) - 1;
+            for start in starts {
+                let at = start / 8;
+                let word =
+                    u128::from_le_bytes(bytes[at..at + 16].try_into().expect("sixteen bytes"));
+                keep((word >> (start % 8)) & mask);
+            }
+        } else {
+            for start in starts {
+                keep(bits(&bytes[..len], start, mbits));
+            }
+        }
+    }
+    Err(Error::Randomness)
+}
+
 /// Uniform integer samples from an inclusive interval.
 pub fn bounded(
     stream: &mut impl ByteStream,
