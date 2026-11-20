@@ -409,16 +409,69 @@ fn combined_rows_equal_the_combination_of_the_rows() {
 }
 
 #[test]
+fn projections_equal_the_checked_sums() {
+    // The i64 sums from the packed bytes against the checked i128 row sums, for both blocks:
+    // values at the largest magnitude the i64 sums take, (2^63 - 1) / n for n columns, with
+    // alternating signs, one above it (the checked path), small and random values, widths that
+    // are not multiples of 4 (the checked path), a value that overflows i128 and a wrong length.
+    let mut rng = Rng(16);
+    for cols in [0usize, 1, 3, 4, 8, 64, 100, 192, 2048] {
+        let matrices = Projections::for_tests(&[cols as u8; 32], cols, cols);
+        let limit = i128::from(i64::MAX) / cols.max(1) as i128;
+        for case in 0..6 {
+            let values: Vec<i128> = (0..cols)
+                .map(|j| {
+                    let sign = if j % 2 == 0 { 1 } else { -1 };
+                    match case {
+                        0 => sign * limit,
+                        1 => sign * (limit + i128::from(j == cols / 2)),
+                        2 => rng.below(5) as i128 - 2,
+                        3 => (rng.below(1 << 62) as i128 % (limit + 1)) * sign,
+                        4 => -limit,
+                        _ => {
+                            if j == 0 {
+                                i128::MIN
+                            } else {
+                                sign
+                            }
+                        }
+                    }
+                })
+                .collect();
+            for exact in [true, false] {
+                assert_eq!(
+                    projections(&matrices, exact, &values),
+                    projections_checked(&matrices, exact, &values),
+                    "cols {cols} case {case} exact {exact}"
+                );
+            }
+        }
+        let short = vec![1i128; cols.saturating_sub(1)];
+        if cols > 0 {
+            assert_eq!(projections(&matrices, true, &short), Err(Error::Dimension));
+            assert_eq!(
+                projections_checked(&matrices, true, &short),
+                Err(Error::Dimension)
+            );
+        }
+    }
+}
+
+#[test]
 fn weighted_rows_agree_with_modular_additions() {
-    // The table sums below 2^119 and the u128 sums up to 2^120 against the modular additions
-    // that larger moduli take, at extreme and random weights, for every width of the table's
-    // specialized sums (1 to 8) and the general loop (9). The moduli: small ones, a prime of
+    // The pattern sums below 2^55, the table sums below 2^119 and the u128 sums up to 2^120
+    // against the modular additions that larger moduli take, at extreme and random weights,
+    // for every width of the tables' specialized sums (1 to 8) and the general loop (9). The
+    // moduli: small ones, the 41.14-bit one of the Kyber sets, both sides of 2^55, a prime of
     // 69.44 bits, and the largest odd ones below 2^119 and 2^120. One polynomial's 64 columns
-    // take the u128 sums, three the table, and the table is also checked directly at 64.
+    // take the u128 sums, three the tables, and the tables are also checked directly at 64.
     let mut rng = Rng(15);
-    let moduli: [i128; 6] = [
+    let moduli: [i128; 9] = [
         65537,
         4294967291,
+        2423991946973,
+        (1 << 55) - 1,
+        (1 << 55) + 1,
         18446744073709551557,
         800602353498606932557,
         (1 << 119) - 1,
@@ -455,6 +508,13 @@ fn weighted_rows_agree_with_modular_additions() {
                         weighted_rows_by_table(&matrices, exact, cols, &refs, q as u128).unwrap(),
                         expected,
                         "table, q {q} lambda {lambda} cols {cols} exact {exact}"
+                    );
+                }
+                if q < 1 << 55 {
+                    assert_eq!(
+                        weighted_rows_by_patterns(&matrices, exact, cols, &refs, q as u64).unwrap(),
+                        expected,
+                        "patterns, q {q} lambda {lambda} cols {cols} exact {exact}"
                     );
                 }
             }

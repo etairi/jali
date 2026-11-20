@@ -15,9 +15,9 @@ use crate::{
     },
     params::{CheckedParams, TboxParams, response_width},
     rand::{
-        AesPrg, ByteStream, bounded, derive_key, domain, gaussian,
+        AesPrg, ByteStream, PublicAes, bounded, derive_key, domain, gaussian, public_poly,
         reject::{self, Policy, Variance},
-        secret, take_seed, uniform_poly,
+        secret, take_seed,
     },
     transcript::{Protocol, Transcript},
 };
@@ -238,15 +238,17 @@ pub(crate) fn matrix_size(rows: usize, cols: usize) -> Result<usize, Error> {
 
 /// The entries with row-major indices in `range` of the matrices that [`matrix`] expands from
 /// `seed` and `dom`. Entry $`i`$ is read from its own stream $`(dom,i)`$, whatever the shape, so
-/// rows can be expanded on their own.
+/// rows can be expanded on their own. The entries are public: one key schedule serves every
+/// stream ([`PublicAes`]), and the sampler wipes nothing ([`public_poly`]).
 pub(crate) fn matrix_entries(
     ring: &Arc<Ring>,
     range: std::ops::Range<usize>,
     seed: &[u8; 32],
     dom: u32,
 ) -> Result<Vec<Poly>, Error> {
+    let streams = PublicAes::new(seed);
     range
-        .map(|i| uniform_poly(&mut AesPrg::new(seed, domain(dom, i as u32)), ring))
+        .map(|i| public_poly(&mut streams.stream(domain(dom, i as u32)), ring))
         .collect()
 }
 

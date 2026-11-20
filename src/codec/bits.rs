@@ -54,26 +54,33 @@ impl BitWriter {
     fn bit(&mut self, value: bool) {
         self.put(u128::from(value), 1);
     }
-    /// Append the low `bits` bits of `value`, `bits` at most 128, least significant first.
+    /// Append the low `bits` bits of `value`, `bits` at most 128, least significant first: the
+    /// low 64 bits and then the rest, each by [`BitWriter::put64`].
     #[inline]
-    fn put(&mut self, mut value: u128, mut bits: u32) {
-        while bits != 0 {
-            let take = (64 - self.used).min(bits);
-            let field = if take == 64 {
-                value as u64
-            } else {
-                value as u64 & ((1 << take) - 1)
-            };
-            self.word |= field << self.used;
-            self.used += take;
-            bits -= take;
-            value >>= take;
-            if self.used == 64 {
-                self.bytes.extend_from_slice(&self.word.to_le_bytes());
-                self.word = 0;
-                self.used = 0;
-            }
+    fn put(&mut self, value: u128, bits: u32) {
+        let low = |v: u64, b: u32| if b >= 64 { v } else { v & ((1 << b) - 1) };
+        if bits <= 64 {
+            self.put64(low(value as u64, bits), bits);
+        } else {
+            self.put64(value as u64, 64);
+            self.put64(low((value >> 64) as u64, bits - 64), bits - 64);
         }
+    }
+    /// Append a field of `bits` bits, at most 64, whose higher bits are zero: what fits fills
+    /// the word, and once it is full the bits that did not fit start the next one.
+    #[inline]
+    fn put64(&mut self, value: u64, bits: u32) {
+        let used = self.used;
+        self.word |= value << used;
+        let total = used + bits;
+        if total < 64 {
+            self.used = total;
+            return;
+        }
+        self.bytes.extend_from_slice(&self.word.to_le_bytes());
+        // The bits of `value` above the 64 - used that fitted, none when it started a word.
+        self.word = if used == 0 { 0 } else { value >> (64 - used) };
+        self.used = total - 64;
     }
     /// Append `count` zero bits: a run of zero codes, such as those of a zero polynomial.
     pub(crate) fn zeros(&mut self, count: u64) {
