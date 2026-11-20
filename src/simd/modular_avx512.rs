@@ -17,7 +17,7 @@ fn sub(a: __m512i, b: __m512i, p: __m512i) -> __m512i {
 /// `shoup_mul` in each lane: $`xw-\lfloor xw'/2^{64}\rfloor p`$ reduced into $`[0,p)`$.
 #[inline]
 #[target_feature(enable = "avx512f,avx512dq")]
-fn shoup(x: __m512i, w: __m512i, ws: __m512i, p: __m512i) -> __m512i {
+pub(super) fn shoup(x: __m512i, w: __m512i, ws: __m512i, p: __m512i) -> __m512i {
     let k = mulhi(x, ws);
     csub(
         _mm512_sub_epi64(_mm512_mullo_epi64(x, w), _mm512_mullo_epi64(k, p)),

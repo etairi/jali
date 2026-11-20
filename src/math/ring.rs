@@ -514,6 +514,12 @@ pub struct Ring {
     pub(crate) words: usize,
     pub(crate) d: usize,
     pub(crate) plans: Vec<NttPlan>,
+    /// The IFMA tables of the plans, when the ring takes the primes of `IFMA_PRIMES`: where the
+    /// IFMA kernels run and as many of them as of `NTT_PRIMES` exceed the bound of
+    /// [`Ring::with_modulus`]. Transforms, products and inverses then go through them (Montgomery
+    /// form with $`R=2^{52}`$, [`crate::math::rns`]). Empty otherwise.
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    pub(crate) ifma: Vec<crate::simd::IfmaPlan>,
     /// The selected primes as divisors.
     pub(crate) divisors: Vec<Divisor64>,
     /// $`q\bmod p_i`$ for each selected prime.
@@ -554,7 +560,10 @@ impl Ring {
     /// Construct a ring, choosing enough RNS primes for 128 accumulated products.
     ///
     /// The primes are taken in the order of `NTT_PRIMES` until their product exceeds
-    /// $`(q-1)^2\cdot d\cdot128`$, which nine primes do for every $`q<2^{256}`$.
+    /// $`(q-1)^2\cdot d\cdot128`$, which nine primes do for every $`q<2^{256}`$. Where the
+    /// IFMA kernels run, the ring takes as many primes of `IFMA_PRIMES` instead when their
+    /// product exceeds the bound too, so the number of primes does not change: the exact CRT
+    /// gives the same coefficients.
     pub fn with_modulus(q: U256, d: usize) -> Result<Arc<Self>, Error> {
         if q < U256::from_u8(2) {
             return Err(Error::Parameter("ring modulus"));
@@ -568,13 +577,37 @@ impl Ring {
             .wrapping_mul(&qm1)
             .wrapping_mul(&U576::from_u64((d * NADDS) as u64))
             .wrapping_add(&U576::ONE);
+        let mut count = 0;
+        let mut product = U576::ONE;
+        for (p, _) in NTT_PRIMES {
+            count += 1;
+            product = product.wrapping_mul(&U64::from_u64(p));
+            if product > bound {
+                break;
+            }
+        }
+        if product <= bound {
+            return Err(Error::Overflow);
+        }
+        #[allow(unused_mut)]
+        let mut chosen: Vec<(u64, u64)> = NTT_PRIMES[..count].to_vec();
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        if crate::simd::ifma() && count <= crate::simd::IFMA_PRIMES.len() {
+            let ifma = &crate::simd::IFMA_PRIMES[..count];
+            let product = ifma.iter().fold(U576::ONE, |acc, (p, _)| {
+                acc.wrapping_mul(&U64::from_u64(*p))
+            });
+            if product > bound {
+                chosen = ifma.to_vec();
+            }
+        }
         let mut product = U576::ONE;
         let mut plans = Vec::new();
         let mut divisors = Vec::new();
         let mut q_mod_p = Vec::new();
         #[cfg(test)]
         let (mut prefixes, mut inverses) = (Vec::new(), Vec::new());
-        for (p, root) in NTT_PRIMES {
+        for (p, root) in chosen {
             let divisor = Divisor64::new(p);
             #[cfg(test)]
             {
@@ -591,13 +624,17 @@ impl Ring {
             q_mod_p.push(divisor.rem(&q));
             divisors.push(divisor);
             product = product.wrapping_mul(&U64::from_u64(p));
-            if product > bound {
-                break;
-            }
         }
-        if product <= bound {
-            return Err(Error::Overflow);
-        }
+        debug_assert!(product > bound);
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        let ifma: Vec<crate::simd::IfmaPlan> = if plans[0].modulus() < 1 << 51 {
+            plans
+                .iter()
+                .map(|plan| crate::simd::IfmaPlan::new(plan.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let nonzero = NonZero::new(q).expect("modulus at least two");
         let primes: Vec<u64> = plans.iter().map(|plan| plan.modulus()).collect();
         let wide = Mod128::new(&q);
@@ -617,6 +654,8 @@ impl Ring {
             words: int::bits(&(q.wrapping_sub(&U256::ONE))).div_ceil(64).max(1) as usize,
             d,
             plans,
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            ifma,
             divisors,
             q_mod_p,
             crt,

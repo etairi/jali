@@ -8,8 +8,10 @@
 //! magnitude at most $`((q-1)/2)^2`$. The ring takes the least $`k`$ for which the product
 //! $`P`$ of its primes satisfies $`P/2>2^{32}d((q-1)/2)^2`$, so that up to $`2^{32}`$ products
 //! accumulated in the transform domain reconstruct exactly: two primes for $`q<2^{40}`$ at
-//! $`d\le256`$, three up to $`2^{62}`$. This arithmetic is separate from the 256-bit
-//! arithmetic of the LNP22 proofs, which it does not change.
+//! $`d\le256`$, three up to $`2^{62}`$. Where the IFMA kernels run, the ring takes instead the
+//! fewest of the four 51-bit primes of `IFMA_PRIMES` that meet the same bound (two up to
+//! $`2^{33}`$, four near $`2^{62}`$): the CRT gives the same coefficients. This arithmetic is
+//! separate from the 256-bit arithmetic of the LNP22 proofs, which it does not change.
 use crate::{
     Error,
     math::{
@@ -35,11 +37,14 @@ pub struct Rq {
     d: usize,
     plans: Vec<NttPlan>,
     /// The IFMA tables of the plans, when the ring takes the primes of `IFMA_PRIMES`: where the
-    /// IFMA kernels run and as many of those primes as of `NTT_PRIMES` reconstruct exactly.
-    /// Every transform, product and inverse then goes through them (Montgomery form with
-    /// $`R=2^{52}`$). Empty otherwise.
+    /// IFMA kernels run, as many of those primes as reconstruct exactly (two for $`q<2^{32}`$,
+    /// four near $`2^{62}`$). Every transform, product and inverse then goes through them
+    /// (Montgomery form with $`R=2^{52}`$). Empty otherwise.
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     ifma: Vec<crate::simd::IfmaPlan>,
+    /// $`q\bmod p`$ for each IFMA prime $`p`$, for the centred residues when $`q\ge2p`$.
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    ifma_q: Vec<u64>,
     crt: SmallCrt,
     /// The Shoup constant of the multiplier one: remainders of one word without a division.
     one_shoup: u64,
@@ -93,7 +98,7 @@ impl Rq {
         let ifma = if word_only {
             Vec::new()
         } else {
-            ifma_plans(d, q_bits, need, k)?
+            ifma_plans(d, need)?
         };
         let mut plans = Vec::with_capacity(k);
         for (p, root) in NTT_PRIMES.iter().take(k) {
@@ -109,6 +114,8 @@ impl Rq {
             q,
             d,
             crt: SmallCrt::new(q, &primes),
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            ifma_q: ifma.iter().map(|t| q % t.plan.modulus()).collect(),
             plans,
             #[cfg(all(feature = "simd", target_arch = "x86_64"))]
             ifma,
@@ -291,7 +298,10 @@ impl Rq {
             let p = plan.modulus();
             #[cfg(all(feature = "simd", target_arch = "x86_64"))]
             if let Some(t) = self.ifma.get(i) {
-                if !crate::simd::centred(a, self.q, p, block) {
+                // Centred values reach q/2, beyond p from q = 2p on.
+                if self.q / 2 >= p {
+                    crate::simd::ifma_centred(t, a, self.q / 2, self.ifma_q[i], block);
+                } else if !crate::simd::centred(a, self.q, p, block) {
                     self.centre_into(a, p, block);
                 }
                 crate::simd::ifma_forward(t, block);
@@ -309,15 +319,24 @@ impl Rq {
         }
     }
 
-    /// The residues modulo $`p`$ of the centred representatives of `a`, into `block`.
+    /// The residues modulo $`p`$ of the centred representatives of `a`, into `block`: their
+    /// magnitudes are below $`p`$ for $`q<2p`$ and reduced otherwise.
     fn centre_into(&self, a: &[u64], p: u64, block: &mut [u64]) {
+        if self.q / 2 < p {
+            for (y, x) in block.iter_mut().zip(a) {
+                let c = self.center(*x);
+                *y = if c >= 0 {
+                    c as u64
+                } else {
+                    p - c.unsigned_abs()
+                };
+            }
+            return;
+        }
         for (y, x) in block.iter_mut().zip(a) {
             let c = self.center(*x);
-            *y = if c >= 0 {
-                c as u64
-            } else {
-                p - c.unsigned_abs()
-            };
+            let r = c.unsigned_abs() % p;
+            *y = if c >= 0 || r == 0 { r } else { p - r };
         }
     }
 
@@ -361,8 +380,9 @@ impl Rq {
             let _ = i;
             plan.inverse_mont(block);
         }
-        // At most three primes (`Rq::new`): the blocks themselves are the CRT's residues.
-        let mut residues: [&[u64]; 3] = [&[]; 3];
+        // At most four primes (three of `NTT_PRIMES`, four of `IFMA_PRIMES` near 2^62): the
+        // blocks themselves are the CRT's residues.
+        let mut residues: [&[u64]; 4] = [&[]; 4];
         for (slot, block) in residues.iter_mut().zip(h.chunks_exact(self.d)) {
             *slot = block;
         }
@@ -538,40 +558,34 @@ impl Rq {
     }
 }
 
-/// The plans of the first `k` primes of `IFMA_PRIMES` at degree `d`, if the IFMA kernels run,
-/// the modulus has at most 51 bits and their product $`P`$ exceeds $`2^{need+1}`$ (the bound of
-/// [`Rq::new`] with the exact product, as these primes are below $`2^{51}`$), and none otherwise.
-/// Below $`2^{51}`$ a centred coefficient is below $`2^{50}`$ in magnitude, under every prime of
-/// the set, as the residues of [`Rq::ntt_into`] require.
+/// The IFMA plans for degree `d`, where the IFMA kernels run: the fewest primes of
+/// `IFMA_PRIMES` whose product $`P`$ exceeds $`2^{\mathrm{need}+1}`$, the exact rule of
+/// [`Rq::new`], or none if all four fall short.
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
-fn ifma_plans(
-    d: usize,
-    q_bits: u32,
-    need: u32,
-    k: usize,
-) -> Result<Vec<crate::simd::IfmaPlan>, Error> {
+fn ifma_plans(d: usize, need: u32) -> Result<Vec<crate::simd::IfmaPlan>, Error> {
     use crate::math::U256;
     use crate::simd::{IFMA_PRIMES, IfmaPlan};
-    if !crate::simd::ifma() || q_bits > 51 || k > IFMA_PRIMES.len() {
+    if !crate::simd::ifma() {
         return Ok(Vec::new());
     }
-    let product = IFMA_PRIMES[..k].iter().fold(U256::ONE, |acc, (p, _)| {
-        acc.wrapping_mul(&U256::from_u64(*p))
-    });
-    // P is odd, so P > 2^(need + 1) exactly when P >> (need + 1) is nonzero.
-    if product.shr_vartime(need + 1) == U256::ZERO {
-        return Ok(Vec::new());
+    let mut product = U256::ONE;
+    for (k, (p, _)) in IFMA_PRIMES.iter().enumerate() {
+        product = product.wrapping_mul(&U256::from_u64(*p));
+        // P is odd, so P > 2^(need + 1) exactly when P >> (need + 1) is nonzero.
+        if product.shr_vartime(need + 1) != U256::ZERO {
+            return IFMA_PRIMES[..=k]
+                .iter()
+                .map(|(p, root)| {
+                    Ok(IfmaPlan::new(NttPlan::new(
+                        *p,
+                        d,
+                        pow_mod(*root, (1024 / d) as u64, *p),
+                    )?))
+                })
+                .collect();
+        }
     }
-    IFMA_PRIMES[..k]
-        .iter()
-        .map(|(p, root)| {
-            Ok(IfmaPlan::new(NttPlan::new(
-                *p,
-                d,
-                pow_mod(*root, (1024 / d) as u64, *p),
-            )?))
-        })
-        .collect()
+    Ok(Vec::new())
 }
 
 impl Sparse {

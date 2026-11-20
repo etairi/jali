@@ -83,6 +83,53 @@ fn residues_of(xs: &[BigUint], primes: &[u64]) -> Vec<Vec<u64>> {
 }
 
 #[test]
+fn batched_crt_on_the_ifma_primes_equals_a_big_integer_crt() {
+    // The four 51-bit primes of the IFMA transforms, whose batched CRT takes IFMA products
+    // where those kernels run (primes and q below 2^51), against the big-integer CRT: one to
+    // four primes, moduli on both sides of 2^51 and near 2^62 (the IFMA digits with a 64-bit
+    // sum), the ends and the middle of [0, P) and random integers, 47 of them (five batches of
+    // eight and a tail of seven).
+    const PRIMES: [u64; 4] = [
+        2251799813640193,
+        2251799813632001,
+        2251799813613569,
+        2251799813560321,
+    ];
+    let mut rng = Rng(9);
+    for k in 1..=4 {
+        let primes = &PRIMES[..k];
+        let product = primes
+            .iter()
+            .map(|p| BigUint::from(*p))
+            .product::<BigUint>();
+        for q in [
+            2u64,
+            3,
+            65537,
+            (1 << 32) - 99,
+            (1 << 51) - 1,
+            (1 << 51) + 1,
+            (1 << 52) - 1,
+            2402958527344632421,
+            (1 << 62) - 57,
+        ] {
+            let crt = SmallCrt::new(q, primes);
+            let xs = integers(&product, &mut rng);
+            let residues = residues_of(&xs, primes);
+            let mut out = vec![0u64; xs.len()];
+            crt.reconstruct_into(&residues, &mut out);
+            for (j, x) in xs.iter().enumerate() {
+                assert_eq!(
+                    out[j],
+                    centred_mod(x, &product, q),
+                    "{k} primes, q {q}, X {x}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn native_crt_equals_a_big_integer_crt_for_one_to_nine_primes() {
     let mut rng = Rng(8);
     for k in 1..=9 {

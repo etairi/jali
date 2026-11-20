@@ -1,6 +1,6 @@
 use super::{
     Poly, Ring,
-    ntt::{add_mod, sub_mod},
+    ntt::{NttPlan, add_mod, sub_mod},
     poly::Coeffs,
     ring::RingCrt,
 };
@@ -55,7 +55,7 @@ impl PolyNtt {
             .enumerate()
             .map(|(i, plan)| {
                 let mut x = centred_residues(ring, a.coeffs(), i);
-                plan.forward_mont(&mut x);
+                forward(ring, i, plan, &mut x);
                 x
             })
             .collect();
@@ -79,7 +79,15 @@ impl PolyNtt {
             .iter()
             .zip(&rhs.residues.0)
             .zip(&self.ring.plans)
-            .map(|((a, b), plan)| {
+            .enumerate()
+            .map(|(i, ((a, b), plan))| {
+                #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+                if let Some(t) = self.ring.ifma.get(i) {
+                    let mut out = vec![0; a.len()];
+                    crate::simd::ifma_mac(t, &mut out, a, b);
+                    return out;
+                }
+                let _ = i;
                 a.iter()
                     .zip(b)
                     .map(|(a, b)| plan.mont_mul(*a, *b))
@@ -128,18 +136,16 @@ impl RnsProduct {
         if self.count >= NADDS {
             return Err(Error::Overflow);
         }
-        for (((acc, x), y), plan) in self
+        for (i, (((acc, x), y), plan)) in self
             .residues
             .0
             .iter_mut()
             .zip(&a.residues.0)
             .zip(&b.residues.0)
             .zip(&self.ring.plans)
+            .enumerate()
         {
-            let p = plan.modulus();
-            for ((acc, x), y) in acc.iter_mut().zip(x).zip(y) {
-                *acc = add_mod(*acc, plan.mont_mul(*x, *y), p);
-            }
+            mont_mac(&self.ring, i, plan, acc, x, y);
         }
         self.count += 1;
         Ok(())
@@ -252,13 +258,24 @@ impl LazySum {
         }
         self.pending = 0;
     }
-    /// The residues of the sum, in Montgomery form below each prime.
+    /// The residues of the sum, in Montgomery form below each prime: each sum reduced, then
+    /// multiplied by $`R^{-1}`$ (the Montgomery product with one, by the IFMA kernel for the
+    /// primes of an IFMA ring).
     fn residues(&self) -> Residues {
         Residues(
             self.sums
                 .chunks_exact(self.ring.d)
                 .zip(&self.ring.plans)
-                .map(|(sums, plan)| {
+                .enumerate()
+                .map(|(i, (sums, plan))| {
+                    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+                    if let Some(t) = self.ring.ifma.get(i) {
+                        let reduced: Vec<u64> = sums.iter().map(|s| plan.reduce_wide(*s)).collect();
+                        let mut out = vec![0; reduced.len()];
+                        crate::simd::ifma_mac(t, &mut out, &reduced, &vec![1; reduced.len()]);
+                        return out;
+                    }
+                    let _ = i;
                     sums.iter()
                         .map(|s| plan.mont_mul(plan.reduce_wide(*s), 1))
                         .collect()
@@ -278,6 +295,48 @@ impl Drop for LazySum {
     }
 }
 
+/// The forward transform of prime `i`: by its IFMA plan where the ring has one, by `plan`
+/// otherwise, each in its own Montgomery form ($`R=2^{52}`$ or $`2^{64}`$), which [`mont_mac`]
+/// and [`inverse`] share.
+fn forward(ring: &Ring, i: usize, plan: &NttPlan, x: &mut [u64]) {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    if let Some(t) = ring.ifma.get(i) {
+        crate::simd::ifma_forward(t, x);
+        return;
+    }
+    let _ = (ring, i);
+    plan.forward_mont(x);
+}
+/// The inverse of [`forward`].
+fn inverse(ring: &Ring, i: usize, plan: &NttPlan, x: &mut [u64]) {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    if let Some(t) = ring.ifma.get(i) {
+        crate::simd::ifma_inverse(t, x);
+        return;
+    }
+    let _ = (ring, i);
+    plan.inverse_mont(x);
+}
+/// `acc += a ⊙ b` modulo prime `i`, each product $`abR^{-1}`$ in the Montgomery form of
+/// [`forward`]: the oracle sum of the tests.
+#[cfg(test)]
+fn mont_mac(ring: &Ring, i: usize, plan: &NttPlan, acc: &mut [u64], a: &[u64], b: &[u64]) {
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    if let Some(t) = ring.ifma.get(i) {
+        crate::simd::ifma_mac(t, acc, a, b);
+        return;
+    }
+    let _ = (ring, i);
+    let p = plan.modulus();
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    if crate::simd::mont_mac(acc, a, b, p, plan.neg_inv()) {
+        return;
+    }
+    for ((s, x), y) in acc.iter_mut().zip(a).zip(b) {
+        *s = add_mod(*s, plan.mont_mul(*x, *y), p);
+    }
+}
+
 /// The residues modulo prime $`i`$ of the centred representatives of canonical coefficients.
 fn centred_residues(ring: &Ring, coeffs: &Coeffs, i: usize) -> Vec<u64> {
     let p = ring.plans[i].modulus();
@@ -293,6 +352,16 @@ fn centred_residues(ring: &Ring, coeffs: &Coeffs, i: usize) -> Vec<u64> {
         // q < 2^63: a canonical value is a word, and its residue is native.
         Coeffs::Word(values) => {
             let half = ring.small_crt().expect("one-word coefficients").half_q;
+            // A 51-bit prime of IFMA_PRIMES below values of 4p and more: their reduction.
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            if let Some(t) = ring.ifma.get(i)
+                && 2 * u128::from(half) >= 4 * u128::from(p)
+            {
+                let mut out = vec![0; values.len()];
+                crate::simd::ifma_centred(t, values, half, q, &mut out);
+                return out;
+            }
+            // Below 4p (every prime of NTT_PRIMES exceeds 2^61): at most three subtractions.
             #[cfg(all(feature = "simd", target_arch = "x86_64"))]
             if let Some(out) = crate::simd::centred_word(values, half, p, q) {
                 return out;
@@ -342,8 +411,8 @@ fn reconstruct(ring: &Arc<Ring>, residues: &[Vec<u64>]) -> Result<Poly, Error> {
 }
 /// [`reconstruct`] of residues that the caller gives up, transformed back in place.
 fn reconstruct_owned(ring: &Arc<Ring>, mut coeffs: Residues) -> Result<Poly, Error> {
-    for (values, plan) in coeffs.0.iter_mut().zip(&ring.plans) {
-        plan.inverse_mont(values);
+    for (i, (values, plan)) in coeffs.0.iter_mut().zip(&ring.plans).enumerate() {
+        inverse(ring, i, plan, values);
     }
     // Each CRT writes the words that the ring's polynomials keep.
     let out = match &ring.crt {

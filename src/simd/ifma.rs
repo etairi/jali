@@ -16,6 +16,7 @@
 //! The scalar code of the same arithmetic ([`forward_scalar`], [`inverse_scalar`],
 //! [`mac_scalar`]) converts between the two Montgomery forms around the 64-bit transforms, with
 //! the same outputs: the reference of the kernels and their fallback.
+use super::CrtConstants;
 use super::lanes::{csub, lanes, load, splat, store};
 use super::ntt_avx512::{BY1, BY2, BY4, small_twiddles};
 use crate::math::ntt::{NttPlan, mul_mod, pow_mod};
@@ -323,4 +324,151 @@ pub(super) fn mac(t: &IfmaPlan, acc: &mut [u64], a: &[u64], b: &[u64]) {
         );
         store(s, csub(_mm512_add_epi64(load(s), u), p));
     }
+}
+
+/// `sub_mod` in each lane, for residues below $`p<2^{63}`$: $`a-b`$ or $`a-b+p`$, whichever is
+/// below $`p`$ (the other wraps above $`2^{63}`$).
+#[inline]
+#[target_feature(enable = "avx512f")]
+fn sub_mod(a: __m512i, b: __m512i, p: __m512i) -> __m512i {
+    let d = _mm512_sub_epi64(a, b);
+    _mm512_min_epu64(d, _mm512_add_epi64(d, p))
+}
+
+/// The CRT of `modular_avx512::small_crt` with IFMA products, for primes and $`q`$ below
+/// $`2^{51}`$: each Shoup product by [`shoup52`] with the constant
+/// $`\lfloor w2^{52}/p\rfloor`$, which is the 64-bit one $`\lfloor w2^{64}/p\rfloor`$ shifted
+/// right by 12 bits, then reduced into $`[0,p)`$, so every step gives the residue that the
+/// 64-bit kernel gives. [`shoup52`] forms its result below $`2p`$ modulo $`2^{52}`$, exact for
+/// $`p\le2^{51}`$, and every multiplied value is a residue below $`2^{51}`$. Returns how many
+/// coefficients it wrote, a multiple of eight.
+#[target_feature(enable = "avx512f,avx512ifma")]
+pub(super) fn small_crt<const K: usize>(
+    residues: &[&[u64]; K],
+    c: &CrtConstants<K>,
+    out: &mut [u64],
+) -> usize {
+    debug_assert!(c.q < 1 << 51 && c.primes.iter().all(|p| *p < 1 << 51));
+    let mask = splat(MASK52);
+    let product = |d: __m512i, (w, ws): (u64, u64), p: u64| {
+        csub(
+            shoup52(d, splat(w), splat(ws >> 12), splat((1 << 52) - p), mask),
+            splat(p),
+        )
+    };
+    let q = splat(c.q);
+    let (head, _) = out.as_chunks_mut::<8>();
+    for (chunk, o) in head.iter_mut().enumerate() {
+        let j = 8 * chunk;
+        let mut digits = [splat(0); K];
+        for i in 0..K {
+            let p = splat(c.primes[i]);
+            let mut sum = splat(0);
+            for (t, d) in digits[..i].iter().enumerate() {
+                sum = csub(
+                    _mm512_add_epi64(sum, product(*d, c.prefixes[i][t], c.primes[i])),
+                    p,
+                );
+            }
+            let r: &[u64; 8] = residues[i][j..j + 8].try_into().expect("eight residues");
+            digits[i] = product(sub_mod(load(r), sum, p), c.inverses[i], c.primes[i]);
+        }
+        let (mut negative, mut equal): (__mmask8, __mmask8) = (0, 0xff);
+        for i in (0..K).rev() {
+            let h = splat(c.half[i]);
+            negative |= equal & _mm512_cmpgt_epu64_mask(digits[i], h);
+            equal &= _mm512_cmpeq_epu64_mask(digits[i], h);
+        }
+        let mut x = splat(0);
+        for (d, w) in digits.iter().zip(&c.prefixes_q) {
+            x = csub(_mm512_add_epi64(x, product(*d, *w, c.q)), q);
+        }
+        let less = sub_mod(x, splat(c.product_q), q);
+        store(o, _mm512_mask_blend_epi64(negative, x, less));
+    }
+    8 * head.len()
+}
+
+/// The residues modulo the prime $`p`$ of `t` of the centred representatives of `a`, canonical
+/// below $`q<2^{63}`$ with $`\lfloor q/2\rfloor=`$ `half`, for $`q\ge2p`$, where centred values
+/// exceed $`p`$: each value $`a=h2^{52}+l`$ as $`l+h(2^{52}\bmod p)`$, below $`3p`$ since
+/// $`h<2^{11}`$ and $`2^{52}\bmod p=2(2^{51}-p)<2^{18}`$ for the primes of [`IFMA_PRIMES`],
+/// reduced by two conditional subtractions, then less $`q\bmod p`$ (`q_mod_p`) above `half`.
+#[target_feature(enable = "avx512f")]
+pub(super) fn centred_large(t: &IfmaPlan, a: &[u64], half: u64, q_mod_p: u64, out: &mut [u64]) {
+    debug_assert!(a.len() == out.len() && t.r.0 < 1 << 18);
+    let (p, two_p, c52) = (splat(t.p), splat(2 * t.p), splat(t.r.0));
+    let (mask, hv, qp) = (splat(MASK52), splat(half), splat(q_mod_p));
+    let (head, tail) = a.as_chunks::<8>();
+    let (oh, ot) = out.as_chunks_mut::<8>();
+    for (x, o) in head.iter().zip(oh) {
+        let v = load(x);
+        let s = _mm512_add_epi64(
+            _mm512_and_si512(v, mask),
+            _mm512_mul_epu32(_mm512_srli_epi64::<52>(v), c52),
+        );
+        let r = csub(csub(s, two_p), p);
+        let above = _mm512_cmpgt_epu64_mask(v, hv);
+        store(o, _mm512_mask_blend_epi64(above, r, sub_mod(r, qp, p)));
+    }
+    for (x, o) in tail.iter().zip(ot) {
+        let r = x % t.p;
+        *o = if *x > half {
+            crate::math::ntt::sub_mod(r, q_mod_p, t.p)
+        } else {
+            r
+        };
+    }
+}
+
+/// The CRT of [`small_crt`] for IFMA primes and $`2^{51}\le q<2^{63}`$: Garner's digits with
+/// IFMA products modulo the primes, as there, and their sum $`\sum_iv_i(M_i\bmod q)`$ with the
+/// 64-bit Shoup products of `modular_avx512`, which $`q`$ needs. Each step gives the residue
+/// that the 64-bit kernel gives. Returns how many coefficients it wrote, a multiple of eight.
+#[target_feature(enable = "avx512f,avx512dq,avx512ifma")]
+pub(super) fn small_crt_mixed<const K: usize>(
+    residues: &[&[u64]; K],
+    c: &CrtConstants<K>,
+    out: &mut [u64],
+) -> usize {
+    debug_assert!(c.q < 1 << 63 && c.primes.iter().all(|p| *p < 1 << 51));
+    let mask = splat(MASK52);
+    let product = |d: __m512i, (w, ws): (u64, u64), p: u64| {
+        csub(
+            shoup52(d, splat(w), splat(ws >> 12), splat((1 << 52) - p), mask),
+            splat(p),
+        )
+    };
+    let q = splat(c.q);
+    let (head, _) = out.as_chunks_mut::<8>();
+    for (chunk, o) in head.iter_mut().enumerate() {
+        let j = 8 * chunk;
+        let mut digits = [splat(0); K];
+        for i in 0..K {
+            let p = splat(c.primes[i]);
+            let mut sum = splat(0);
+            for (t, d) in digits[..i].iter().enumerate() {
+                sum = csub(
+                    _mm512_add_epi64(sum, product(*d, c.prefixes[i][t], c.primes[i])),
+                    p,
+                );
+            }
+            let r: &[u64; 8] = residues[i][j..j + 8].try_into().expect("eight residues");
+            digits[i] = product(sub_mod(load(r), sum, p), c.inverses[i], c.primes[i]);
+        }
+        let (mut negative, mut equal): (__mmask8, __mmask8) = (0, 0xff);
+        for i in (0..K).rev() {
+            let h = splat(c.half[i]);
+            negative |= equal & _mm512_cmpgt_epu64_mask(digits[i], h);
+            equal &= _mm512_cmpeq_epu64_mask(digits[i], h);
+        }
+        let mut x = splat(0);
+        for (d, (w, ws)) in digits.iter().zip(&c.prefixes_q) {
+            let t = super::modular_avx512::shoup(*d, splat(*w), splat(*ws), q);
+            x = csub(_mm512_add_epi64(x, t), q);
+        }
+        let less = sub_mod(x, splat(c.product_q), q);
+        store(o, _mm512_mask_blend_epi64(negative, x, less));
+    }
+    8 * head.len()
 }

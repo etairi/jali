@@ -56,6 +56,27 @@ fn construction_accepts_exactly_the_supported_moduli_and_degrees() {
         for d in [64, 128, 256] {
             let ring = Rq::new(q, d).unwrap();
             assert_eq!((ring.modulus(), ring.degree()), (q, d));
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            if !ring.ifma.is_empty() {
+                // The fewest primes of IFMA_PRIMES whose product exceeds 2^(need + 1), checked
+                // from the products themselves: with one prime fewer it does not.
+                let need = 30 + d.trailing_zeros() + 2 * (64 - q.leading_zeros());
+                let product = |k: usize| {
+                    crate::simd::IFMA_PRIMES[..k]
+                        .iter()
+                        .fold(crate::math::U256::ONE, |acc, (p, _)| {
+                            acc.wrapping_mul(&crate::math::U256::from_u64(*p))
+                        })
+                };
+                let exceeds =
+                    |k: usize| product(k).shr_vartime(need + 1) != crate::math::U256::ZERO;
+                let k = ring.primes();
+                assert!(
+                    exceeds(k) && !exceeds(k - 1),
+                    "q {q} d {d}: {k} IFMA primes"
+                );
+                continue;
+            }
             // Two primes up to 2^40, three above.
             assert_eq!(ring.primes(), if q < 1 << 40 { 2 } else { 3 });
         }
