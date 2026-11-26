@@ -179,7 +179,7 @@ The proofs of the LNP22 modules and their transcripts are those of 0.2.0, in bot
   4.2 times (the largest proof's from 601 to 225 MiB), and the memory that Kyber1024 proofs and
   their verification allocate 6.3 to 8.5 times.
 - **Faster again, with byte-identical proofs.** Measured on an Apple M4, one thread, against the
-  0.3.0 work before these changes (commit 9bb4c07):
+  0.3.0 work before these changes (commit fdb6435):
   - The evaluation proof combines the 256 projection rows of a family with the weights of each
     challenge row before projecting them, so it projects once per challenge row instead of
     once per projection row.
