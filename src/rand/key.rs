@@ -2,7 +2,8 @@
 //! deterministic signature nonces (EdDSA, RFC 6979). Calls that differ in any input read
 //! different keys; identical calls read identical ones.
 use crate::sponge::Shake128;
-use zeroize::{Zeroize, Zeroizing};
+
+use crate::wipe::Secret;
 
 /// Version tag, the first field of every derivation.
 const PREFIX: &[u8] = b"jali/key/v1";
@@ -11,7 +12,7 @@ const PREFIX: &[u8] = b"jali/key/v1";
 /// \,f(part_1)\,\|\cdots\|\,f(part_n)`$, where $`f(x)=\mathrm{LE64}(|x|)\,\|\,x`$.
 ///
 /// Every field carries its length, so distinct field sequences give distinct inputs.
-pub(crate) fn derive_key(label: &[u8], seed: &[u8; 32], parts: &[&[u8]]) -> Zeroizing<[u8; 32]> {
+pub(crate) fn derive_key(label: &[u8], seed: &[u8; 32], parts: &[&[u8]]) -> Secret<[u8; 32]> {
     let mut h = Shake128::default();
     for field in [PREFIX, label, seed.as_slice()]
         .into_iter()
@@ -20,7 +21,7 @@ pub(crate) fn derive_key(label: &[u8], seed: &[u8; 32], parts: &[&[u8]]) -> Zero
         h.update(&(field.len() as u64).to_le_bytes());
         h.update(field);
     }
-    let mut key = Zeroizing::new([0u8; 32]);
+    let mut key = Secret::new([0u8; 32]);
     h.finalize_xof().read(&mut *key);
     #[cfg(test)]
     super::stream_log::derived(seed, &key);
@@ -28,9 +29,9 @@ pub(crate) fn derive_key(label: &[u8], seed: &[u8; 32], parts: &[&[u8]]) -> Zero
 }
 
 /// Move a seed argument into a buffer that is wiped on drop, and wipe the argument.
-pub(crate) fn take_seed(seed: &mut [u8; 32]) -> Zeroizing<[u8; 32]> {
-    let out = Zeroizing::new(*seed);
-    seed.zeroize();
+pub(crate) fn take_seed(seed: &mut [u8; 32]) -> Secret<[u8; 32]> {
+    let out = Secret::new(*seed);
+    crate::wipe::zeroize(seed);
     out
 }
 

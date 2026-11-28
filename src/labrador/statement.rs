@@ -10,9 +10,9 @@ use super::{
     params::{Shape, pair_index},
     ring::Rq,
 };
+use crate::wipe::Secret;
 use crate::{Error, transcript::Transcript};
 use std::sync::Arc;
-use zeroize::Zeroizing;
 
 /// A dot-product function $`f(s)=\sum a_{ij}\langle s_i,s_j\rangle+\sum_i\langle\varphi_i,
 /// s_i\rangle-b`$. Polynomials are given by their $`d`$ canonical coefficients in $`[0,q)`$.
@@ -236,10 +236,10 @@ impl Statement {
         if norm > self.norm_sq {
             return Err(Error::Witness);
         }
-        let hats: Zeroizing<Vec<Vec<u64>>> = Zeroizing::new(crate::par::map(self.r, |i| {
+        let hats: Secret<Vec<Vec<u64>>> = Secret::new(crate::par::map(self.r, |i| {
             ring.ntt_many(&witness.vectors[i])
         }));
-        let pairs = Zeroizing::new(all_pairs(ring, &hats));
+        let pairs = Secret::new(all_pairs(ring, &hats));
         // Each constraint on its own (in parallel with `parallel`).
         let full_ok = crate::par::map(self.full.len(), |j| {
             let c = &self.full[j];
@@ -266,17 +266,17 @@ impl Statement {
 /// vectors, their pair products $`\langle s_i,s_j\rangle`$ ([`all_pairs`]) and the squared
 /// norm, the transforms and products wiped on drop.
 pub(crate) struct Derived {
-    pub(crate) hats: Zeroizing<Vec<Vec<u64>>>,
-    pub(crate) pairs: Zeroizing<Vec<Vec<u64>>>,
+    pub(crate) hats: Secret<Vec<Vec<u64>>>,
+    pub(crate) pairs: Secret<Vec<Vec<u64>>>,
     pub(crate) norm_sq: u128,
 }
 
 impl Derived {
     /// The transforms, pair products and squared norm of `witness`.
-    pub(crate) fn of(ring: &Rq, witness: &[Zeroizing<Vec<u64>>]) -> Self {
-        let hats: Zeroizing<Vec<Vec<u64>>> =
-            Zeroizing::new(witness.iter().map(|v| ring.ntt_many(v)).collect());
-        let pairs = Zeroizing::new(all_pairs(ring, &hats));
+    pub(crate) fn of(ring: &Rq, witness: &[Secret<Vec<u64>>]) -> Self {
+        let hats: Secret<Vec<Vec<u64>>> =
+            Secret::new(witness.iter().map(|v| ring.ntt_many(v)).collect());
+        let pairs = Secret::new(all_pairs(ring, &hats));
         let norm_sq = witness
             .iter()
             .map(|v| ring.norm_sq(v))
@@ -292,7 +292,7 @@ impl Derived {
 /// A witness: $`r`$ vectors of $`nd`$ canonical coefficients, wiped on drop.
 #[derive(Clone)]
 pub struct Witness {
-    pub(crate) vectors: Vec<Zeroizing<Vec<u64>>>,
+    pub(crate) vectors: Vec<Secret<Vec<u64>>>,
 }
 
 impl core::fmt::Debug for Witness {
@@ -309,8 +309,8 @@ impl Witness {
             vectors: vectors
                 .into_iter()
                 .map(|v| {
-                    let v = Zeroizing::new(v);
-                    Zeroizing::new(v.iter().map(|x| ring.lift(*x)).collect())
+                    let v = Secret::new(v);
+                    Secret::new(v.iter().map(|x| ring.lift(*x)).collect())
                 })
                 .collect(),
         }

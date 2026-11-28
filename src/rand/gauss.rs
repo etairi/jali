@@ -4,8 +4,9 @@ use super::{
     reject::Variance,
 };
 use crate::Error;
+use crate::wipe::Secret;
 use crypto_bigint::U256;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 
 #[cfg(test)]
 mod oracle_tests;
@@ -124,6 +125,9 @@ fn exact_cutoff(a: u128, v: u128, variance: Variance) -> Result<U256, Error> {
 }
 impl<S> Drop for Sampler<'_, S> {
     fn drop(&mut self) {
+        if !crate::wipe::ENABLED {
+            return;
+        }
         self.signs.zeroize();
         self.value.zeroize();
         self.uniform.zeroize();
@@ -165,7 +169,7 @@ pub fn gaussian(
     // Offset bits per coefficient: t - 1, and none at t = 0. At most 99 bits for at most 2^24
     // coefficients, so the bit count stays below 2^31.
     let offset = log_sigma.saturating_sub(1);
-    let mut bytes = Zeroizing::new(vec![0u8; (count * offset as usize).div_ceil(8)]);
+    let mut bytes = Secret::new(vec![0u8; (count * offset as usize).div_ceil(8)]);
     stream.fill(&mut bytes)?;
     let mut sampler = Sampler {
         stream,
@@ -174,7 +178,7 @@ pub fn gaussian(
         value: [0; 32],
         uniform: [0; 32],
     };
-    let mut out = Zeroizing::new(Vec::with_capacity(count));
+    let mut out = Secret::new(Vec::with_capacity(count));
     for i in 0..count {
         if log_sigma == 0 {
             out.push(sampler.narrow()?);

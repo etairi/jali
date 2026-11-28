@@ -5,6 +5,7 @@
 //! sends $`t+c^*E`$ passes at $`c^*`$ and fails at every other $`c`$ with $`c(c-c^*)E\ne0`$;
 //! for a true one, two accepting challenges of one first message give the witness back.
 use super::*;
+use crate::wipe::Secret;
 
 /// The equation of `tests/quadratic.rs`, whose value at the committed witness is `offset`.
 fn fixture(offset: i128) -> (Abdlop, Commitment, Opening, QuadEq) {
@@ -77,7 +78,7 @@ fn fork(
         opening,
         equation,
         &binding,
-        &Zeroizing::new([seed; 32]),
+        &Secret::new([seed; 32]),
         |t, v, w1| Ok((c.clone(), (t.clone(), v.clone(), w1.clone()))),
     )
     .unwrap()

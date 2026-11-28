@@ -2,6 +2,7 @@
 //! the plain mode, tampering, and straight-line extraction of the committed witness from one
 //! proof with a trapdoored LinHC key.
 use super::*;
+use crate::wipe::Secret;
 use crate::{
     abdlop::{add, part, scale, scale_scalar, sub},
     linhc::{LinhcOpening, decrypt},
@@ -218,7 +219,7 @@ fn a_trapdoor_extracts_the_committed_witness_from_one_proof() {
         &s1,
         &m,
         b"extract",
-        &Zeroizing::new([3; 32]),
+        &Secret::new([3; 32]),
         Some(&key),
     )
     .unwrap();

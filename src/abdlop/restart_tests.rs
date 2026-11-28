@@ -3,6 +3,7 @@
 //! reaches q/2, and the refusals of `commit_with_randomness`.
 use super::*;
 use crate::abdlop::verifier_check_tests::with_norm;
+use crate::wipe::Secret;
 
 #[test]
 fn restarts_are_taken_and_the_attempt_limit_is_enforced() {
@@ -27,7 +28,7 @@ fn restarts_are_taken_and_the_attempt_limit_is_enforced() {
                 &opening,
                 Caller::Opening,
                 &prefix.binding(),
-                &Zeroizing::new([seed; 32]),
+                &Secret::new([seed; 32]),
                 attempts,
                 |_, _, w1| Ok((scheme.challenge(&prefix, w1)?, ())),
             )
@@ -47,7 +48,7 @@ fn restarts_are_taken_and_the_attempt_limit_is_enforced() {
 
 #[test]
 fn a_mask_width_reaching_q_over_2_is_a_parameter_error() {
-    let key = Zeroizing::new([5; 32]);
+    let key = Secret::new([5; 32]);
     let ring = Ring::new(13, 64).unwrap();
     assert_eq!(
         sample_gaussian(ring.clone(), 2, 10, &key, 0).err(),
@@ -83,7 +84,7 @@ fn the_joint_norm_check_restarts_the_prover() {
                 opening,
                 Caller::Opening,
                 &prefix.binding(),
-                &Zeroizing::new([94; 32]),
+                &Secret::new([94; 32]),
                 attempts,
                 |_, _, w1| Ok((scheme.challenge(&prefix, w1)?, ())),
             )

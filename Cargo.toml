@@ -1,10 +1,10 @@
 [package]
 name = "jali"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
-description = "Lattice-based zero-knowledge proofs in Rust: the LNP22 proof system (ePrint 2022/284)"
+description = "Lattice-based proofs in Rust: the LNP22 zero-knowledge proof system (ePrint 2022/284) and the LaBRADOR succinct proof system (ePrint 2022/1341)"
 repository = "https://github.com/etairi/jali"
 documentation = "https://docs.rs/jali"
 readme = "README.md"

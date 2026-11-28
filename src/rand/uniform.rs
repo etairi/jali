@@ -1,10 +1,10 @@
 use super::ByteStream;
+use crate::wipe::Secret;
 use crate::{
     Error,
     math::{Poly, Ring, U256, int},
 };
 use std::sync::Arc;
-use zeroize::Zeroizing;
 
 #[cfg(test)]
 mod oracle_tests;
@@ -57,13 +57,13 @@ pub fn uniform(
         return Ok(vec![0; count]);
     }
     let mbits = 128 - (modulus - 1).leading_zeros();
-    let mut out = Zeroizing::new(Vec::with_capacity(count));
+    let mut out = Secret::new(Vec::with_capacity(count));
     for _ in 0..1024 {
         let missing = count - out.len();
         if missing == 0 {
             return Ok(std::mem::take(&mut *out));
         }
-        let mut bytes = Zeroizing::new(vec![0u8; (missing * mbits as usize).div_ceil(8)]);
+        let mut bytes = Secret::new(vec![0u8; (missing * mbits as usize).div_ceil(8)]);
         stream.fill(&mut bytes)?;
         for i in 0..missing {
             let value = bits(&bytes, i * mbits as usize, mbits);
@@ -87,25 +87,25 @@ pub fn uniform_u256(
     count: usize,
 ) -> Result<Vec<U256>, Error> {
     if let Some(m) = int::to_u128(modulus) {
-        let values = Zeroizing::new(uniform(stream, m, count)?);
+        let values = Secret::new(uniform(stream, m, count)?);
         return Ok(values.iter().map(|x| U256::from_u128(*x)).collect());
     }
     if count > (1 << 24) {
         return Err(Error::Parameter("uniform sampler dimensions"));
     }
     let mbits = int::bits(&modulus.wrapping_sub(&U256::ONE)) as usize;
-    let mut out = Zeroizing::new(Vec::with_capacity(count));
+    let mut out = Secret::new(Vec::with_capacity(count));
     for _ in 0..1024 {
         let missing = count - out.len();
         if missing == 0 {
             return Ok(std::mem::take(&mut *out));
         }
-        let mut bytes = Zeroizing::new(vec![0u8; (missing * mbits).div_ceil(8)]);
+        let mut bytes = Secret::new(vec![0u8; (missing * mbits).div_ceil(8)]);
         stream.fill(&mut bytes)?;
         for i in 0..missing {
             // mbits >= 128 here: the low 128 bits, then the rest.
             let start = i * mbits;
-            let mut word = Zeroizing::new([0u8; 32]);
+            let mut word = Secret::new([0u8; 32]);
             word[..16].copy_from_slice(&bits(&bytes, start, 128).to_le_bytes());
             word[16..]
                 .copy_from_slice(&bits(&bytes, start + 128, mbits as u32 - 128).to_le_bytes());
@@ -220,7 +220,7 @@ pub fn bounded(
         .and_then(|x| x.checked_add(1))
         .filter(|x| *x > 0)
         .ok_or(Error::Parameter("uniform interval"))?;
-    let values = Zeroizing::new(uniform(stream, width as u128, count)?);
+    let values = Secret::new(uniform(stream, width as u128, count)?);
     Ok(values.iter().map(|x| *x as i128 + low).collect())
 }
 
@@ -233,7 +233,7 @@ pub fn binomial(stream: &mut impl ByteStream, k: usize, count: usize) -> Result<
         .checked_mul(count)
         .and_then(|x| x.checked_mul(2))
         .ok_or(Error::Overflow)?;
-    let mut bytes = Zeroizing::new(vec![0u8; nbits.div_ceil(8)]);
+    let mut bytes = Secret::new(vec![0u8; nbits.div_ceil(8)]);
     stream.fill(&mut bytes)?;
     Ok((0..count)
         .map(|i| {
@@ -255,7 +255,7 @@ pub fn autostable(
     if omega < 1 || U256::from_u128(omega as u128) >= ring.half {
         return Err(Error::Parameter("challenge bound"));
     }
-    let first = Zeroizing::new(bounded(stream, -omega, omega, ring.degree() / 2)?);
+    let first = Secret::new(bounded(stream, -omega, omega, ring.degree() / 2)?);
     let mut coeffs = vec![0; ring.degree()];
     coeffs[..first.len()].copy_from_slice(&first);
     for i in 1..first.len() {

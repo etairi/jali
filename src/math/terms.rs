@@ -13,8 +13,9 @@ use std::sync::Arc;
 use zeroize::Zeroize;
 
 /// The shape of a polynomial for products: zero, a scalar $`c`$, a monomial $`cX^k`$ with
-/// $`1\le k<d`$, or general.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// $`1\le k<d`$, or general. `Debug` prints nothing of it: the shape of a secret polynomial and
+/// its coefficient are secret.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Shape {
     Zero,
     Scalar(U256),
@@ -57,11 +58,23 @@ impl Zeroize for Shape {
     }
 }
 
+impl core::fmt::Debug for Shape {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Shape(..)")
+    }
+}
+
 /// A polynomial classified once and, if general, transformed once, for repeated products.
-#[derive(Clone, Debug)]
+/// `Debug` prints nothing of it, as for [`Shape`].
+#[derive(Clone)]
 pub(crate) enum Term {
     Cheap(Shape),
     General(PolyNtt),
+}
+impl core::fmt::Debug for Term {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Term(..)")
+    }
 }
 impl Term {
     pub(crate) fn new(p: &Poly) -> Self {

@@ -2,6 +2,7 @@
 //! directly: the honest next witness satisfies each of them, and on an arbitrary witness the
 //! aggregation equals $`\sum_k\alpha_k e_k`$ of the explicit equations $`e_k`$.
 use super::*;
+use crate::wipe::Secret;
 use crate::{
     labrador::{
         Policy,
@@ -28,7 +29,7 @@ fn ctx(ring: &Arc<Rq>) -> Ctx {
 }
 
 /// The explicit equations $`e_k(w)`$ of the next statement, in its order.
-fn explicit(next: &Next, w: &[Zeroizing<Vec<u64>>]) -> Vec<Vec<u64>> {
+fn explicit(next: &Next, w: &[Secret<Vec<u64>>]) -> Vec<Vec<u64>> {
     let ring = &next.ring;
     let (p, l) = (&next.params, &next.layout);
     let d = ring.degree();
@@ -159,8 +160,8 @@ fn the_next_statement_is_the_verification_equations() {
     let d = ring.degree();
     let q = ring.modulus();
     let shape = next.shape();
-    let random: Vec<Zeroizing<Vec<u64>>> = (0..shape.r)
-        .map(|_| Zeroizing::new((0..shape.n * d).map(|_| rng.below(q)).collect()))
+    let random: Vec<Secret<Vec<u64>>> = (0..shape.r)
+        .map(|_| Secret::new((0..shape.n * d).map(|_| rng.below(q)).collect()))
         .collect();
     let alpha: Vec<Vec<u64>> = (0..next.full_count())
         .map(|_| (0..d).map(|_| rng.below(q)).collect())

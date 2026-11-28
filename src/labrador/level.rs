@@ -15,6 +15,7 @@ use super::{
     sample::{ChallengeSet, Matrix, PROJECTION_BLOCK, Projection, purpose},
     statement::{Aggregate, Derived, Relation},
 };
+use crate::wipe::Secret;
 use crate::{
     Error,
     codec::{BitReader, BitWriter},
@@ -25,10 +26,9 @@ use crate::{
     transcript::Transcript,
 };
 use std::sync::Arc;
-use zeroize::Zeroizing;
 
 /// The next statement and its witness.
-pub(crate) type NextLevel = (Next, Vec<Zeroizing<Vec<u64>>>);
+pub(crate) type NextLevel = (Next, Vec<Secret<Vec<u64>>>);
 
 /// The attempts of a level before the prover gives up.
 const MAX_ATTEMPTS: u8 = 64;
@@ -210,7 +210,7 @@ fn project(
     ring: &Rq,
     seed: &[u8; 32],
     level: u32,
-    witness: &[Zeroizing<Vec<u64>>],
+    witness: &[Secret<Vec<u64>>],
 ) -> Result<[i128; 256], Error> {
     // With every centred coefficient at most M in magnitude, a lane of i32 takes
     // floor((2^31 - 1)/M) steps of at most M before it could overflow, so the lanes are added
@@ -231,7 +231,7 @@ fn project(
     // Block by block, each on its own reader, and the exact integer sums of the blocks.
     let mut p = [0i128; 256];
     for wave in (0..blocks).step_by(WAVE) {
-        let parts = Zeroizing::new(crate::par::try_map(WAVE.min(blocks - wave), |w| {
+        let parts = Secret::new(crate::par::try_map(WAVE.min(blocks - wave), |w| {
             let block = wave + w;
             let range = block_range(block, per_block, total);
             let mut projection = Projection::at(seed, level, block * BLOCK_BUFFERS)?;
@@ -257,7 +257,7 @@ const WAVE: usize = 64;
 
 /// The coefficients `range` of the witness vectors put end to end, in order.
 fn coefficients(
-    witness: &[Zeroizing<Vec<u64>>],
+    witness: &[Secret<Vec<u64>>],
     range: core::ops::Range<usize>,
 ) -> impl Iterator<Item = &u64> {
     let mut start = 0;
@@ -293,12 +293,12 @@ fn project_bytes<'a>(
         }
     }
     let mut p = [0i128; 256];
-    let mut lanes = Zeroizing::new([[0i8; 64]; 4]);
-    let mut wide = Zeroizing::new([[0i32; 64]; 4]);
+    let mut lanes = Secret::new([[0i8; 64]; 4]);
+    let mut wide = Secret::new([[0i32; 64]; 4]);
     // Up to `flush` columns of nonzero coefficients at a time, then their sums into the 32-bit
     // lanes.
     let mut columns = vec![[0u8; 64]; flush];
-    let mut values = Zeroizing::new(vec![0i8; flush]);
+    let mut values = Secret::new(vec![0i8; flush]);
     let mut batches = 0;
     loop {
         let (mut count, mut more) = (0, true);
@@ -361,7 +361,7 @@ fn project_lanes<'a>(
     flush: usize,
 ) -> Result<[i128; 256], Error> {
     let mut p = [0i128; 256];
-    let mut lanes = Zeroizing::new([0i32; 256]);
+    let mut lanes = Secret::new([0i32; 256]);
     let mut steps = 0;
     let mut column = [0u8; 64];
     for x in coefficients {
@@ -418,7 +418,7 @@ fn project_wide(
     ring: &Rq,
     seed: &[u8; 32],
     level: u32,
-    witness: &[Zeroizing<Vec<u64>>],
+    witness: &[Secret<Vec<u64>>],
 ) -> Result<[i128; 256], Error> {
     let total = witness.iter().map(|v| v.len()).sum();
     let mut projection = Projection::new(seed, level);
@@ -1136,10 +1136,10 @@ fn combine_hats(
     c_hats: &[Vec<u64>],
     v_hats: &[impl AsRef<[u64]>],
     n: usize,
-) -> Zeroizing<Vec<u64>> {
+) -> Secret<Vec<u64>> {
     let (d, k) = (ring.degree(), ring.hat_len());
-    let mut out = Zeroizing::new(vec![0u64; n * d]);
-    let mut acc = Zeroizing::new(vec![0u64; k]);
+    let mut out = Secret::new(vec![0u64; n * d]);
+    let mut acc = Secret::new(vec![0u64; k]);
     for (x, poly) in out.chunks_exact_mut(d).enumerate() {
         acc.fill(0);
         for (c_hat, v) in c_hats.iter().zip(v_hats) {
@@ -1209,7 +1209,7 @@ fn evaluate_with(
 pub(crate) fn prove<R: Relation>(
     ctx: &Ctx,
     rel: &R,
-    witness: &[Zeroizing<Vec<u64>>],
+    witness: &[Secret<Vec<u64>>],
     level: u32,
     transcript: &mut Transcript,
     out: &mut Vec<u8>,
@@ -1256,7 +1256,7 @@ pub(crate) fn prove<R: Relation>(
 fn attempt_level<R: Relation>(
     ctx: &Ctx,
     rel: &R,
-    witness: &[Zeroizing<Vec<u64>>],
+    witness: &[Secret<Vec<u64>>],
     hats: &[Vec<u64>],
     pairs: &[Vec<u64>],
     level: u32,
@@ -1276,13 +1276,13 @@ fn attempt_level<R: Relation>(
 
     // Inner commitments t_i = A s_i, all i at once, row by row.
     let kappa = params.kappa;
-    let mut t_vecs = Zeroizing::new(vec![vec![0u64; kappa * d]; r]);
+    let mut t_vecs = Secret::new(vec![vec![0u64; kappa * d]; r]);
     {
         let mut a = Matrix::new(ring, &ctx.pp_seed, purpose::MATRIX_A, level);
         let mut entry = vec![0u64; d];
         let mut entry_hat = vec![0u64; k];
         for row in 0..kappa {
-            let mut accs = Zeroizing::new(vec![vec![0u64; k]; r]);
+            let mut accs = Secret::new(vec![vec![0u64; k]; r]);
             for x in 0..n {
                 a.next_poly(&mut entry)?;
                 ring.ntt_into(&entry, &mut entry_hat);
@@ -1297,16 +1297,16 @@ fn attempt_level<R: Relation>(
     }
 
     // v = t̂ ‖ ĝ ‖ ĥ: the first two parts now.
-    let mut v = Zeroizing::new(vec![0u64; layout.m * d]);
+    let mut v = Secret::new(vec![0u64; layout.m * d]);
     for (i, ti) in t_vecs.iter().enumerate() {
-        let digits = Zeroizing::new(decompose(ring, ti, params.b1, params.t1));
+        let digits = Secret::new(decompose(ring, ti, params.b1, params.t1));
         for (digit, part) in digits.iter().enumerate() {
             let y = (i * params.t1 + digit) * kappa;
             v[y * d..(y + kappa) * d].copy_from_slice(part);
         }
     }
     for (pair, g) in pairs.iter().enumerate() {
-        let digits = Zeroizing::new(decompose(ring, g, params.b2, params.t2));
+        let digits = Secret::new(decompose(ring, g, params.b2, params.t2));
         for (digit, part) in digits.iter().enumerate() {
             let y = layout.off_g + pair * params.t2 + digit;
             v[y * d..(y + 1) * d].copy_from_slice(part);
@@ -1317,7 +1317,7 @@ fn attempt_level<R: Relation>(
         purpose::MATRIX_B,
         level,
         params.kappa1,
-        &Zeroizing::new(ring.ntt_many(&v[..layout.off_h * d])),
+        &Secret::new(ring.ntt_many(&v[..layout.off_h * d])),
     )?;
     let bytes = encode_residues(q, &u1)?;
     debug_assert_eq!(bytes.len(), sizes.u1);
@@ -1343,7 +1343,7 @@ fn attempt_level<R: Relation>(
         psi.push(squeeze_residues(t, q, l_count)?);
         omega.push(squeeze_residues(t, q, 256)?);
     }
-    let values = Zeroizing::new(rel.constant_term_values(hats, pairs));
+    let values = Secret::new(rel.constant_term_values(hats, pairs));
     let lambda = ctx.lambda;
     let mut accs = vec![vec![0u64; k]; lambda];
     let mut kept = Kept::new(ring, lambda, &shape);
@@ -1425,12 +1425,12 @@ fn attempt_level<R: Relation>(
     // Garbage h and the second outer commitment.
     for i in 0..r {
         for j in i..r {
-            let mut h = Zeroizing::new(ring.inner_hat(&phi_hats[i], &hats[j]));
+            let mut h = Secret::new(ring.inner_hat(&phi_hats[i], &hats[j]));
             if i != j {
                 ring.add_assign(&mut h, &ring.inner_hat(&phi_hats[j], &hats[i]));
             }
             let pair = pair_index(i, j, r);
-            let digits = Zeroizing::new(decompose(ring, &h, params.b1, params.t1));
+            let digits = Secret::new(decompose(ring, &h, params.b1, params.t1));
             for (digit, part) in digits.iter().enumerate() {
                 let y = layout.off_h + pair * params.t1 + digit;
                 v[y * d..(y + 1) * d].copy_from_slice(part);
@@ -1442,7 +1442,7 @@ fn attempt_level<R: Relation>(
         purpose::MATRIX_D,
         level,
         params.kappa2,
-        &Zeroizing::new(ring.ntt_many(&v[layout.off_h * d..])),
+        &Secret::new(ring.ntt_many(&v[layout.off_h * d..])),
     )?;
     let bytes = encode_residues(q, &u2)?;
     debug_assert_eq!(bytes.len(), sizes.u2);
@@ -1736,7 +1736,7 @@ pub(crate) fn encode_final(
     ring: &Rq,
     layout: &Layout,
     nu: usize,
-    witness: &[Zeroizing<Vec<u64>>],
+    witness: &[Secret<Vec<u64>>],
 ) -> Result<Vec<u8>, Error> {
     let d = ring.degree();
     let half = u128::from(ring.modulus() / 2);
@@ -1779,7 +1779,7 @@ pub(crate) fn decode_final(
     layout: &Layout,
     nu: usize,
     input: &mut &[u8],
-) -> Result<Vec<Zeroizing<Vec<u64>>>, Error> {
+) -> Result<Vec<Secret<Vec<u64>>>, Error> {
     let d = ring.degree();
     let half = u128::from(ring.modulus() / 2);
     let max_width = signed_width(half);
@@ -1826,7 +1826,7 @@ pub(crate) fn decode_final(
         };
         let mut v: Vec<u64> = values.iter().map(|x| ring.lift_i128(*x)).collect();
         v.resize(layout.n_next * d, 0);
-        out.push(Zeroizing::new(v));
+        out.push(Secret::new(v));
     }
     let pad = (8 - reader.position() % 8) % 8;
     if reader.unsigned(pad as u32)? != 0 {

@@ -6,6 +6,7 @@
 //! transcript after the range responses. Either way the garbage commitments are its first
 //! prover message, $`\Gamma`$ its first verifier message, $`h`$ its second prover message,
 //! and the many-equation proof of the final equations follows (`docs/encodings.md`).
+use crate::wipe::Secret;
 use crate::{
     Error,
     abdlop::{self, Abdlop, Commitment, Opening},
@@ -18,7 +19,6 @@ use crate::{
     transcript::{Protocol, Transcript},
 };
 use std::{borrow::Cow, sync::Arc};
-use zeroize::Zeroizing;
 
 #[cfg(test)]
 mod soundness_tests;
@@ -330,7 +330,7 @@ pub(crate) fn prove_seeded(
     eqs: &[QuadEq],
     evals: &[QuadEq],
     context: &[u8],
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
 ) -> Result<EvalProof, Error> {
     let transcript = transcript(scheme, commitment, eqs, evals, context)?;
     Ok(prove_in(
@@ -357,7 +357,7 @@ pub(crate) fn prove_in<E: EvalRows + ?Sized>(
     eqs: Cow<'_, [QuadEq]>,
     evals: &E,
     mut transcript: Transcript,
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
     ext: Option<&linhc::ProverExt<'_>>,
 ) -> Result<(EvalProof, Option<linhc::LinhcOpening>), Error> {
     let witness = quad::interleave(&opening.s1, &opening.m)?;

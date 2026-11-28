@@ -260,6 +260,11 @@ fn proves_the_seeded_instance(set: &Set) {
         .prove_bytes_with_seed([7; 32], &witness, CONTEXT, [9; 32])
         .unwrap();
     assert_eq!(bytes.len(), set.proof_bytes, "{}", set.name);
+    // The seed by reference gives the same proof.
+    let by_ref = compiled
+        .prove_bytes_with_seed_ref([7; 32], &witness, CONTEXT, &[9; 32])
+        .unwrap();
+    assert_eq!(by_ref, bytes, "{}", set.name);
     compiled.verify_bytes([7; 32], &bytes, CONTEXT).unwrap();
     let mut tampered = bytes.clone();
     tampered[bytes.len() / 2] ^= 1;
@@ -374,6 +379,11 @@ fn proves_extractably(set: &Set, extraction: fn() -> ExtractionParams) -> usize 
     compiled
         .verify_extractable_bytes([7; 32], &extraction, &bytes, CONTEXT)
         .unwrap();
+    // The seed by reference gives the same proof.
+    let by_ref = compiled
+        .prove_extractable_bytes_with_seed_ref([7; 32], &extraction, &witness, CONTEXT, &[9; 32])
+        .unwrap();
+    assert_eq!(by_ref, bytes, "{}", set.name);
     // A flipped bit in the toolbox part and one in the LinHC part.
     for at in [bytes.len() / 4, bytes.len() - 9] {
         let mut tampered = bytes.clone();

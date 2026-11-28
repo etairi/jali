@@ -5,6 +5,7 @@
 //! value u = (1 mod q1, -1 mod q2) as a sign, which squares to one, and projects the short
 //! vector u*x instead of the committed long vector x.
 use super::*;
+use crate::wipe::Secret;
 use crate::{
     lnp::{AffineBlock, L2Block},
     math::PolyMat,
@@ -157,7 +158,7 @@ fn forge(
         )
         .unwrap();
         transcript.absorb(&range_message(scheme, &ze, &zd).unwrap());
-        let mut proof_seed = Zeroizing::new([0u8; 32]);
+        let mut proof_seed = Secret::new([0u8; 32]);
         random.fill(&mut *proof_seed).unwrap();
         let (evaluation, _) = quad_eval::prove_in(
             &extended,

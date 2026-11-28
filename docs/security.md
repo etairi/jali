@@ -10,9 +10,11 @@ a vulnerability, see [SECURITY.md](../SECURITY.md).
 - **Variable time.** Arithmetic, sampling, rejection and decoding run in variable time, so
   timing and memory access may depend on secret values. There is no constant-time guarantee.
 - **Zeroization is best effort.** Owned polynomial, transform, witness and random-state buffers
-  are wiped on drop, and so are seeds, once received, and the keys derived from them; the
-  caller's own copy of a seed is the caller's to wipe. Integer copies and compiler-generated
-  temporaries may remain on the stack.
+  are wiped on drop, and so are seeds, once received, and the keys derived from them.
+  `Zeroize::zeroize` wipes a `Poly`, a `PolyVec` or an `abdlop::Opening` on request. The caller's
+  own copy of a seed is the caller's to wipe: `Compiled::prove_bytes_with_seed_ref` and
+  `Compiled::prove_extractable_bytes_with_seed_ref` read it by reference, so that no copy of it
+  is passed by value. Integer copies and compiler-generated temporaries may remain on the stack.
 - **No `unsafe` code** (`#![forbid(unsafe_code)]`) and no C dependencies in the library, except
   with the `simd` feature (on by default) on x86-64, and `default-features = false` compiles
   none. There the module `simd` calls AVX-512 intrinsics, its loads and stores in `unsafe`

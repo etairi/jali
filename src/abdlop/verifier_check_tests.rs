@@ -4,6 +4,7 @@
 //! derivation of the challenge, which the last tests here check at both degrees.
 use super::*;
 use crate::rand::{challenge::draws_from_bytes, within_eta};
+use crate::wipe::Secret;
 
 /// A commitment to $`s_1=1`$ and $`m=3`$ (all coefficients) under `params`.
 pub(crate) fn commitment_for(params: TboxParams) -> (Abdlop, Commitment, Opening) {
@@ -284,7 +285,7 @@ fn first_draw_above_eta(params: TboxParams, from: u32) -> u32 {
                 &opening,
                 Caller::Opening,
                 &transcript.binding(),
-                &Zeroizing::new(search_seed(i)),
+                &Secret::new(search_seed(i)),
                 |_, _, w1| Ok((first_draw(w1)?, ())),
             )
             .unwrap();
@@ -348,7 +349,7 @@ fn a_first_draw_above_eta_is_redrawn_by_the_prover_and_refused_by_the_verifier()
                 &opening,
                 Caller::Opening,
                 &transcript.binding(),
-                &Zeroizing::new(search_seed(i)),
+                &Secret::new(search_seed(i)),
                 |_, _, w1| Ok((first_draw(w1)?, ())),
             )
             .unwrap();

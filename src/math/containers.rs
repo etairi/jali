@@ -3,19 +3,28 @@ use super::{
     constant::ConstantSum,
     terms::{Accumulator, Shape, Term},
 };
+use crate::wipe::Secret;
 use crate::{Error, params::moduli::NADDS};
 use crypto_bigint::U256;
 use std::{
     collections::BTreeMap,
     sync::{Arc, OnceLock},
 };
-use zeroize::Zeroizing;
 
 /// A ring-checked vector of polynomials, including empty vectors.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PolyVec {
     ring: Arc<Ring>,
     entries: Vec<Poly>,
+}
+impl zeroize::Zeroize for PolyVec {
+    /// Overwrites every entry with the zero polynomial ([`Poly`]'s `Zeroize`), keeping the
+    /// length.
+    fn zeroize(&mut self) {
+        for p in self.entries.iter_mut() {
+            p.zeroize();
+        }
+    }
 }
 impl PolyVec {
     /// Validate the ring of every entry.
@@ -304,8 +313,8 @@ impl PolyMat {
     /// from its nonzero entries visits those only.
     pub fn mul(&self, vector: &PolyVec) -> Result<PolyVec, Error> {
         self.check_vector(vector)?;
-        let shapes: Zeroizing<Vec<Shape>> =
-            Zeroizing::new(vector.entries.iter().map(Shape::of).collect());
+        let shapes: Secret<Vec<Shape>> =
+            Secret::new(vector.entries.iter().map(Shape::of).collect());
         let transformed = transform_where(vector, &shapes, &self.meets_general());
         self.rows_with(vector, &shapes, &transformed)
     }
@@ -319,8 +328,8 @@ impl PolyMat {
     ) -> Result<(PolyVec, PolyVec), Error> {
         self.check_vector(vector)?;
         other.check_vector(vector)?;
-        let shapes: Zeroizing<Vec<Shape>> =
-            Zeroizing::new(vector.entries.iter().map(Shape::of).collect());
+        let shapes: Secret<Vec<Shape>> =
+            Secret::new(vector.entries.iter().map(Shape::of).collect());
         let meets: Vec<bool> = self
             .meets_general()
             .iter()
@@ -813,7 +822,7 @@ impl SparsePolyMat {
         mut f: impl FnMut(usize, &Poly, &mut [Option<PolyNtt>]) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let ring = &self.ring;
-        let mut y_shapes: Zeroizing<Vec<Option<Shape>>> = Zeroizing::new(vec![None; y.len()]);
+        let mut y_shapes: Secret<Vec<Option<Shape>>> = Secret::new(vec![None; y.len()]);
         let mut y_ntt: Vec<Option<PolyNtt>> = vec![None; y.len()];
         let mut inner = Poly::zero(ring.clone());
         let mut inner_sum = Accumulator::new(ring);

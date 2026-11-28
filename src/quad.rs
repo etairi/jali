@@ -5,6 +5,7 @@
 //! and evaluation proofs it continues their transcript after the folding challenge. Either way
 //! its prover message is $`(t,v,w_1)`$, with the LinHC mask commitment before $`w_1`$ in the
 //! extractable mode, and its verifier message the challenge (`docs/encodings.md`).
+use crate::wipe::Secret;
 use crate::{
     Error,
     abdlop::{self, Abdlop, Caller, Commitment, Opening, OpeningProof},
@@ -18,7 +19,6 @@ use crate::{
     transcript::{Protocol, Transcript},
 };
 use std::{collections::BTreeMap, sync::Arc};
-use zeroize::Zeroizing;
 
 #[cfg(test)]
 mod constant_tests;
@@ -939,7 +939,7 @@ pub(crate) fn prove_seeded(
     opening: &Opening,
     equation: &QuadEq,
     context: &[u8],
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
 ) -> Result<QuadProof, Error> {
     let transcript = transcript(scheme, commitment, equation, context)?;
     Ok(prove_in(
@@ -963,7 +963,7 @@ pub(crate) fn prove_in(
     opening: &Opening,
     equation: &QuadEq,
     transcript: &Transcript,
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
     ext: Option<&linhc::ProverExt<'_>>,
 ) -> Result<(QuadProof, Option<linhc::LinhcOpening>), Error> {
     equation.check(scheme.ring(), dimension(scheme))?;
@@ -995,7 +995,7 @@ pub(crate) fn prove_core<U: Send>(
     opening: &Opening,
     equation: &QuadEq,
     binding: &[u8; 32],
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
     challenge: impl Fn(&Poly, &Poly, &PolyVec) -> Result<(Poly, U), Error> + Sync,
 ) -> Result<(QuadProof, U), Error> {
     let (proof, _, side) = prove_core_ext(
@@ -1123,7 +1123,7 @@ impl<'a> Quadratic<'a> {
             return Err(Error::RingMismatch);
         }
         let ring = &self.ring;
-        let mut shapes: Zeroizing<Vec<Option<Shape>>> = Zeroizing::new(vec![None; y.len()]);
+        let mut shapes: Secret<Vec<Option<Shape>>> = Secret::new(vec![None; y.len()]);
         let mut transforms: Vec<Option<PolyNtt>> = vec![None; y.len()];
         let mut out = Poly::zero(ring.clone());
         let mut outer = Accumulator::new(ring);
@@ -1178,7 +1178,7 @@ pub(crate) fn prove_core_ext<U: Send>(
     opening: &Opening,
     equation: &QuadEq,
     binding: &[u8; 32],
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
     ext: Option<&linhc::ProverExt<'_>>,
     challenge: impl Fn(
         &Poly,

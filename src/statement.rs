@@ -10,6 +10,7 @@
 //! the nonzero components are committed. Each block sits in the part of the commitment its
 //! declaration names ([`Placement`]). Parameters must be generated for the resulting shape and
 //! independently estimated.
+use crate::wipe::Secret;
 use crate::{
     Error,
     abdlop::Abdlop,
@@ -1752,14 +1753,17 @@ fn compile(source: Statement, params: TboxParams) -> Result<Compiled, Error> {
 /// Checked integer arithmetic for the lifted evaluation: `i128`, or 512 bits when a value does
 /// not fit.
 trait Integer: Copy + Default + Zeroize {
-    fn centred(p: &Poly) -> Option<Zeroizing<Vec<Self>>>;
+    fn centred(p: &Poly) -> Option<Secret<Vec<Self>>>;
     fn add(self, rhs: Self) -> Option<Self>;
     fn mul(self, rhs: Self) -> Option<Self>;
     fn neg(self) -> Option<Self>;
 }
 impl Integer for i128 {
-    fn centred(p: &Poly) -> Option<Zeroizing<Vec<Self>>> {
-        p.coefficients_i128().ok()
+    fn centred(p: &Poly) -> Option<Secret<Vec<Self>>> {
+        // The vector moves out of the public `Zeroizing` buffer, without a copy.
+        p.coefficients_i128()
+            .ok()
+            .map(|mut v| Secret::new(core::mem::take(&mut *v)))
     }
     fn add(self, rhs: Self) -> Option<Self> {
         self.checked_add(rhs)
@@ -1771,18 +1775,25 @@ impl Integer for i128 {
         self.checked_neg()
     }
 }
-/// A 512-bit integer; every centred 256-bit coefficient and every product of two fits.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// A 512-bit integer, in which every centred 256-bit coefficient and every product of two fit.
+/// `Debug`
+/// prints nothing of the value, which may come from a witness.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct Wide(I512);
+impl core::fmt::Debug for Wide {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Wide(..)")
+    }
+}
 impl Zeroize for Wide {
     fn zeroize(&mut self) {
         self.0 = I512::ZERO;
     }
 }
 impl Integer for Wide {
-    fn centred(p: &Poly) -> Option<Zeroizing<Vec<Self>>> {
+    fn centred(p: &Poly) -> Option<Secret<Vec<Self>>> {
         let ring = p.ring();
-        Some(Zeroizing::new(
+        Some(Secret::new(
             p.values()
                 .map(|x| Wide(ring.centred_i256(&x).resize::<{ I512::LIMBS }>()))
                 .collect(),
@@ -1798,12 +1809,12 @@ impl Integer for Wide {
         Option::from(self.0.checked_neg()).map(Wide)
     }
 }
-fn integer_product<T: Integer>(a: &[T], b: &[T]) -> Result<Zeroizing<Vec<T>>, Error> {
+fn integer_product<T: Integer>(a: &[T], b: &[T]) -> Result<Secret<Vec<T>>, Error> {
     if a.len() != b.len() {
         return Err(Error::Dimension);
     }
     let d = a.len();
-    let mut out = Zeroizing::new(vec![T::default(); d]);
+    let mut out = Secret::new(vec![T::default(); d]);
     for (i, a) in a.iter().enumerate() {
         for (j, b) in b.iter().enumerate() {
             let mut value = a.mul(*b).ok_or(Error::Overflow)?;
@@ -1818,7 +1829,7 @@ fn integer_product<T: Integer>(a: &[T], b: &[T]) -> Result<Zeroizing<Vec<T>>, Er
 fn integer_evaluate_as<T: Integer>(
     form: &QuadEq,
     witness: &[Poly],
-) -> Result<Zeroizing<Vec<T>>, Error> {
+) -> Result<Secret<Vec<T>>, Error> {
     let centred = |p: &Poly| T::centred(p).ok_or(Error::Overflow);
     let mut out = centred(&form.r0)?;
     for (i, a) in form.r1.entries() {
@@ -1840,9 +1851,9 @@ fn integer_evaluate_as<T: Integer>(
     Ok(out)
 }
 /// Centred coefficients as `i64` with their largest magnitude, if every one fits.
-fn centred_i64(p: &Poly) -> Option<(Zeroizing<Vec<i64>>, u128)> {
+fn centred_i64(p: &Poly) -> Option<(Secret<Vec<i64>>, u128)> {
     let values = p.coefficients_i128().ok()?;
-    let mut out = Zeroizing::new(Vec::with_capacity(values.len()));
+    let mut out = Secret::new(Vec::with_capacity(values.len()));
     let mut max = 0u128;
     for v in values.iter() {
         out.push(i64::try_from(*v).ok()?);
@@ -1897,8 +1908,8 @@ fn integer_evaluate_fast(
     form: &QuadEq,
     witness: &[Poly],
     constant_only: bool,
-) -> Option<Zeroizing<Vec<i128>>> {
-    type Centred = (Zeroizing<Vec<i64>>, u128);
+) -> Option<Secret<Vec<i128>>> {
+    type Centred = (Secret<Vec<i64>>, u128);
     fn ensure(cache: &mut [Option<Centred>], witness: &[Poly], i: usize) -> Option<()> {
         if cache[i].is_none() {
             cache[i] = Some(centred_i64(&witness[i])?);
@@ -1943,10 +1954,10 @@ fn integer_evaluate_fast(
     }
     let w = |i: usize| -> &[i64] { &cache[i].as_ref().expect("converted above").0 };
     // w_i w_j in full, as i64: its coefficients are at most d|w_i||w_j| < 2^63.
-    let full_product = |i: usize, j: usize| -> Zeroizing<Vec<i64>> {
-        let mut v = Zeroizing::new(vec![0i128; d]);
+    let full_product = |i: usize, j: usize| -> Secret<Vec<i64>> {
+        let mut v = Secret::new(vec![0i128; d]);
         negacyclic_mac(w(i), w(j), &mut v);
-        Zeroizing::new(v.iter().map(|x| *x as i64).collect())
+        Secret::new(v.iter().map(|x| *x as i64).collect())
     };
     if constant_only {
         // ct(ab) = a_0 b_0 - sum_{k>=1} a_k b_{d-k}
@@ -1975,9 +1986,9 @@ fn integer_evaluate_fast(
                 }
             }
         }
-        return Some(Zeroizing::new(vec![s]));
+        return Some(Secret::new(vec![s]));
     }
-    let mut out = Zeroizing::new(r0.iter().map(|x| i128::from(*x)).collect::<Vec<_>>());
+    let mut out = Secret::new(r0.iter().map(|x| i128::from(*x)).collect::<Vec<_>>());
     for (i, a) in &linear {
         negacyclic_mac(a, w(*i), &mut out);
     }
@@ -1999,14 +2010,14 @@ fn integer_evaluate_constant(form: &QuadEq, witness: &[Poly]) -> Result<Wide, Er
 /// `i128` sums when a bound shows that nothing overflows, otherwise in checked `i128` when
 /// every step fits, and otherwise again in 512 bits. All give the same integers when they
 /// succeed.
-fn integer_evaluate(form: &QuadEq, witness: &[Poly]) -> Result<Zeroizing<Vec<Wide>>, Error> {
+fn integer_evaluate(form: &QuadEq, witness: &[Poly]) -> Result<Secret<Vec<Wide>>, Error> {
     if let Some(values) = integer_evaluate_fast(form, witness, false) {
-        return Ok(Zeroizing::new(
+        return Ok(Secret::new(
             values.iter().map(|x| Wide(I512::from_i128(*x))).collect(),
         ));
     }
     match integer_evaluate_as::<i128>(form, witness) {
-        Ok(values) => Ok(Zeroizing::new(
+        Ok(values) => Ok(Secret::new(
             values.iter().map(|x| Wide(I512::from_i128(*x))).collect(),
         )),
         Err(_) => integer_evaluate_as::<Wide>(form, witness),
@@ -2029,7 +2040,7 @@ fn carry(p: &NonZero<U256>, value: &Wide) -> Result<i128, Error> {
         magnitude
     })
 }
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 impl Compiled {
     /// The checked parameters used by this compilation.
     pub fn parameters(&self) -> &TboxParams {
@@ -2059,13 +2070,27 @@ impl Compiled {
             self.prove_seeded(pp_seed, witness, context, &take_seed(&mut seed))?;
         crate::codec::proof::encode(&scheme, &proof)
     }
+    /// [`Compiled::prove_bytes_with_seed`] with the seed by reference, the same proof for the
+    /// same seed. For a caller that keeps its seed in a buffer of its own that it wipes: no copy
+    /// of the seed is passed by value, which would leave one on the stack, and the one this
+    /// function makes lives in a buffer wiped on drop.
+    pub fn prove_bytes_with_seed_ref(
+        &self,
+        pp_seed: [u8; 32],
+        witness: &BTreeMap<String, Vec<Poly>>,
+        context: &[u8],
+        seed: &[u8; 32],
+    ) -> Result<Vec<u8>, Error> {
+        let (scheme, proof) = self.prove_seeded(pp_seed, witness, context, &Secret::new(*seed))?;
+        crate::codec::proof::encode(&scheme, &proof)
+    }
     /// The scheme of `pp_seed` and a proof under it, from a seed held in a wiping buffer.
     fn prove_seeded(
         &self,
         pp_seed: [u8; 32],
         witness: &BTreeMap<String, Vec<Poly>>,
         context: &[u8],
-        seed: &Zeroizing<[u8; 32]>,
+        seed: &Secret<[u8; 32]>,
     ) -> Result<(Abdlop, tbox::Proof), Error> {
         let (s1, m) = self.map_witness(witness)?;
         let scheme = Abdlop::new(pp_seed, self.params.clone())?;
@@ -2120,8 +2145,8 @@ impl Compiled {
         let values = p.coefficients_i128()?;
         let weights = weights(beta);
         let d = self.ring.degree();
-        let mut bits = Zeroizing::new(vec![vec![0i128; d]; weights.len()]);
-        let mut digit = Zeroizing::new(vec![0u64; weights.len()]);
+        let mut bits = Secret::new(vec![vec![0i128; d]; weights.len()]);
+        let mut digit = Secret::new(vec![0u64; weights.len()]);
         for u in 0..d {
             // Coefficient k u + c of the statement polynomial is coefficient u of component c.
             let x = (values[self.k * u + component] + i128::from(beta)) as u64;
@@ -2218,9 +2243,9 @@ impl Compiled {
             // At most max < 2^64.
             let norm = u64::try_from(int::low_u128(&norm)).map_err(|_| Error::Witness)?;
             let weights = cover_weights(range.max - range.min);
-            let mut bits = Zeroizing::new(vec![0u64; weights.len()]);
+            let mut bits = Secret::new(vec![0u64; weights.len()]);
             digits(norm - range.min, &weights, &mut bits);
-            let mut coefficients = Zeroizing::new(vec![0i128; self.ring.degree()]);
+            let mut coefficients = Secret::new(vec![0i128; self.ring.degree()]);
             for (c, bit) in coefficients.iter_mut().zip(bits.iter()) {
                 *c = i128::from(*bit);
             }
@@ -2330,7 +2355,7 @@ impl Compiled {
         context: &[u8],
         rng: &mut impl rand_core::CryptoRng,
     ) -> Result<tbox::Proof, Error> {
-        let mut seed = Zeroizing::new([0; 32]);
+        let mut seed = Secret::new([0; 32]);
         rand_core::Rng::fill_bytes(rng, &mut *seed);
         Ok(self.prove_seeded(pp_seed, witness, context, &seed)?.1)
     }
@@ -2343,7 +2368,7 @@ impl Compiled {
         context: &[u8],
         rng: &mut impl rand_core::CryptoRng,
     ) -> Result<Vec<u8>, Error> {
-        let mut seed = Zeroizing::new([0; 32]);
+        let mut seed = Secret::new([0; 32]);
         rand_core::Rng::fill_bytes(rng, &mut *seed);
         let (scheme, proof) = self.prove_seeded(pp_seed, witness, context, &seed)?;
         crate::codec::proof::encode(&scheme, &proof)
@@ -2374,7 +2399,7 @@ impl Compiled {
         context: &[u8],
         rng: &mut impl rand_core::CryptoRng,
     ) -> Result<tbox::ExtractableProof, Error> {
-        let mut seed = Zeroizing::new([0; 32]);
+        let mut seed = Secret::new([0; 32]);
         rand_core::Rng::fill_bytes(rng, &mut *seed);
         Ok(self
             .prove_extractable_seeded(pp_seed, extraction, witness, context, &seed)?
@@ -2403,7 +2428,7 @@ impl Compiled {
         context: &[u8],
         rng: &mut impl rand_core::CryptoRng,
     ) -> Result<Vec<u8>, Error> {
-        let mut seed = Zeroizing::new([0; 32]);
+        let mut seed = Secret::new([0; 32]);
         rand_core::Rng::fill_bytes(rng, &mut *seed);
         let (scheme, proof) =
             self.prove_extractable_seeded(pp_seed, extraction, witness, context, &seed)?;
@@ -2427,13 +2452,33 @@ impl Compiled {
         )?;
         crate::codec::proof::encode_extractable(&scheme, extraction, &proof)
     }
+    /// [`Compiled::prove_extractable_bytes_with_seed`] with the seed by reference, the same
+    /// proof for the same seed, as [`Compiled::prove_bytes_with_seed_ref`] is for
+    /// [`Compiled::prove_bytes_with_seed`].
+    pub fn prove_extractable_bytes_with_seed_ref(
+        &self,
+        pp_seed: [u8; 32],
+        extraction: &ExtractionParams,
+        witness: &BTreeMap<String, Vec<Poly>>,
+        context: &[u8],
+        seed: &[u8; 32],
+    ) -> Result<Vec<u8>, Error> {
+        let (scheme, proof) = self.prove_extractable_seeded(
+            pp_seed,
+            extraction,
+            witness,
+            context,
+            &Secret::new(*seed),
+        )?;
+        crate::codec::proof::encode_extractable(&scheme, extraction, &proof)
+    }
     fn prove_extractable_seeded(
         &self,
         pp_seed: [u8; 32],
         extraction: &ExtractionParams,
         witness: &BTreeMap<String, Vec<Poly>>,
         context: &[u8],
-        seed: &Zeroizing<[u8; 32]>,
+        seed: &Secret<[u8; 32]>,
     ) -> Result<(Abdlop, tbox::ExtractableProof), Error> {
         let (s1, m) = self.map_witness(witness)?;
         let scheme = Abdlop::new(pp_seed, self.params.clone())?;

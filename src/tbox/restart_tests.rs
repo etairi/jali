@@ -2,6 +2,7 @@
 //! attempt, and the restarts of `range_response` on a coefficient above q/2 and on the bounds
 //! `z3_bound_squared` and `z4_bound`. Also the witness check's norm budget.
 use super::*;
+use crate::wipe::Secret;
 use crate::{
     abdlop::verifier_check_tests::with_norm, lnp::AffineBlock, math::PolyMat,
     rand::reject::Variance,
@@ -88,7 +89,7 @@ fn range_round_restarts_and_its_attempt_limit() {
             &s1,
             &m,
             b"restarts",
-            &Zeroizing::new([seed; 32]),
+            &Secret::new([seed; 32]),
             attempts,
         )
     };

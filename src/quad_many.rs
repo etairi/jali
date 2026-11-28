@@ -5,6 +5,7 @@
 //! evaluation proof it continues that proof's transcript after $`h`$. Either way its verifier
 //! message is the folding challenge $`\mu`$, one ring element per equation, and the quadratic
 //! proof of the folded equation follows in the same transcript (`docs/encodings.md`).
+use crate::wipe::Secret;
 use crate::{
     Error,
     abdlop::{Abdlop, Commitment, Opening},
@@ -13,7 +14,6 @@ use crate::{
     rand::take_seed,
     transcript::{Protocol, Transcript},
 };
-use zeroize::Zeroizing;
 
 #[cfg(test)]
 mod tests;
@@ -102,7 +102,7 @@ pub(crate) fn prove_seeded(
     opening: &Opening,
     equations: &[QuadEq],
     context: &[u8],
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
 ) -> Result<QuadProof, Error> {
     let transcript = transcript(scheme, commitment, equations, context)?;
     Ok(prove_in(
@@ -119,7 +119,7 @@ pub(crate) fn prove_in(
     opening: &Opening,
     equations: &[QuadEq],
     mut transcript: Transcript,
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
     ext: Option<&linhc::ProverExt<'_>>,
 ) -> Result<(QuadProof, Option<linhc::LinhcOpening>), Error> {
     let witness = quad::interleave(&opening.s1, &opening.m)?;

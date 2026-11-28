@@ -122,6 +122,9 @@ impl Shake128 {
 
 impl Drop for Shake128 {
     fn drop(&mut self) {
+        if !crate::wipe::ENABLED {
+            return;
+        }
         self.state.zeroize();
     }
 }
@@ -154,6 +157,9 @@ impl Shake128Reader {
 
 impl Drop for Shake128Reader {
     fn drop(&mut self) {
+        if !crate::wipe::ENABLED {
+            return;
+        }
         self.state.zeroize();
     }
 }

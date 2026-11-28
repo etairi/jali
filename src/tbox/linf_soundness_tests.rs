@@ -8,6 +8,7 @@
 //! parameters allow a long bounded witness, so that the commitment, which bounds
 //! $`\|s_1\|^2`$ by `alpha_squared`, does not refuse it first.
 use super::*;
+use crate::wipe::Secret;
 use crate::{
     math::{Ring, iso},
     params::TboxParams,
@@ -104,7 +105,7 @@ fn a_linf_coefficient_is_bounded_by_the_extraction_bound_only() {
     );
     // Without the check it proves, and the unmodified verifier accepts: the proof does not
     // enforce beta.
-    let seed = Zeroizing::new([63; 32]);
+    let seed = Secret::new([63; 32]);
     let proof = prove_rounds(
         &scheme,
         statement,
@@ -129,7 +130,7 @@ fn a_linf_coefficient_is_bounded_by_the_extraction_bound_only() {
         Some(Error::Witness)
     );
     // Eight range attempts, each refused by rejection sampling or by z4_bound.
-    let seed = Zeroizing::new([65; 32]);
+    let seed = Secret::new([65; 32]);
     match prove_rounds(&scheme, statement, &beyond, &messages, b"linf", &seed, 8) {
         Err(e) => assert_eq!(e, Error::RestartLimit),
         Ok(proof) => assert!(verify(&scheme, statement, &proof, b"linf").is_err()),

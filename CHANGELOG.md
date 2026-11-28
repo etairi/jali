@@ -3,6 +3,26 @@
 All notable changes to this crate are listed here. The crate follows [semantic
 versioning](https://semver.org); before 1.0, a minor version may break the API.
 
+## [0.3.5] - 2026-11-27
+
+Proofs and transcripts are those of 0.3.4, in both modes and with every feature (checked on
+aarch64 and x86-64).
+
+### Added
+
+- `Zeroize` for `Poly`, `PolyVec` and `abdlop::Opening`: an explicit wipe leaves zero
+  polynomials of the same ring and length.
+- `Compiled::prove_bytes_with_seed_ref` and `Compiled::prove_extractable_bytes_with_seed_ref`:
+  the provers with the seed by reference, for callers that keep their seeds in buffers of their
+  own, with the same proofs as `prove_bytes_with_seed` and `prove_extractable_bytes_with_seed`.
+
+### Changed
+
+- The `Debug` output of the internal shapes, terms and 512-bit integers of secret polynomials
+  shows nothing of their values.
+- The wiping of temporaries and the drops that wipe go through one internal module, with the same
+  effect as before.
+
 ## [0.3.4] - 2026-11-20
 
 Proofs and transcripts are those of 0.3.3, in both modes and with every feature (checked on

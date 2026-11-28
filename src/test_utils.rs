@@ -1,7 +1,7 @@
 //! Deterministic byte-stream capture and replay for independent sampler tests.
 //! These helpers expose the random tape and belong only in tests.
+use crate::wipe::Secret;
 use crate::{Error, rand::ByteStream};
-use zeroize::Zeroizing;
 
 /// A finite known-answer tape. Exhaustion fails without consuming any bytes.
 pub struct ReplayStream<'a> {
@@ -32,14 +32,14 @@ impl ByteStream for ReplayStream<'_> {
 /// A sampler stream recording its exact successful byte consumption.
 pub struct RecordingStream<S> {
     inner: S,
-    tape: Zeroizing<Vec<u8>>,
+    tape: Secret<Vec<u8>>,
 }
 impl<S: ByteStream> RecordingStream<S> {
     /// Wrap a stream; the captured bytes must never be treated as secret afterwards.
     pub fn new(inner: S) -> Self {
         Self {
             inner,
-            tape: Zeroizing::new(Vec::new()),
+            tape: Secret::new(Vec::new()),
         }
     }
     /// Captured random bytes, for an independent known-answer oracle.

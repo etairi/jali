@@ -22,6 +22,9 @@ use zeroize::Zeroize;
 struct Residues(Vec<Vec<u64>>);
 impl Drop for Residues {
     fn drop(&mut self) {
+        if !crate::wipe::ENABLED {
+            return;
+        }
         for values in &mut self.0 {
             values.as_mut_slice().zeroize();
             values.spare_capacity_mut().zeroize();
@@ -291,6 +294,9 @@ impl LazySum {
 }
 impl Drop for LazySum {
     fn drop(&mut self) {
+        if !crate::wipe::ENABLED {
+            return;
+        }
         self.sums.as_mut_slice().zeroize();
     }
 }

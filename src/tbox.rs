@@ -9,6 +9,7 @@
 //! range responses and the garbage commitments, $`\Gamma`$, $`h`$, $`\mu`$, the final message
 //! $`(t,v,w_1)`$ (with the LinHC mask commitment before $`w_1`$), and the challenge
 //! (`docs/encodings.md`).
+use crate::wipe::Secret;
 use crate::{
     Error,
     abdlop::{self, Abdlop, Commitment},
@@ -32,7 +33,6 @@ use crate::{
     transcript::{Protocol, Transcript},
 };
 use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
-use zeroize::Zeroizing;
 
 #[cfg(test)]
 mod extractable_tests;
@@ -333,7 +333,7 @@ fn toolbox_key(
     s1: &PolyVec,
     m: &PolyVec,
     seed: &[u8; 32],
-) -> Zeroizing<[u8; 32]> {
+) -> Secret<[u8; 32]> {
     derive_key(
         label,
         seed,
@@ -406,7 +406,7 @@ fn projections(matrices: &Projections, exact: bool, values: &[i128]) -> Result<V
     if !cols.is_multiple_of(4) || max > i64::MAX as u128 / cols.max(1) as u128 {
         return projections_checked(matrices, exact, values);
     }
-    let words = Zeroizing::new(values.iter().map(|v| *v as i64).collect::<Vec<_>>());
+    let words = Secret::new(values.iter().map(|v| *v as i64).collect::<Vec<_>>());
     let row_bytes = cols / 4;
     // In parallel with the `parallel` feature, in order.
     crate::par::try_map(256, |i| {
@@ -464,12 +464,12 @@ fn range_response(
     if values.is_empty() {
         return Ok(Some(PolyVec::zero(scheme.ring().clone(), 0)));
     }
-    let mut v = Zeroizing::new(projections(matrices, exact, values)?);
+    let mut v = Secret::new(projections(matrices, exact, values)?);
     for x in v.iter_mut() {
         *x *= sign;
     }
     let y = abdlop::flatten(&mask.values)?;
-    let z = Zeroizing::new(
+    let z = Secret::new(
         y.iter()
             .zip(v.iter())
             .map(|(a, b)| a.checked_add(*b).ok_or(Error::Overflow))
@@ -482,7 +482,7 @@ fn range_response(
     }
     let m = range_rejection_m(scheme, exact)?;
     let (dot, norm) = reject::moments(&z, &v)?;
-    let mut u = Zeroizing::new([0u8; reject::COIN_BYTES]);
+    let mut u = Secret::new([0u8; reject::COIN_BYTES]);
     random.fill(&mut *u)?;
     if !reject::accept(
         Policy::Bimodal,
@@ -551,7 +551,7 @@ struct Family<'a> {
     affines: &'a [QuadEq],
     sign: &'a QuadEq,
     offset: usize,
-    response: Zeroizing<Vec<i128>>,
+    response: Secret<Vec<i128>>,
     prepared: Option<Prepared>,
 }
 impl<'a> ProjectionRows<'a> {
@@ -1141,7 +1141,7 @@ pub(crate) fn prove_seeded(
     s1: &PolyVec,
     m: &PolyVec,
     context: &[u8],
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
 ) -> Result<Proof, Error> {
     prove_with_attempts(
         scheme,
@@ -1161,7 +1161,7 @@ pub(crate) fn prove_with_attempts(
     s1: &PolyVec,
     m: &PolyVec,
     context: &[u8],
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
     max_attempts: u32,
 ) -> Result<Proof, Error> {
     statement.check_witness(scheme, s1, m)?;
@@ -1175,7 +1175,7 @@ fn prove_rounds(
     s1: &PolyVec,
     m: &PolyVec,
     context: &[u8],
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
     max_attempts: u32,
 ) -> Result<Proof, Error> {
     Ok(prove_rounds_mode(
@@ -1199,7 +1199,7 @@ fn prove_rounds_mode(
     s1: &PolyVec,
     m: &PolyVec,
     context: &[u8],
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
     max_attempts: u32,
     mode: Mode<'_>,
 ) -> Result<(Proof, Option<(LinhcCommitment, linhc::LinhcOpening)>), Error> {
@@ -1348,7 +1348,7 @@ fn prove_rounds_mode(
             &matrices,
         )?;
         transcript.absorb(&range_message(scheme, &ze, &zd)?);
-        let mut proof_seed = Zeroizing::new([0; 32]);
+        let mut proof_seed = Secret::new([0; 32]);
         random.fill(&mut *proof_seed)?;
         #[cfg(test)]
         crate::rand::stream_log::child(&key, &proof_seed);
@@ -1432,7 +1432,7 @@ pub(crate) fn prove_extractable_seeded(
     s1: &PolyVec,
     m: &PolyVec,
     context: &[u8],
-    seed: &Zeroizing<[u8; 32]>,
+    seed: &Secret<[u8; 32]>,
     key: Option<&LinhcKey>,
 ) -> Result<ExtractableProof, Error> {
     statement.check_witness(scheme, s1, m)?;

@@ -25,6 +25,7 @@
 //!   which honest openings of the blocks of dimension $`m'd`$ exceed once $`m'>2n`$.
 #[cfg(test)]
 use crate::rand::{ShakePrg, uniform_poly};
+use crate::wipe::Secret;
 use crate::{
     Error,
     abdlop::{self, Mask},
@@ -37,7 +38,6 @@ use crate::{
     transcript::Transcript,
 };
 use std::sync::Arc;
-use zeroize::Zeroizing;
 
 #[cfg(test)]
 mod tests;
@@ -415,7 +415,7 @@ pub(crate) fn commit(
         let mut entries = Vec::with_capacity(len);
         for _ in 0..len {
             index = index.checked_add(1).ok_or(Error::Overflow)?;
-            let mut values = Zeroizing::new(bounded(
+            let mut values = Secret::new(bounded(
                 &mut AesPrg::new(seed, domain(dom, index)),
                 -1,
                 1,
@@ -482,8 +482,8 @@ pub(crate) fn open(
         z.push(abdlop::add(&shift, &y.values)?);
         shifts.push(shift);
     }
-    let mut z_flat = Zeroizing::new(Vec::new());
-    let mut v_flat = Zeroizing::new(Vec::new());
+    let mut z_flat = Secret::new(Vec::new());
+    let mut v_flat = Secret::new(Vec::new());
     for (z, v) in z.iter().zip(&shifts) {
         z_flat.extend_from_slice(&abdlop::flatten(z)?);
         v_flat.extend_from_slice(&abdlop::flatten(v)?);

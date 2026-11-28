@@ -41,6 +41,7 @@ mod test_words;
 mod transcript;
 #[cfg(test)]
 mod wide_tests;
+mod wipe;
 
 pub use error::Error;
 pub use lnp::{Prover, Verifier};

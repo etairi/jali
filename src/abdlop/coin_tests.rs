@@ -2,6 +2,7 @@
 //! of its coin stream, the 256-bit coin of Rej_1 for $`z_1`$ and then that of Rej_2 for
 //! $`z_2`$, and each test decides on every bit of its coin.
 use super::*;
+use crate::wipe::Secret;
 use crate::{par::Abandon, rand::ByteStream};
 
 type Fixture = (Abdlop, Commitment, Opening, Transcript);
@@ -157,7 +158,7 @@ fn attempt_a_reads_bytes_64a_to_64a_plus_63_of_the_coin_stream() {
                 opening,
                 Caller::Opening,
                 &prefix.binding(),
-                &Zeroizing::new([seed; 32]),
+                &Secret::new([seed; 32]),
                 secret::MAX_ATTEMPTS,
                 1,
                 challenge,

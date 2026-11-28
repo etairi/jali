@@ -28,8 +28,8 @@ use super::{
     statement::{Aggregate, Relation},
 };
 use crate::Error;
+use crate::wipe::Secret;
 use std::sync::Arc;
-use zeroize::Zeroizing;
 
 /// The next statement, produced by the level of index `level`.
 pub(crate) struct Next {
@@ -64,13 +64,13 @@ pub(crate) fn next_witness(
     layout: &Layout,
     z: &[u64],
     v: &[u64],
-) -> Vec<Zeroizing<Vec<u64>>> {
+) -> Vec<Secret<Vec<u64>>> {
     let d = ring.degree();
     let n_next = layout.n_next;
-    let mut out: Vec<Zeroizing<Vec<u64>>> = (0..layout.r_next)
-        .map(|_| Zeroizing::new(vec![0u64; n_next * d]))
+    let mut out: Vec<Secret<Vec<u64>>> = (0..layout.r_next)
+        .map(|_| Secret::new(vec![0u64; n_next * d]))
         .collect();
-    let digits = Zeroizing::new(decompose(ring, z, params.b, 2));
+    let digits = Secret::new(decompose(ring, z, params.b, 2));
     for (digit, part) in digits.iter().enumerate() {
         for (x, poly) in part.chunks_exact(d).enumerate() {
             let (vector, pos) = slot(digit * params.nu, x, n_next);

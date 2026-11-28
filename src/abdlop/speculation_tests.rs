@@ -2,6 +2,7 @@
 //! attempt, proof, side data and attempt limit as one attempt at a time. The widths run on the
 //! current pool's threads with the `parallel` feature, and one after the other without it.
 use super::*;
+use crate::wipe::Secret;
 
 type Fixture = (Abdlop, Commitment, Opening, Transcript);
 
@@ -59,7 +60,7 @@ fn prove(
         opening,
         Caller::Opening,
         &prefix.binding(),
-        &Zeroizing::new([seed; 32]),
+        &Secret::new([seed; 32]),
         max_attempts,
         width,
         |y1, _, w1| Ok((scheme.challenge(prefix, w1)?, y1.clone())),
@@ -142,7 +143,7 @@ fn the_attempt_limit_and_its_error_are_unchanged_at_every_width() {
                 opening,
                 Caller::Opening,
                 &prefix.binding(),
-                &Zeroizing::new([seed; 32]),
+                &Secret::new([seed; 32]),
                 index,
                 width,
                 |y1, _, w1| {
@@ -194,7 +195,7 @@ fn an_attempt_that_fails_ends_the_loop_where_one_at_a_time_would() {
                 opening,
                 Caller::Opening,
                 &prefix.binding(),
-                &Zeroizing::new([seed; 32]),
+                &Secret::new([seed; 32]),
                 secret::MAX_ATTEMPTS,
                 width,
                 |y1, _, w1| {

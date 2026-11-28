@@ -7,9 +7,9 @@
 //! after the first accepted attempt) may be done, but none of it is returned. Inputs shorter
 //! than a helper's `min` run as the loop on the calling thread, where the work is too small to
 //! share.
+use crate::wipe::Secret;
 use crate::{Error, rand::ByteStream};
 use std::sync::atomic::{AtomicU32, Ordering};
-use zeroize::Zeroizing;
 
 #[cfg(test)]
 mod tests;
@@ -161,7 +161,7 @@ where
         );
         if self.batch.as_slice().is_empty() {
             let count = self.width.min(self.limit - attempt) as usize;
-            let mut coins = Zeroizing::new(vec![0u8; N * count]);
+            let mut coins = Secret::new(vec![0u8; N * count]);
             self.coins.fill(&mut coins)?;
             // The smallest index of the batch whose outcome is not a rejection, so far.
             let decided = AtomicU32::new(u32::MAX);

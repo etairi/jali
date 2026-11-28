@@ -1,4 +1,5 @@
 //! Generic statement and witness objects for the LNP22 toolbox (LNP22 §5).
+use crate::wipe::Secret;
 use crate::{
     Error,
     abdlop::Abdlop,
@@ -9,7 +10,6 @@ use crate::{
     tbox,
 };
 use std::sync::Arc;
-use zeroize::Zeroizing;
 
 /// Affine block $`E_s s_1+E_m m+v`$ with explicit dimensions, including absent matrices.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -395,15 +395,11 @@ impl Prover {
         context: &[u8],
         rng: &mut impl rand_core::CryptoRng,
     ) -> Result<tbox::Proof, Error> {
-        let mut seed = Zeroizing::new([0; 32]);
+        let mut seed = Secret::new([0; 32]);
         rand_core::Rng::fill_bytes(rng, &mut *seed);
         self.prove_seeded(context, &seed)
     }
-    fn prove_seeded(
-        &self,
-        context: &[u8],
-        seed: &Zeroizing<[u8; 32]>,
-    ) -> Result<tbox::Proof, Error> {
+    fn prove_seeded(&self, context: &[u8], seed: &Secret<[u8; 32]>) -> Result<tbox::Proof, Error> {
         let (s1, m) = self.witness.as_ref().ok_or(Error::Witness)?;
         tbox::prove_seeded(&self.scheme, &self.statement, s1, m, context, seed)
     }
@@ -416,7 +412,7 @@ impl Prover {
         context: &[u8],
         rng: &mut impl rand_core::CryptoRng,
     ) -> Result<tbox::ExtractableProof, Error> {
-        let mut seed = Zeroizing::new([0; 32]);
+        let mut seed = Secret::new([0; 32]);
         rand_core::Rng::fill_bytes(rng, &mut *seed);
         self.prove_extractable_seeded(extraction, context, &seed)
     }
@@ -460,7 +456,7 @@ impl Prover {
         &self,
         extraction: &ExtractionParams,
         context: &[u8],
-        seed: &Zeroizing<[u8; 32]>,
+        seed: &Secret<[u8; 32]>,
     ) -> Result<tbox::ExtractableProof, Error> {
         let (s1, m) = self.witness.as_ref().ok_or(Error::Witness)?;
         tbox::prove_extractable_seeded(

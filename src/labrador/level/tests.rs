@@ -7,6 +7,7 @@ use crate::labrador::{
     params::{Layout, Shape},
     test_rng::TestRng,
 };
+use crate::wipe::Secret;
 
 fn witness(
     rng: &mut TestRng,
@@ -14,10 +15,10 @@ fn witness(
     vectors: usize,
     len: usize,
     bound: u64,
-) -> Vec<Zeroizing<Vec<u64>>> {
+) -> Vec<Secret<Vec<u64>>> {
     (0..vectors)
         .map(|_| {
-            Zeroizing::new(
+            Secret::new(
                 (0..len)
                     .map(|i| {
                         // a zero in every fifth position, the bound itself in every seventh
@@ -194,7 +195,7 @@ fn final_witness(
     nu: usize,
     h: u64,
     spread: u64,
-) -> Vec<Zeroizing<Vec<u64>>> {
+) -> Vec<Secret<Vec<u64>>> {
     let d = ring.degree();
     (0..layout.r_next)
         .map(|i| {
@@ -212,12 +213,12 @@ fn final_witness(
                 })
                 .collect();
             v.resize(layout.n_next * d, 0);
-            Zeroizing::new(v)
+            Secret::new(v)
         })
         .collect()
 }
 
-fn round_trip(ring: &Rq, layout: &Layout, nu: usize, witness: &[Zeroizing<Vec<u64>>]) -> usize {
+fn round_trip(ring: &Rq, layout: &Layout, nu: usize, witness: &[Secret<Vec<u64>>]) -> usize {
     let bytes = encode_final(ring, layout, nu, witness).unwrap();
     let mut input = &bytes[..];
     let back = decode_final(ring, layout, nu, &mut input).unwrap();
@@ -242,7 +243,7 @@ fn final_witnesses_round_trip() {
                 round_trip(&ring, &layout, nu, &witness);
             }
             // Zero vectors, and every vector at the extremes +-(q-1)/2.
-            let zero = vec![Zeroizing::new(vec![0u64; n_next * 64]); layout.r_next];
+            let zero = vec![Secret::new(vec![0u64; n_next * 64]); layout.r_next];
             round_trip(&ring, &layout, nu, &zero);
             let mut extreme = final_witness(&ring, &mut rng, &layout, nu, 1, 1);
             for (i, v) in extreme.iter_mut().enumerate() {
@@ -289,7 +290,7 @@ fn encode_tweaked(
     ring: &Rq,
     layout: &Layout,
     nu: usize,
-    witness: &[Zeroizing<Vec<u64>>],
+    witness: &[Secret<Vec<u64>>],
     at: usize,
     tweak: Option<Tweak>,
 ) -> (Vec<u8>, usize) {

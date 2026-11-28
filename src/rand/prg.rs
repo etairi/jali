@@ -63,6 +63,9 @@ pub struct AesPrg {
 const AES_BUFFER: usize = 256;
 impl Drop for AesPrg {
     fn drop(&mut self) {
+        if !crate::wipe::ENABLED {
+            return;
+        }
         self.buffer.zeroize();
     }
 }

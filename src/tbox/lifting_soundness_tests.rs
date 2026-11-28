@@ -9,6 +9,7 @@
 //! with moduli of their own: a witness true modulo one needs a long carry for the other. Short
 //! carries in the wrong slots fail the clauses' equations.
 use super::*;
+use crate::wipe::Secret;
 use crate::{
     math::{Ring, iso},
     params::TboxParams,
@@ -105,7 +106,7 @@ fn only_the_range_fails(
     // Eight range attempts fail to hide a projection of the long carry (their responses
     // exceed q/2 or z4_bound, or rejection sampling refuses them); a proof, if one came out,
     // would have to pass the unmodified verifier.
-    let seed = Zeroizing::new([seed; 32]);
+    let seed = Secret::new([seed; 32]);
     match prove_rounds(scheme, statement, s1, m, b"lifting", &seed, 8) {
         Err(e) => assert_eq!(e, Error::RestartLimit),
         Ok(proof) => assert!(verify(scheme, statement, &proof, b"lifting").is_err()),
@@ -186,7 +187,7 @@ fn a_relation_false_modulo_p_is_not_provable_modulo_q() {
     // Without the witness check, eight range attempts fail to hide a projection of the carry
     // (their responses exceed q/2 or z4_bound, or rejection sampling refuses them); a proof,
     // if one came out, would have to pass the unmodified verifier.
-    let seed = Zeroizing::new([44; 32]);
+    let seed = Secret::new([44; 32]);
     match prove_rounds(&scheme, statement, &s1, &m, b"lifting", &seed, 8) {
         Err(e) => assert_eq!(e, Error::RestartLimit),
         Ok(proof) => assert!(verify(&scheme, statement, &proof, b"lifting").is_err()),
@@ -371,7 +372,7 @@ fn short_carries_in_the_wrong_slots_fail_the_clauses() {
         statement.check_witness(&scheme, &s1, &swapped).err(),
         Some(Error::Witness)
     );
-    let seed = Zeroizing::new([48; 32]);
+    let seed = Secret::new([48; 32]);
     assert_eq!(
         prove_rounds(&scheme, statement, &s1, &swapped, b"lifting", &seed, 64).err(),
         Some(Error::Witness)

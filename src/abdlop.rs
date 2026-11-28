@@ -4,6 +4,7 @@
 //! proof on its own runs the transcript `JALI-V02-ABDLOP-OPENING-C1-SHAKE128`: its instance is
 //! the parameters, the public seed and the commitment, its one prover message $`w_1`$ and its
 //! verifier message the challenge (`docs/encodings.md`).
+use crate::wipe::Secret;
 use crate::{
     Error,
     codec::{BitReader, BitWriter, fields},
@@ -22,7 +23,6 @@ use crate::{
     transcript::{Protocol, Transcript},
 };
 use std::sync::Arc;
-use zeroize::Zeroizing;
 
 /// Coin bytes of one attempt of the opening proof: the coins of Rej_1 and of Rej_2, in that
 /// order, of [`reject::COIN_BYTES`] each.
@@ -106,7 +106,7 @@ mod extraction_tests {
             .binding();
         let mut forks = None;
         for seed in 0..32 {
-            let seed = Zeroizing::new([seed; 32]);
+            let seed = Secret::new([seed; 32]);
             let fork = |c: &Poly| {
                 scheme
                     .prove_core(
@@ -189,6 +189,15 @@ pub struct Opening {
 impl core::fmt::Debug for Opening {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Opening").finish_non_exhaustive()
+    }
+}
+impl zeroize::Zeroize for Opening {
+    /// Overwrites every vector of the opening with zero polynomials ([`PolyVec`]'s `Zeroize`).
+    fn zeroize(&mut self) {
+        self.s1.zeroize();
+        self.s2.zeroize();
+        self.m.zeroize();
+        self.low.zeroize();
     }
 }
 
@@ -276,7 +285,7 @@ pub(crate) fn sample_gaussian(
         let mut stream = crate::rand::ReadAhead::<_, 1024>::new(stream);
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
         let mut stream = stream;
-        let mut values = Zeroizing::new(gaussian(&mut stream, t, ring.degree())?);
+        let mut values = Secret::new(gaussian(&mut stream, t, ring.degree())?);
         // A width at which a sample can exceed q/2 is a parameter error; another attempt
         // would not fix it.
         if values
@@ -376,8 +385,8 @@ pub(crate) fn scale_scalar(a: &PolyVec, scalar: &U256) -> Result<PolyVec, Error>
 }
 /// Centred coefficients of short vectors as `i128`. Fails with [`Error::Overflow`] if one does
 /// not fit.
-pub(crate) fn flatten(a: &PolyVec) -> Result<Zeroizing<Vec<i128>>, Error> {
-    let mut out = Zeroizing::new(Vec::with_capacity(a.len() * a.ring().degree()));
+pub(crate) fn flatten(a: &PolyVec) -> Result<Secret<Vec<i128>>, Error> {
+    let mut out = Secret::new(Vec::with_capacity(a.len() * a.ring().degree()));
     for p in a.entries() {
         out.extend_from_slice(&p.coefficients_i128()?);
     }
@@ -403,22 +412,22 @@ impl Caller {
 /// Secret polynomials as key-derivation input: each centred coefficient as 16 LE bytes
 /// (two's complement) when $`q<2^{128}`$, and as 32 LE bytes otherwise. The width depends on
 /// the ring only, which the key derivation binds as well.
-pub(crate) fn secret_bytes(a: &PolyVec) -> Zeroizing<Vec<u8>> {
+pub(crate) fn secret_bytes(a: &PolyVec) -> Secret<Vec<u8>> {
     let ring = a.ring();
     let wide = int::to_u128(&ring.q).is_none();
     let width = if wide { 32 } else { 16 };
-    let mut out = Zeroizing::new(Vec::with_capacity(width * a.len() * ring.degree()));
+    let mut out = Secret::new(Vec::with_capacity(width * a.len() * ring.degree()));
     for p in a.entries() {
         for i in 0..ring.degree() {
             if wide {
                 // The two's complement bits, wiped like the narrow value.
-                let x = Zeroizing::new(p.coefficient(i));
-                let value = Zeroizing::new(*ring.centred_i256(&x).as_uint());
+                let x = Secret::new(p.coefficient(i));
+                let value = Secret::new(*ring.centred_i256(&x).as_uint());
                 for word in value.as_words() {
                     out.extend_from_slice(&word.to_le_bytes());
                 }
             } else {
-                let value = Zeroizing::new(p.centred(i).expect("q below 2^128"));
+                let value = Secret::new(p.centred(i).expect("q below 2^128"));
                 out.extend_from_slice(&value.to_le_bytes());
             }
         }
@@ -565,7 +574,7 @@ impl Abdlop {
         &self,
         s1: PolyVec,
         m: PolyVec,
-        seed: &Zeroizing<[u8; 32]>,
+        seed: &Secret<[u8; 32]>,
     ) -> Result<(Commitment, Opening), Error> {
         let key = self.commitment_key(&s1, &m, seed);
         self.commit_in_domain(s1, m, &key, secret::COMMITMENT)
@@ -576,7 +585,7 @@ impl Abdlop {
         s1: &PolyVec,
         m: &PolyVec,
         seed: &[u8; 32],
-    ) -> Zeroizing<[u8; 32]> {
+    ) -> Secret<[u8; 32]> {
         derive_key(
             b"abdlop/commitment",
             seed,
@@ -613,7 +622,7 @@ impl Abdlop {
         m: PolyVec,
         rng: &mut impl rand_core::CryptoRng,
     ) -> Result<(Commitment, Opening), Error> {
-        let mut seed = Zeroizing::new([0; 32]);
+        let mut seed = Secret::new([0; 32]);
         rand_core::Rng::fill_bytes(rng, &mut *seed);
         self.commit_seeded(s1, m, &seed)
     }
@@ -835,7 +844,7 @@ impl Abdlop {
         commitment: &Commitment,
         opening: &Opening,
         context: &[u8],
-        seed: &Zeroizing<[u8; 32]>,
+        seed: &Secret<[u8; 32]>,
     ) -> Result<OpeningProof, Error> {
         let transcript = self.opening_transcript(commitment, context)?;
         let (proof, ()) = self.prove_core(
@@ -855,7 +864,7 @@ impl Abdlop {
         caller: Caller,
         binding: &[u8; 32],
         seed: &[u8; 32],
-    ) -> Zeroizing<[u8; 32]> {
+    ) -> Secret<[u8; 32]> {
         // "/v3" since the duplex-sponge transcript and the fixed-width codes of version 0.2,
         // "/v2" since the 256-bit sampler, the 256-bit rejection coins and the challenges
         // within eta. Each version reads these streams under its own key: masks that two
@@ -872,7 +881,7 @@ impl Abdlop {
         caller: Caller,
         binding: &[u8; 32],
         seed: &[u8; 32],
-    ) -> Zeroizing<[u8; 32]> {
+    ) -> Secret<[u8; 32]> {
         derive_key(
             label,
             seed,
@@ -900,7 +909,7 @@ impl Abdlop {
         opening: &Opening,
         caller: Caller,
         binding: &[u8; 32],
-        seed: &Zeroizing<[u8; 32]>,
+        seed: &Secret<[u8; 32]>,
         challenge: impl Fn(&PolyVec, &PolyVec, &PolyVec) -> Result<(Poly, T), Error> + Sync,
     ) -> Result<(OpeningProof, T), Error> {
         self.prove_core_with_attempts(
@@ -922,7 +931,7 @@ impl Abdlop {
         opening: &Opening,
         caller: Caller,
         binding: &[u8; 32],
-        seed: &Zeroizing<[u8; 32]>,
+        seed: &Secret<[u8; 32]>,
         max_attempts: u32,
         challenge: impl Fn(&PolyVec, &PolyVec, &PolyVec) -> Result<(Poly, T), Error> + Sync,
     ) -> Result<(OpeningProof, T), Error> {
@@ -956,7 +965,7 @@ impl Abdlop {
         opening: &Opening,
         caller: Caller,
         binding: &[u8; 32],
-        seed: &Zeroizing<[u8; 32]>,
+        seed: &Secret<[u8; 32]>,
         max_attempts: u32,
         width: u32,
         challenge: impl Fn(&PolyVec, &PolyVec, &PolyVec) -> Result<(Poly, T), Error> + Sync,
@@ -991,7 +1000,7 @@ impl Abdlop {
         opening: &Opening,
         caller: Caller,
         binding: &[u8; 32],
-        seed: &Zeroizing<[u8; 32]>,
+        seed: &Secret<[u8; 32]>,
         max_attempts: u32,
         width: u32,
         ext: Option<&linhc::ProverExt<'_>>,
@@ -1203,7 +1212,7 @@ impl Abdlop {
         context: &[u8],
         rng: &mut impl rand_core::CryptoRng,
     ) -> Result<OpeningProof, Error> {
-        let mut seed = Zeroizing::new([0; 32]);
+        let mut seed = Secret::new([0; 32]);
         rand_core::Rng::fill_bytes(rng, &mut *seed);
         self.prove_seeded(commitment, opening, context, &seed)
     }
@@ -1481,7 +1490,7 @@ mod seed_reuse_tests {
                 &opening,
                 Caller::Opening,
                 &transcript.binding(),
-                &Zeroizing::new(seed),
+                &Secret::new(seed),
                 |y1, y21, w1| {
                     masks.lock().unwrap().push((y1.clone(), y21.clone()));
                     Ok((scheme.challenge(&transcript, w1)?, ()))

@@ -1,6 +1,7 @@
 //! Deliberately weakened transcript experiments.
 use super::*;
 use crate::params::toy_d64;
+use crate::wipe::Secret;
 
 // Solve sum_i mu_i*h_i = target with h_i[0] = h_i[d/2] = 0. This is the
 // adversary's post-challenge choice, using Gaussian elimination over the prime field.
@@ -140,7 +141,7 @@ fn adaptive_h_after_mu_can_forge_a_weakened_round_but_fails_default_verification
         &full_opening,
         &folded,
         &weak,
-        &Zeroizing::new([72; 32]),
+        &Secret::new([72; 32]),
         None,
     )
     .unwrap();
@@ -231,7 +232,7 @@ fn garbage_chosen_after_gamma_absorbs_a_false_row_but_fails_default_verification
         &full_opening,
         &equations,
         weak.clone(),
-        &Zeroizing::new([82; 32]),
+        &Secret::new([82; 32]),
         None,
     )
     .unwrap();

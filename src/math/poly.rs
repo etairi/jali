@@ -20,6 +20,9 @@ pub(crate) enum Coeffs {
 }
 impl Drop for Coeffs {
     fn drop(&mut self) {
+        if !crate::wipe::ENABLED {
+            return;
+        }
         match self {
             Coeffs::Word(v) => wipe(v),
             Coeffs::Double(v) => wipe(v),
@@ -274,9 +277,33 @@ impl core::fmt::Debug for Poly {
             .finish_non_exhaustive()
     }
 }
+impl Zeroize for Poly {
+    /// Overwrites every coefficient with zero (one volatile write each, as on drop) and wipes
+    /// the copy of [`Poly::coefficients`]: the polynomial becomes the zero polynomial of its
+    /// ring.
+    fn zeroize(&mut self) {
+        if let Some(mut view) = self.view.take() {
+            for x in view.iter_mut() {
+                x.as_mut_words().zeroize();
+            }
+        }
+        match &mut self.coeffs {
+            Coeffs::Word(v) => v.as_mut_slice().zeroize(),
+            Coeffs::Double(v) => v.as_mut_slice().zeroize(),
+            Coeffs::Wide(v) => {
+                for x in v.iter_mut() {
+                    x.as_mut_words().zeroize();
+                }
+            }
+        }
+    }
+}
 impl Drop for Poly {
     fn drop(&mut self) {
         // The coefficients wipe themselves (`Coeffs`), the 256-bit copy here.
+        if !crate::wipe::ENABLED {
+            return;
+        }
         if let Some(view) = self.view.get_mut() {
             for x in view.iter_mut() {
                 x.as_mut_words().zeroize();
@@ -298,7 +325,7 @@ impl Poly {
     fn invalidate(&mut self) {
         if let Some(mut view) = self.view.take() {
             for x in view.iter_mut() {
-                x.as_mut_words().zeroize();
+                crate::wipe::zeroize(x.as_mut_words());
             }
         }
     }
@@ -319,7 +346,7 @@ impl Poly {
     /// Reduce an exact-length coefficient vector into the ring.
     pub fn new(ring: Arc<Ring>, mut coeffs: Vec<i128>) -> Result<Self, Error> {
         if coeffs.len() != ring.d {
-            coeffs.zeroize();
+            crate::wipe::zeroize(&mut coeffs);
             return Err(Error::Dimension);
         }
         let reduced = if let Some(q) = ring.word {
@@ -330,13 +357,13 @@ impl Poly {
         } else {
             Coeffs::Wide(coeffs.iter().map(|x| ring.reduce_i128(*x)).collect())
         };
-        coeffs.zeroize();
+        crate::wipe::zeroize(&mut coeffs);
         Ok(Self::with(ring, reduced))
     }
     /// Reduce an exact-length vector of 256-bit values into the ring.
     pub fn from_u256(ring: Arc<Ring>, mut coeffs: Vec<U256>) -> Result<Self, Error> {
         if coeffs.len() != ring.d {
-            coeffs.zeroize();
+            crate::wipe::zeroize(&mut coeffs);
             return Err(Error::Dimension);
         }
         for x in &mut coeffs {

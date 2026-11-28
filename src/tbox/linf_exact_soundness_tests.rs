@@ -11,6 +11,7 @@
 //! coefficient outside the subring in every element of a block. Parameters: `toy_d64`
 //! with the dimensions that `requirements` exports, checked.
 use super::*;
+use crate::wipe::Secret;
 use crate::{
     math::Ring,
     params::TboxParams,
@@ -78,7 +79,7 @@ fn not_provable(scheme: &Abdlop, statement: &Statement, s1: &PolyVec, m: &PolyVe
             Ok(0)
         );
     }
-    let key = Zeroizing::new([seed; 32]);
+    let key = Secret::new([seed; 32]);
     match prove_rounds(scheme, statement, s1, m, b"linf-exact", &key, 8) {
         Err(e) => assert!(matches!(e, Error::Witness | Error::RestartLimit), "{e:?}"),
         Ok(proof) => assert!(verify(scheme, statement, &proof, b"linf-exact").is_err()),
@@ -224,7 +225,7 @@ fn a_flipped_bit_breaks_the_substituted_equation() {
         statement.check_witness(&scheme, &flipped, &m).err(),
         Some(Error::Witness)
     );
-    let key = Zeroizing::new([75; 32]);
+    let key = Secret::new([75; 32]);
     assert_eq!(
         prove_rounds(&scheme, statement, &flipped, &m, b"linf-exact", &key, 8).err(),
         Some(Error::Witness)
@@ -394,7 +395,7 @@ fn a_clause_on_a_coefficient_outside_the_subring_compiles_without_a_term_for_it(
         statement.check_witness(&scheme, &s1, &m).err(),
         Some(Error::Witness)
     );
-    let key = Zeroizing::new([80; 32]);
+    let key = Secret::new([80; 32]);
     assert_eq!(
         prove_rounds(&scheme, statement, &s1, &m, b"subring", &key, 8).err(),
         Some(Error::Witness)
@@ -492,7 +493,7 @@ fn a_full_equation_on_a_component_outside_the_subring_has_no_term_for_it() {
                     statement.check_witness(&scheme, &s1, &m).err(),
                     Some(Error::Witness)
                 );
-                let key = Zeroizing::new([86; 32]);
+                let key = Secret::new([86; 32]);
                 assert_eq!(
                     prove_rounds(&scheme, statement, &s1, &m, b"subring", &key, 8).err(),
                     Some(Error::Witness),
